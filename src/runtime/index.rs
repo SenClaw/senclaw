@@ -269,11 +269,27 @@ mod tests {
     }
 
     #[test]
-    fn unpublished_runtimes_have_no_releases_yet() {
+    fn published_runtimes_list_real_packages_for_their_stable_version() {
+        // The stable channel must name a release that is actually listed, and
+        // every package must be that release's own asset with a usable
+        // checksum — the installer verifies against it and refuses otherwise.
         let index = RuntimeIndex::bundled();
         for id in ["sen-mlx", "sen-sysone", "sen-ocr", "sen-whisper", "sen-tts"] {
             let entry = index.entry(id).unwrap_or_else(|| panic!("{id} missing from bundled index"));
-            assert!(entry.releases.is_empty(), "{id} should have no packages published yet");
+            let stable = entry.channel_version(Channel::Stable).unwrap_or_else(|| panic!("{id} has no stable channel"));
+            let release = entry
+                .releases
+                .iter()
+                .find(|r| r.version == stable)
+                .unwrap_or_else(|| panic!("{id}: stable names {stable}, which lists no release"));
+            assert!(release.packages.iter().any(|p| p.platform == "darwin-arm64"), "{id}: no darwin-arm64 package");
+            for p in &release.packages {
+                let own = format!("https://github.com/SenClaw/{id}/releases/download/v{stable}/{id}-{stable}-{}.tar.gz", p.platform);
+                assert_eq!(p.url, own, "{id}: package is not this release's own asset");
+                let sha = p.sha256.as_deref().unwrap_or_default();
+                assert!(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()), "{id} {}: bad sha256", p.platform);
+                assert!(p.size.is_some_and(|s| s > 0), "{id} {}: no size", p.platform);
+            }
         }
     }
 
