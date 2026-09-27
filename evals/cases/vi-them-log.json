@@ -1,0 +1,27 @@
+{
+  "id": "vi-them-log",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "thanh_toan.py": "def xu_ly_thanh_toan(ma_don, so_tien):\n    return {\"ma_don\": ma_don, \"so_tien\": so_tien, \"trang_thai\": \"da_thanh_toan\"}\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "File thanh_toan.py chua co ghi log. Hay them module logging cua Python va ghi mot dong log muc info voi noi dung 'dang xu ly thanh toan cho don <ma_don>' ngay dau ham xu_ly_thanh_toan.",
+    "known_info": "Noi dung thong diep log.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "thanh_toan.py": {
+        "contains": ["import logging", "dang xu ly thanh toan"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

@@ -1,0 +1,28 @@
+{
+  "id": "extract-magic-number",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "pricing.py": "def total_with_tax(subtotal):\n    return subtotal * 1.08\n\n\ndef receipt_line(subtotal):\n    return f\"Total (incl. tax): {subtotal * 1.08:.2f}\"\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "pricing.py repeats the tax rate 1.08 as a magic number in two places. Extract it into a module-level constant named TAX_RATE = 1.08 and use it in both functions instead of the literal.",
+    "known_info": "The two call sites using the literal.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "pricing.py": {
+        "contains": ["TAX_RATE = 1.08", "subtotal * TAX_RATE"],
+        "notContains": ["* 1.08"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

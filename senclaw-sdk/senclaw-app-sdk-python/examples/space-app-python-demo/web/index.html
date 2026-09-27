@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Python Demo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; padding: 2rem;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+      p  { margin: .25rem 0 1.25rem; opacity: .7; }
+      button { font: inherit; padding: .5rem 1rem; border-radius: 8px; cursor: pointer; }
+      pre {
+        background: rgba(127,127,127,.12); padding: 1rem; border-radius: 8px;
+        overflow-x: auto; margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🐍 Python Demo</h1>
+    <p>
+      Space App chạy <strong>theo phiên</strong>: daemon khởi động app khi bạn mở
+      màn này hoặc khi agent gọi một tool của nó, và dừng lại sau 60 giây không
+      ai dùng.
+    </p>
+    <button id="go">Gọi /api/visit</button>
+    <pre id="out">chưa gọi</pre>
+    <script>
+      // Same-origin: the daemon proxies this page and the app's API under the
+      // same path, so a relative URL is all that is ever needed.
+      const out = document.getElementById('out');
+      document.getElementById('go').onclick = async () => {
+        out.textContent = '…';
+        try {
+          const r = await fetch('api/visit', { method: 'POST' });
+          out.textContent = JSON.stringify(await r.json(), null, 2);
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      };
+      fetch('api/status').then(r => r.json()).then(s => {
+        out.textContent = JSON.stringify(s, null, 2);
+      }).catch(() => {});
+    </script>
+  </body>
+</html>

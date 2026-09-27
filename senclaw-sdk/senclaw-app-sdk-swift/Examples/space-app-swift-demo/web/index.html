@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Swift Demo — SenClaw Space App</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 15px/1.5 -apple-system, system-ui, sans-serif;
+        margin: 0; padding: 2rem; max-width: 40rem;
+      }
+      h1 { font-size: 1.3rem; }
+      code { background: color-mix(in srgb, currentColor 12%, transparent); padding: 0.1em 0.35em; border-radius: 4px; }
+      button { font: inherit; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; }
+      pre { background: color-mix(in srgb, currentColor 8%, transparent); padding: 0.75rem; border-radius: 8px; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>🕊️ Swift Demo</h1>
+    <p>A SenClaw Space App written in Swift. It serves this page, two MCP tools,
+      and its own <code>swift-echo</code> model.</p>
+    <p><button id="ping">Check status</button></p>
+    <pre id="out">…</pre>
+    <script>
+      // The daemon reverse-proxies this UI same-origin, so a relative fetch
+      // reaches the app's own REST API.
+      document.getElementById('ping').addEventListener('click', async () => {
+        const out = document.getElementById('out');
+        try {
+          const res = await fetch('/api/status');
+          out.textContent = JSON.stringify(await res.json(), null, 2);
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      });
+    </script>
+  </body>
+</html>

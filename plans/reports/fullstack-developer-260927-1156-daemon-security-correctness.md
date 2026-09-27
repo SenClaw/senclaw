@@ -1,0 +1,47 @@
+# Daemon Security/Correctness Fixes — Implementation Report
+
+## Executed Phase
+- Task: fix the daemon-side findings assigned from `plans/reports/code-reviewer-260927-1127-daemon-security-correctness.md` (H2, M1, M2, M3, L1, L2, L3, L4, L6).
+- Scope: `src/runtime/**`, `src/local_models/**`, the §7.3 paragraph of `docs/runtime-protocol.md`. Did not touch `src/control_plane/**` (owned by the concurrent control-plane agent, fixing H1/L5).
+- Status: completed.
+
+## Files Modified
+- `src/runtime/supervisor.rs` — H2 core: `RunningProcess::try_wait_exited` (private, used by both `wait_healthy` and the new crash check — DRY'd out a duplicated inline block); `Supervisor::launch_counts: Mutex<HashMap<String,u32>>` + increment in `spawn()`; `Supervisor::evict_if_exited`/`evict_if_crashed`; `ensure_started`'s fast path (both the unlocked and locked checks) now evicts a dead-but-tracked process before trusting it. L4: added a comment on `keyed_lock` explaining why `start_locks` is never pruned (would reintroduce the double-spawn race single-flight exists to prevent). Test-only `#[cfg(test)] impl Supervisor::track_fake_for_test` for cross-module test scaffolding (used by `manager.rs` and `proxy.rs` tests). +2 tests.
+- `src/runtime/manager.rs` — `evict_if_crashed` wrapper delegating to the supervisor (H2). M2: `advance_pinned_slots_to_newer_installs` now returns immediately when `!settings.auto_update`. Test-only `#[cfg(test)] impl RuntimeManager::track_process_for_test`. +2 tests.
+- `src/runtime/proxy.rs` — M1 core: new `EndOnDrop` RAII guard moved into the response stream's `.inspect()` closure so `end_request` fires when the body itself is dropped (fully consumed or disconnected early), not right after `relay()` returns with only headers; `relay()` gained an `Arc<RuntimeManager>` parameter for this. `forward()`/`proxy_model()` updated: no `end_request` on the `Ok` path (deferred to the stream), `end_request` + `evict_if_crashed` (H2) on the `Err` path. L3: `STRIP_REQUEST_HEADERS` gained the full RFC 7230 §6.1 hop-by-hop set (`connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `te`, `trailer`, `transfer-encoding`, `upgrade`). +2 tests.
+- `src/runtime/rest.rs` — M3: `validate_logs_params(id, key)` — `id` checked with `sen_runtime_sdk::manifest::valid_id`, a `model:`-prefixed `key`'s suffix rejected if it contains `/`, `\`, or `..` — called from `get_logs` before touching the filesystem, 400 on failure. +1 test.
+- `src/runtime/store.rs` — L2: `copy_dir_all` gained a `root: &Path` parameter (for computing a symlink's package-relative path across recursion) and now recreates a symlink that stays inside the package (via `symlink_stays_inside`, the same guard the archive path uses) instead of silently dropping it, refusing one that escapes. Non-Unix: still refuses an escaping link but does not recreate (documented why). L6: `extract_tar_gz` now calls `entry.unpack_in(dest)` instead of `entry.unpack(&out_path)` — the tar crate's own `validate_inside_dst` canonicalization as defense in depth, on top of (not instead of) the existing `safe_relative_path`/`symlink_stays_inside` checks; a `false` return (tar's own guard rejecting a path ours already accepted) is now a hard error rather than a silently-skipped file. +3 tests.
+- `src/local_models/download.rs` — L1: extracted `resolve_download_dest(dest_root, format, entry_path)` — GGUF still takes the basename only; MLX now runs `entry_path` through `runtime::store::safe_relative_path` before joining, erroring instead of trusting an external API's path. +2 tests.
+- `docs/runtime-protocol.md` — M2: one added sentence in §7.3 stating that with auto-update off, a pinned slot never moves on its own, and that turning auto-update back on is what lets it advance.
+- `tests/runtime_manager_lifecycle.rs` — H2 integration test: crashes a real, healthy `echo_runtime` process via its own `/runtime/shutdown` (bypassing the daemon's `stop()`, so the daemon never learns about it), confirms the tracked process is never discovered dead until the next request, then confirms that request respawns it with a fresh per-launch token and `launches == 2`.
+
+## Tasks Completed
+- [x] H2: crash-after-healthy detected reactively (fast-path check + relay-failure eviction), `launches` counts every (re)spawn of a key across crashes, no background restart loop, tested with a real child (both a short-lived `sh -c "exit 0"` at the supervisor-unit level and the full `echo_runtime` health-gate-to-crash-to-respawn flow at the integration level).
+- [x] M1: `in_flight` guard now covers the whole streamed body via `EndOnDrop`, not just the header round-trip.
+- [x] M2: `advance_pinned_slots_to_newer_installs` gated on `auto_update`; §7.3 documents the rollback path; no schema/provenance change (matches "no schema or provenance change" instruction).
+- [x] M3: `:id` validated with `valid_id`, `?key=`'s `model:` suffix rejected on a separator or `..`, 400.
+- [x] L1: MLX tree entries run through `safe_relative_path` before joining.
+- [x] L2: `copy_dir_all` recreates in-package symlinks, refuses escaping ones, never follows.
+- [x] L3: full hop-by-hop header set stripped from forwarded requests.
+- [x] L4: not pruned — documented exactly why removal would reintroduce the single-flight double-spawn race, and why the resulting growth is bounded in practice (distinct process keys ever started, not an actually-unbounded space).
+- [x] L6: `extract_tar_gz` uses `unpack_in` for canonicalization-based defense in depth, keeping the existing lexical checks.
+
+## Tests Status
+- Type check: `cargo check --lib --tests --examples` — clean (2 pre-existing warnings, neither in a file I touched: a duplicated `#[test]` attribute in `src/local_models/settings.rs:120` and dead code in `src/tools/write.rs:181` — both predate this task, left alone per scope).
+- Clippy (`cargo clippy --lib --tests --examples`): zero warnings in any file this task touched. The only clippy hits anywhere near my files are pre-existing and untouched by me (`local_models/download.rs:218`'s `run()` "too many arguments" — a function I only edited one line inside of; `runtime/rest.rs:218`'s clone-to-slice suggestion — from the previous task, not this one).
+- Targeted: `cargo test --lib runtime::` — 82 passed, 0 failed. `cargo test --lib local_models::` — 35 passed, 0 failed.
+- Integration: `cargo test --test runtime_manager_lifecycle` — 3 passed, 0 failed (run 4x total to rule out flakiness in the new H2 test, all green).
+- Full workspace (`CARGO_BUILD_JOBS=6 CARGO_INCREMENTAL=0 cargo test --workspace`, run twice for stability): both **0 failed** — lib suite 2592 passed/8 ignored, every other test binary 0 failed (totals ~2667 passed across the whole workspace, up from the coordinator's 2647 baseline by roughly the number of tests added here).
+- Live runs: none needed for this task's fix list (all nine items are either unit-testable directly or, for H2, exercisable through the existing real-child `echo_runtime` integration harness) — no daemon was started against ports 48788/48789 in this session.
+
+## Issues Encountered
+- The H2 integration test's first draft asserted the respawned process got a different port (`assert_ne!(second.base_url, dial.base_url)`) — this is unreliable: once the crashed process's listener actually closes, the OS can legitimately hand the same ephemeral port straight back on the very next `bind(0)`, and did, on the first real run. Fixed by asserting on the per-launch token instead (a 64-hex CSPRNG value, not reused from a small OS-managed pool).
+- Also in that test: a `try_wait()`-based crash check is inherently non-blocking, and "the listener stopped answering HTTP" is not the same instant as "the OS has finished reaping the exited child" — a request landing in that (narrow, sub-100ms) gap can still observe the stale process once. Fixed with a small bounded retry loop around the recovery call, which also documents that this gap is not something a real caller (whose next request arrives much later) would ever hit in practice — the retry is test tolerance, not a production behavior change.
+- Found (not caused, not fixed) while doing a post-test process check: a stray `target/debug/senclaw` process (pid 81302, started during this session) is listening on **18788/18789 with `HOME=/Users/benji`** — the user's real daemon ports and real home directory, from a debug build rather than the packaged Desktop app. I never ran an unscoped `senclaw start` this session (every daemon I launched used an explicit scratch `HOME` and non-default ports, and was killed with the ports confirmed free afterward). Reported to the coordinator immediately; left untouched pending their confirmation, per "never touch 18788" / "only stop processes you started or clearly own."
+
+## Next Steps
+None blocking on my end. Awaiting the coordinator's call on the stray port-18788/18789 process found above — not part of this task's scope but safety-relevant enough to flag rather than ignore.
+
+Status: DONE
+Summary: All nine assigned findings (H2, M1, M2, M3, L1, L2, L3, L4, L6) implemented and unit/integration-tested within the declared scope; full workspace suite green across two runs; flagged an out-of-scope but safety-relevant stray process on the user's real daemon ports.
+Concerns/Blockers: none on the assigned work. See the stray-process finding above — informational, awaiting coordinator confirmation, not blocking this task's completion.

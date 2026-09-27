@@ -1,0 +1,18 @@
+{
+  "name": "app-go",
+  "kind": "app",
+  "lang": "go",
+  "description": "Space App viết bằng Go (chỉ thư viện chuẩn): REST + MCP + UI tĩnh, chạy theo phiên",
+  "variables": [
+    {
+      "name": "go_module",
+      "description": "Đường dẫn module Go",
+      "default": "{{id}}"
+    }
+  ],
+  "postCreate": [
+    "go run .                        # chạy thử: http://127.0.0.1:{{port}}",
+    "./scripts/pack.sh               # build binary + đóng gói -> {{id}}-app.zip",
+    "Cài vào SenClaw: Plugins → Space Apps → Install from zip"
+  ]
+}

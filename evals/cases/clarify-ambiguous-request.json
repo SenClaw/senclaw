@@ -1,0 +1,29 @@
+{
+  "id": "clarify-ambiguous-request",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "notify.py": "def send_notification(user_id, message):\n    print(f\"notify {user_id}: {message}\")\n",
+      "billing.py": "def charge_card(user_id, amount_cents):\n    print(f\"charging {user_id}: {amount_cents} cents\")\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Fix the bug in the file with the problem.",
+    "known_info": "There are two small files in the project.",
+    "unknown_info": "Which file, which function, and what the bug even is — the instruction names no file, no symptom and no expected behaviour."
+  },
+  "criteria": {
+    "nl_assertions": {
+      "contains": ["which", "clarif"]
+    },
+    "decision_assertions": [
+      { "spec_id": "clarify.needed", "acceptable": ["true"], "forbidden": ["false"] }
+    ]
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 180000
+}

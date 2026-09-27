@@ -1,0 +1,27 @@
+{
+  "id": "add-env-var-config",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "server_config.py": "HOST = \"127.0.0.1\"\nPORT = 8080\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "server_config.py hardcodes HOST and PORT. Change both to read from environment variables APP_HOST and APP_PORT (falling back to the current values '127.0.0.1' and 8080 when unset), using os.environ.get. PORT must stay an int.",
+    "known_info": "The two settings and the env var names to use.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "server_config.py": {
+        "contains": ["import os", "APP_HOST", "APP_PORT", "int("]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

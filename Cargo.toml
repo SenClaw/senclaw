@@ -1,0 +1,297 @@
+[workspace]
+# The daemon links no inference code. Every engine (MLX, llama.cpp, Laya, OCR,
+# Whisper, TTS) is a *runtime*: a separate program in its own repository
+# (sen-mlx, sen-sysone, sen-ocr, sen-whisper, sen-tts, upstream llama.cpp) that
+# the daemon installs, launches as a child process and talks to over loopback
+# HTTP — see `src/runtime/` and docs/runtime-protocol.md.
+#
+# Two SDKs live in this repository but are NOT members of this workspace — each
+# is its own workspace root, excluded below:
+#
+# - `app-space-sdk` — the Rust SDK Space Apps build against, published from here.
+# - `crates/sen-runtime-sdk` — the shared runtime contract: the
+#   `senclaw-runtime.json` manifest, the launch environment, and the server
+#   scaffold every sen-* runtime mounts.
+#
+# Other repositories depend on both by path (`../senclaw/crates/sen-runtime-sdk`,
+# `../senclaw/app-space-sdk`). Cargo resolves a path dependency's workspace, so
+# while they were members every runtime build had to parse *this* manifest —
+# one half-edited line here broke `cargo build` in five other repos. The daemon
+# still depends on them by path; test them with
+# `cargo test --manifest-path <sdk>/Cargo.toml` (`make test-sdks`).
+#
+# No `members` list, on purpose: `members = ["."]` makes every path under the
+# root an *explicit* member, which overrides `exclude` — the SDKs were pulled
+# back in as path dependencies and Cargo failed with "multiple workspace roots".
+exclude = ["app-space-sdk", "crates/sen-runtime-sdk"]
+resolver = "2"
+
+# ── Shared dependency versions ────────────────────────────────────────────────
+# One place per version, for the crates this daemon itself depends on below.
+# `senclaw` is the only member of this workspace (see above), so nothing here
+# is inherited via `workspace = true` — it is a version reference, not a
+# resolution mechanism. Native-inference and audio-processing pins (mlx-rs,
+# mlx-sys, tokenizers, symphonia, rubato, realfft, half, safetensors,
+# minijinja) were removed with the code that used them: that world now lives
+# in `sen-mlx`/`sen-whisper`/`sen-tts`, each with its own `Cargo.toml`.
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+regex = "1"
+libc = "0.2"
+dirs = "5"
+tempfile = "3"
+futures-util = "0.3"
+tokio-util = "0.7"
+async-stream = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+flate2 = "1"
+unicode-normalization = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+
+[package]
+name = "senclaw"
+version = "0.1.0"
+edition = "2021"
+description = "SenClaw provides the runtime machinery around large language models: permissions, memory, scheduling, multi-agent orchestration, channel adapters, Space Apps, local model support, and a Web UI"
+license = "MIT"
+authors = ["Benji"]
+repository = "https://github.com/SenClaw/senclaw"
+homepage = "https://senclaw.bacnd.com/"
+
+[[bin]]
+name = "senclaw"
+path = "src/main.rs"
+
+[lib]
+name = "senclaw"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Config / env
+dotenvy = "0.15"
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# YAML frontmatter parsing for SKILL.md (OpenClaw-compatible metadata).
+serde_yaml = "0.9"
+
+# Errors / logging
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# HTTP client / server (gateway + UIServer + WebSocket)
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls", "multipart", "blocking"], default-features = false }
+axum = { version = "0.7", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["multipart"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+
+# SQLite + vector + FTS
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Cron
+cron = "0.13"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Compression (replaces fflate)
+flate2 = "1"
+zip = "2"
+
+# QR code (terminal)
+qrcode = "0.14"
+
+# UUID / random
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+rand = "0.8"
+
+tokio-stream = "0.1"
+portable-pty = "0.8"
+
+# Encryption / Encoding
+aes-gcm = "0.10"
+# WeChat iLink CDN blobs are AES-128-ECB; `aes` is already pulled in by aes-gcm.
+aes = "0.8"
+md5 = "0.7"
+base64 = "0.22"
+urlencoding = "2"
+
+# Channel adapters (Telegram has a Rust SDK; others go via REST through reqwest)
+teloxide = { version = "0.13", default-features = false, features = ["ctrlc_handler", "rustls"] }
+
+# Chinese tokenization (replaces nodejieba)
+jieba-rs = "0.7"
+
+# Home dir resolution (replaces os.homedir)
+dirs = "5"
+
+# Hex / hashing helpers (for buildModelKey, content hashing)
+sha2 = "0.10"
+hex = "0.4"
+
+# Unified diff generation
+similar = "2"
+
+# Regex (query rewrite, pattern matching)
+regex = "1"
+glob = "0.3"
+libc = "0.2.186"
+
+# Lazy static initialization
+once_cell = "1"
+
+# Git operations for marketplace
+git2 = "0.19"
+
+# Repo map / symbol tools — AST parsing via tree-sitter (plans/260912-0141-code-v2 phase 3;
+# unused until that phase lands — remove if it is dropped)
+tree-sitter          = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-rust     = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-python   = "0.25"
+tree-sitter-bash     = "0.25"
+tree-sitter-c        = "0.24"
+tree-sitter-cpp      = "0.23"
+tree-sitter-c-sharp  = "0.23"
+tree-sitter-go       = "0.25"
+tree-sitter-haskell  = "0.23"
+tree-sitter-java     = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-ruby     = "0.23"
+tree-sitter-scala    = "0.26"
+tree-sitter-ocaml    = "0.24"
+tree-sitter-php      = "0.24"
+tree-sitter-julia    = "0.23"
+tree-sitter-verilog  = "1.0"
+tree-sitter-agda     = "1.3"
+tree-sitter-html     = "0.23"
+tree-sitter-css      = "0.25"
+tree-sitter-json     = "0.24"
+
+# MCP server SDK (self-spawning subprocess architecture)
+rmcp = { version = "1", features = ["transport-io"] }
+schemars = "1"
+
+# Sandboxed JavaScript engine (QuickJS) for the js-executor MCP server.
+# No host bindings are exposed → no filesystem/network/process access by
+# default; memory + wall-clock limits are enforced per evaluation.
+rquickjs = "0.12"
+
+# TypeScript → JavaScript transpiler (pure Rust). Used to run TS snippets on
+# the QuickJS sandbox: parse as TS, strip types, codegen JS. swc (not oxc) —
+# oxc 0.137 needs unstable `if let` guards; swc builds on stable.
+swc_core = { version = "71", features = [
+    "common",
+    "ecma_ast",
+    "ecma_parser",
+    "ecma_codegen",
+    "ecma_visit",
+    "ecma_transforms",
+    "ecma_transforms_typescript",
+] }
+
+# Tokio utilities (CancellationToken for zen-core abort)
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# App Space & SSH Dependencies
+russh = "0.44.1"
+russh-keys = "0.44.0"
+
+brush-core = "0.5"
+brush-builtins = "0.2"
+unicode-normalization = "0.1"
+
+# Shared Space-App SDK — dispatch protocol types + stdio↔HTTP MCP bridge used by
+# the MCPDispatcher engine (src/agent/mcp_dispatch).
+app-space-sdk = { path = "app-space-sdk" }
+
+# SSE streaming for the built-in Kanban MCP-over-HTTP endpoint (src/kanban/mcp.rs).
+async-stream = "0.3"
+
+# `.tar.gz` extraction for installing a runtime package (src/runtime/store.rs).
+tar = "0.4"
+
+# The runtime contract (manifest, launch env, platform keys). `default-features
+# = false` drops the axum server scaffold (`server` feature) — the daemon only
+# needs the types; the scaffold is a dev-dependency below, for the
+# echo-runtime example the runtime-manager integration test installs.
+sen-runtime-sdk = { path = "crates/sen-runtime-sdk", default-features = false }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4.5"
+# The `server` feature (default-on) — examples/echo_runtime.rs is a minimal
+# sen-runtime-sdk-based runtime used by the install/supervise/proxy
+# integration test.
+sen-runtime-sdk = { path = "crates/sen-runtime-sdk" }
+
+[profile.release]
+lto = "thin"
+# 16 (the cargo default), NOT 1: the senclaw crate is enormous and cu=1 makes
+# its codegen serial — measured ~37 min for the macOS release daemon in CI.
+# Thin-LTO recovers most cross-unit optimisation, so the runtime cost is a few
+# percent at worst; benchmark with `codegen-units = 1` restored if a hot MLX
+# path ever needs squeezing.
+codegen-units = 16
+strip = true
+
+# Optimize ALL dependencies even in the dev (debug) profile.
+#
+# The native MLX path (gated-delta sequential scan) is host-*dispatch*-bound:
+# the bottleneck is constructing the MLX op graph that feeds the GPU, not the
+# GPU kernels themselves. With unoptimized deps the mlx-rs / mlx-sys Rust glue
+# can't dispatch fast enough and the GPU starves (high CPU%, low GPU%). A debug
+# build was ~3.5–5× slower on Qwen3.5 prefill purely from this.
+#
+# Dependencies are compiled once and cached, so this does NOT slow iterative
+# rebuilds of the `senclaw` crate. For the hot loop in our own crate
+# (`src/local_model/mlx_lm/models/gated_delta.rs`) prefer `make run-release`;
+# this override recovers most of the gap for everyday `make run`.
+[profile.dev.package."*"]
+opt-level = 3
+# NOTE: optimizing the `senclaw` crate itself in dev (`[profile.dev.package.senclaw]
+# opt-level = 2`) was measured to give only partial MLX gains (warm prefill ~121
+# vs release's ~406 tok/s — release wins via the `lto=thin` + `codegen-units=1`
+# cross-crate inlining of the tiny per-op calls) while making every `make run`
+# rebuild ~2 min. Not worth it: use `make run-release` for native-MLX work.
+
+# Windows direct sandbox (src/sandbox): AppContainer (isolation) + Job Object
+# (limits). Target-gated so Unix builds are untouched. Mirrors apps/sandbox.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+]

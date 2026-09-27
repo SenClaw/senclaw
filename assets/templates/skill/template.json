@@ -1,0 +1,10 @@
+{
+  "name": "skill",
+  "kind": "skill",
+  "description": "Skill: SKILL.md có frontmatter đầy đủ, kèm ví dụ trigger và ranh giới khi nào KHÔNG dùng",
+  "postCreate": [
+    "Sửa `description` và `triggers` — đó là thứ quyết định skill có được gọi hay không",
+    "senclaw skills list           # kiểm tra skill đã được nạp",
+    "senclaw skills refresh        # báo daemon nạp lại, không cần restart"
+  ]
+}

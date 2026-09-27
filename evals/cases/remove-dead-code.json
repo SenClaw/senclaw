@@ -1,0 +1,28 @@
+{
+  "id": "remove-dead-code",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "math_utils.py": "def add(a, b):\n    return a + b\n\n\ndef subtract(a, b):\n    return a - b\n\n\ndef _unused_legacy_multiply(a, b):\n    # replaced by the `*` operator everywhere; nothing calls this anymore\n    result = 0\n    for _ in range(b):\n        result += a\n    return result\n\n\ndef average(values):\n    return sum(values) / len(values)\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "math_utils.py has a function `_unused_legacy_multiply` that nothing calls anymore (confirmed by grepping the repo). Remove it, and keep every other function exactly as is.",
+    "known_info": "Which function is dead and confirmed unused.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "math_utils.py": {
+        "contains": ["def add(a, b):", "def subtract(a, b):", "def average(values):"],
+        "notContains": ["_unused_legacy_multiply"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Grep,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

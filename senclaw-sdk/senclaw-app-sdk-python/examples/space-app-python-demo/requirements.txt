@@ -1,0 +1,7 @@
+# The SDK, from this repo. The daemon runs `pip install -r requirements.txt`
+# once, inside the `.venv` it creates in this directory — never into the user's
+# system Python.
+#
+# A published app would pin a released version instead:
+#   senclaw-space-sdk>=0.1
+-e ../..

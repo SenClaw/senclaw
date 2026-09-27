@@ -1,0 +1,36 @@
+{
+  "id": "go-demo",
+  "name": "Go Demo",
+  "description": "Minimal Space App written in Go: 2 MCP tools, one UI page, session lifecycle.",
+  "icon": "🐹",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "runner": "shell",
+    "start": "go run .",
+    "healthPath": "/api/status",
+    "port": 4830,
+    "idleTimeoutSecs": 60
+  },
+  "requires": {
+    "bin": ["go"]
+  },
+  "sandbox": {
+    "enabled": true,
+    "readMode": "open",
+    "network": "all",
+    "daemonApi": true
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "go-demo-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Demo tools written in Go",
+    "autoRegister": true
+  }
+}

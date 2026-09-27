@@ -1,0 +1,23 @@
+{
+  "manifest": 2,
+  "id": "fabric",
+  "name": "Fabric Patterns",
+  "version": "1.4.470",
+  "description": "Danh mục ~250 prompt tác vụ của dự án Fabric (MIT): tóm tắt, trích ý, phân tích log/bài báo/báo cáo bảo mật, viết lại… kèm 9 strategy suy luận (cot, tot, reflexion…). Cài xong, agent gọi chúng bằng pattern_run và trang Plugins → Patterns duyệt được toàn bộ.",
+  "publisher": {
+    "name": "Daniel Miessler and the Fabric contributors",
+    "url": "https://github.com/danielmiessler/fabric",
+    "license": "MIT"
+  },
+  "patternSources": [
+    {
+      "id": "fabric",
+      "name": "Fabric",
+      "url": "https://github.com/danielmiessler/fabric",
+      "ref": "v1.4.470",
+      "subdir": "data/patterns",
+      "strategiesSubdir": "data/strategies",
+      "syncOnInstall": true
+    }
+  ]
+}

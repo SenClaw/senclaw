@@ -1,0 +1,86 @@
+{
+  "name": "@senclaw/space-sdk",
+  "version": "0.4.0",
+  "description": "Build a SenClaw Space App in TypeScript: daemon API, AI bridge, MCP server harness, an OpenAI-compatible LLM-provider router, and the lifecycle helpers an on-demand app needs.",
+  "keywords": [
+    "senclaw",
+    "space-app",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "sdk"
+  ],
+  "license": "MIT",
+  "author": "SenClaw",
+  "homepage": "https://github.com/NortonBen/SenClaw/tree/main/senclaw-sdk/senclaw-app-sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NortonBen/SenClaw.git",
+    "directory": "senclaw-sdk/senclaw-app-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/NortonBen/SenClaw/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    },
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.ts",
+      "default": "./dist/lifecycle.js"
+    },
+    "./dispatch": {
+      "types": "./dist/dispatch.d.ts",
+      "default": "./dist/dispatch.js"
+    },
+    "./llm": {
+      "types": "./dist/llm.d.ts",
+      "default": "./dist/llm.js"
+    }
+  },
+  "bin": {
+    "senclaw-manifest": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepare": "tsc"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "express": "^4.21.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  },
+  "comments": {
+    "exports": "Root export ('.') is browser+node safe with no runtime deps. './mcp' is Node-only (pulls express + @modelcontextprotocol/sdk) and './lifecycle' is Node-only (reads process.env, installs signal handlers) — import either only from server processes, never from browser app code.",
+    "files": "`dist` is published but never committed (.gitignore). `prepare` is what rebuilds it — npm runs that both before publishing AND when this package is installed as a `file:`/git dependency, which is how the in-repo apps that depend on it get a build without anyone remembering to run `npm run build` first. `src` ships too so published types resolve their sources in an editor."
+  }
+}

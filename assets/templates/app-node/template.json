@@ -1,0 +1,11 @@
+{
+  "name": "app-node",
+  "kind": "app",
+  "lang": "node",
+  "description": "Space App viết bằng Node (không phụ thuộc ngoài): REST + MCP + UI tĩnh, chạy theo phiên",
+  "postCreate": [
+    "node server.mjs                 # chạy thử: http://127.0.0.1:{{port}}",
+    "zip -r {{id}}-app.zip . -x '*/node_modules/*' '*.DS_Store'",
+    "Cài vào SenClaw: Plugins → Space Apps → Install from zip"
+  ]
+}

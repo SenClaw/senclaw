@@ -1,0 +1,28 @@
+{
+  "id": "rename-variable-refactor",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "report.py": "def build_report(d):\n    \"\"\"`d` is a mapping of user id -> score.\"\"\"\n    lines = []\n    for k, v in d.items():\n        lines.append(f\"user {k}: {v} points\")\n    return \"\\n\".join(lines)\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "In report.py, rename the parameter `d` to `scores_by_user` and the loop variables `k`/`v` to `user_id`/`score` throughout the function, to make the code self-documenting. Do not change behaviour.",
+    "known_info": "The exact names to use.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "report.py": {
+        "contains": ["def build_report(scores_by_user)", "user_id", "score"],
+        "notContains": ["def build_report(d)"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

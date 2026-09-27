@@ -1,0 +1,30 @@
+{
+  "id": "add-input-validation",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "orders.py": "def create_order(items, quantity):\n    \"\"\"Create an order line. `quantity` must be a positive integer.\"\"\"\n    total = len(items) * quantity\n    return {\"items\": items, \"quantity\": quantity, \"total\": total}\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "create_order in orders.py currently accepts any quantity, including 0 or negative numbers, which produces a nonsense order. Add validation that raises ValueError('quantity must be a positive integer') when quantity is not a positive int, and keep the existing behaviour for valid input.",
+    "known_info": "The function signature and the exact error message to raise.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "orders.py": {
+        "contains": ["ValueError", "quantity must be a positive integer"]
+      }
+    },
+    "nl_assertions": {
+      "notContains": ["I cannot", "unable to"]
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

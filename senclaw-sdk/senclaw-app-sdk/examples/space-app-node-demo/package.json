@@ -1,0 +1,8 @@
+{
+  "name": "senclaw-node-demo",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {}
+}

@@ -1,0 +1,12 @@
+{
+  "id": "input.guard.scope",
+  "version": 1,
+  "type": "noul",
+  "question": "Does this request ask for something outside what this agent is set up to do?",
+  "state_fields": ["query"],
+  "bands": { "act": 0.8, "fallback": 0.5 },
+  "on_uncertain": "narrow permissions for this turn, never hard-block",
+  "mode": "shadow",
+  "lifecycle": "shadow",
+  "lang": "en"
+}

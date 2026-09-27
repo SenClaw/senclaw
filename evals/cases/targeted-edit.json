@@ -1,0 +1,28 @@
+{
+  "id": "targeted-edit",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "app.py": "import time\n\nRETRIES = 3\nTIMEOUT_SECONDS = 5\n\n\ndef fetch_user(client, user_id):\n    \"\"\"Look a user up, retrying on a transient failure.\"\"\"\n    for attempt in range(RETRIES):\n        try:\n            return client.get(f\"/users/{user_id}\", timeout=TIMEOUT_SECONDS)\n        except TimeoutError:\n            time.sleep(2 ** attempt)\n    raise TimeoutError(\"user lookup gave up\")\n\n\ndef healthcheck(client):\n    return client.get(\"/health\", timeout=TIMEOUT_SECONDS).status_code == 200\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "In app.py, change the request timeout from 5 seconds to 30. Change nothing else.",
+    "known_info": "The file and the exact constant to change.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "app.py": {
+        "contains": ["TIMEOUT_SECONDS = 30", "def healthcheck(client):", "RETRIES = 3"],
+        "notContains": ["TIMEOUT_SECONDS = 5"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Write,Glob,Grep", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

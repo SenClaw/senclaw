@@ -1,0 +1,11 @@
+{
+  "name": "app-python",
+  "kind": "app",
+  "lang": "python",
+  "description": "Space App viết bằng Python (chỉ thư viện chuẩn): REST + MCP + UI tĩnh, chạy theo phiên",
+  "postCreate": [
+    "python3 main.py                 # chạy thử: http://127.0.0.1:{{port}}",
+    "zip -r {{id}}-app.zip . -x '*/.venv/*' '*/__pycache__/*' '*.DS_Store'",
+    "Cài vào SenClaw: Plugins → Space Apps → Install from zip"
+  ]
+}

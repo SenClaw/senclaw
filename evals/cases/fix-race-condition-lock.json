@@ -1,0 +1,27 @@
+{
+  "id": "fix-race-condition-lock",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L3",
+  "split": "heldout",
+  "initial_state": {
+    "files": {
+      "counter.py": "class Counter:\n    def __init__(self):\n        self.value = 0\n\n    def increment(self):\n        current = self.value\n        self.value = current + 1\n\n    def get(self):\n        return self.value\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Counter.increment in counter.py is used from multiple threads and the read-then-write is not atomic, causing lost updates. Add a threading.Lock as an instance attribute and use it to make increment() thread-safe, without changing the public API (still just increment() and get()).",
+    "known_info": "Which method has the race condition and that threading.Lock is available.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "counter.py": {
+        "contains": ["import threading", "threading.Lock()", "with self."]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

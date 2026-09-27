@@ -1,0 +1,41 @@
+services:
+  senclaw:
+    # Build context is the umbrella directory (parent of this repo and of
+    # `web-app/`, its sibling) — the Web UI moved to its own repository. Run
+    # `docker compose up` from inside `senclaw/`, as this file assumes `../`
+    # holds both repos side by side.
+    build:
+      context: ..
+      dockerfile: senclaw/Dockerfile
+    image: senclaw:local
+    restart: unless-stopped
+    ports:
+      # Both are needed: the Web UI dials the WebSocket gateway on 18789 at
+      # the same hostname it was served from.
+      - "18788:18788"
+      - "18789:18789"
+    environment:
+      # Set a token of your own to avoid fishing the generated one out of the
+      # container. Leave it unset and the daemon writes ~/.senclaw/api_token
+      # on the volume below (chmod 0600).
+      #   SENCLAW_API_TOKEN: "<64 hex chars>"
+      #
+      # `always` comes from the image. Override only for a port nothing
+      # untrusted can reach:
+      #   SENCLAW_AUTH_MODE: auto
+      #
+      # Behind a TLS-terminating proxy the session cookie should be Secure.
+      # Left unset it is inferred from X-Forwarded-Proto.
+      #   SENCLAW_AUTH_COOKIE_SECURE: "1"
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Database, config, uploads and the API token. Losing it means a new
+      # token and a wiped install.
+      - senclaw-data:/home/senclaw/.senclaw
+      # Where agents do their work. Mount a host directory if you want the
+      # output on the host.
+      - senclaw-workspace:/home/senclaw/senclaw
+
+volumes:
+  senclaw-data:
+  senclaw-workspace:

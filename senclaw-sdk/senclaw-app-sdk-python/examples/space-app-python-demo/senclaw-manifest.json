@@ -1,0 +1,36 @@
+{
+  "id": "python-demo",
+  "name": "Python Demo",
+  "description": "Space App tối giản viết bằng Python: 2 MCP tool, một trang UI, chạy theo phiên.",
+  "icon": "🐍",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "runner": "python",
+    "start": "python main.py",
+    "healthPath": "/api/status",
+    "port": 4810,
+    "idleTimeoutSecs": 60
+  },
+  "requires": {
+    "python": ">=3.10"
+  },
+  "sandbox": {
+    "enabled": true,
+    "readMode": "open",
+    "network": "all",
+    "daemonApi": true
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "python-demo-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Demo tools written in Python",
+    "autoRegister": true
+  }
+}

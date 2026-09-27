@@ -1,0 +1,9 @@
+{
+  "name": "sub-agent",
+  "kind": "sub-agent",
+  "description": "Sub-agent (persona): file .md có frontmatter, dùng cho dispatch/virtual worker",
+  "postCreate": [
+    "Sửa `description` — DispatchBridge dùng nó để chọn persona cho một task",
+    "Gọi thử: mcp__senclaw-virtual__run_persona với persona = {{id}}"
+  ]
+}

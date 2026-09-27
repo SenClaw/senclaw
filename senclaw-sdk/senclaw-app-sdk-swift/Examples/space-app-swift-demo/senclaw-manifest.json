@@ -1,0 +1,36 @@
+{
+  "id": "swift-demo",
+  "name": "Swift Demo",
+  "description": "Minimal Space App written in Swift: 2 MCP tools, a self-served LLM, one UI page, session lifecycle.",
+  "icon": "🕊️",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "runner": "shell",
+    "start": "swift run -c release",
+    "healthPath": "/api/status",
+    "port": 4831,
+    "idleTimeoutSecs": 60
+  },
+  "requires": {
+    "bin": ["swift"]
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "swift-demo-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Demo tools written in Swift",
+    "autoRegister": true
+  },
+  "llm": {
+    "autoRegister": true,
+    "path": "/v1",
+    "adapt": "openai",
+    "displayName": "Swift Echo"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "multi-file-rename-function",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L3",
+  "split": "heldout",
+  "initial_state": {
+    "files": {
+      "geometry.py": "def calc_area(width, height):\n    return width * height\n",
+      "shapes.py": "from geometry import calc_area\n\n\ndef rectangle_summary(width, height):\n    area = calc_area(width, height)\n    return f\"{width}x{height} rectangle, area={area}\"\n",
+      "main.py": "from shapes import rectangle_summary\n\nprint(rectangle_summary(3, 4))\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Rename the function calc_area (defined in geometry.py) to rectangle_area everywhere it is defined and used across the whole project, so the codebase stays consistent and main.py still runs correctly.",
+    "known_info": "The function to rename and its new name; that it is used from more than one file.",
+    "unknown_info": "Exactly which files reference it."
+  },
+  "criteria": {
+    "env_assertions": {
+      "geometry.py": { "contains": ["def rectangle_area"], "notContains": ["def calc_area"] },
+      "shapes.py": { "contains": ["rectangle_area"], "notContains": ["calc_area"] }
+    },
+    "nl_assertions": {
+      "notContains": ["NameError", "ImportError"]
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Grep,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

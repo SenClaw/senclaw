@@ -1,0 +1,28 @@
+# Build outputs and caches — always rebuilt inside the image.
+target/
+**/node_modules/
+web/dist/
+desktop_app/build/
+desktop_app/.dart_tool/
+channel_app/build/
+channel_app/.dart_tool/
+update_desktop/target/
+.git/
+.github/
+
+# Space Apps are not part of the daemon image. The three that are Cargo
+# workspace *members* must stay, or `cargo build` cannot even parse the
+# workspace — it resolves every member manifest whether or not it compiles it.
+apps/*
+!apps/local-model-core
+!apps/mlx-lm
+!apps/candle
+
+# Reference implementation, plans, local state.
+src-old/
+plans/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.env

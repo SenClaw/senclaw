@@ -1,0 +1,27 @@
+{
+  "id": "vi-them-bien-moi-truong",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "cau_hinh_server.py": "HOST = \"127.0.0.1\"\nCONG = 8080\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "File cau_hinh_server.py dang gan cung HOST va CONG. Hay doi ca hai de doc tu bien moi truong APP_HOST va APP_PORT (dung os.environ.get), neu khong co thi dung gia tri cu '127.0.0.1' va 8080. CONG van phai la kieu int.",
+    "known_info": "Ten hai bien moi truong can dung.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "cau_hinh_server.py": {
+        "contains": ["import os", "APP_HOST", "APP_PORT", "int("]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

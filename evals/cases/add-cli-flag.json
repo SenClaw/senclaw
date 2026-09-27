@@ -1,0 +1,27 @@
+{
+  "id": "add-cli-flag",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "cli.py": "import argparse\n\n\ndef main():\n    parser = argparse.ArgumentParser()\n    parser.add_argument(\"--input\", required=True)\n    args = parser.parse_args()\n    print(f\"processing {args.input}\")\n\n\nif __name__ == \"__main__\":\n    main()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Add a new optional CLI flag --verbose (boolean, store_true, default False) to cli.py. When set, print an extra line 'verbose mode enabled' before the existing 'processing ...' line.",
+    "known_info": "The flag name and its effect.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "cli.py": {
+        "contains": ["--verbose", "store_true", "verbose mode enabled"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

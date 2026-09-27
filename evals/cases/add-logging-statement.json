@@ -1,0 +1,27 @@
+{
+  "id": "add-logging-statement",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "payments.py": "def process_payment(order_id, amount):\n    # pretend to charge a card\n    return {\"order_id\": order_id, \"amount\": amount, \"status\": \"charged\"}\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "payments.py has no logging. Add Python's `logging` module and log an info-level message 'processing payment for order <order_id>: <amount>' at the start of process_payment, using a module-level logger named after __name__.",
+    "known_info": "The message format and where it goes.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "payments.py": {
+        "contains": ["import logging", "getLogger(__name__)", "processing payment for order"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

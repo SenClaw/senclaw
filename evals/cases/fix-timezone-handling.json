@@ -1,0 +1,27 @@
+{
+  "id": "fix-timezone-handling",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "scheduling.py": "from datetime import datetime\n\n\ndef is_business_hours(dt=None):\n    dt = dt or datetime.now()\n    return 9 <= dt.hour < 17\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "is_business_hours in scheduling.py uses naive local time (datetime.now()), which silently gives wrong answers across timezones. Change it to use UTC explicitly (datetime.now(timezone.utc)) when no dt is supplied, importing timezone from datetime.",
+    "known_info": "The function to change and the correct replacement call.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "scheduling.py": {
+        "contains": ["timezone", "datetime.now(timezone.utc)"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

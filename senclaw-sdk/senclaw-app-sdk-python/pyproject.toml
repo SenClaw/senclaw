@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "senclaw-space-sdk"
+version = "0.2.0"
+description = "Build a SenClaw Space App in Python: daemon API, AI bridge, MCP server, HTTP host, OpenAI-compatible LLM provider"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "SenClaw" }]
+keywords = ["senclaw", "space-app", "mcp", "model-context-protocol", "ai-agent", "sdk"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Typing :: Typed",
+]
+# Deliberately empty. A Space App with no third-party dependencies needs no
+# `pip install` before its first launch, which is the difference between a
+# session app that starts in 200ms and one that starts in twenty seconds.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/NortonBen/SenClaw/tree/main/senclaw-sdk/senclaw-app-sdk-python#readme"
+Source = "https://github.com/NortonBen/SenClaw"
+Issues = "https://github.com/NortonBen/SenClaw/issues"
+
+[tool.setuptools.packages.find]
+include = ["senclaw_space*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

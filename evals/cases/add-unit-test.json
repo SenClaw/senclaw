@@ -1,0 +1,30 @@
+{
+  "id": "add-unit-test",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "strings_util.py": "def slugify(text):\n    \"\"\"Lowercase, trim, and replace runs of whitespace with a single hyphen.\"\"\"\n    import re\n    return re.sub(r\"\\s+\", \"-\", text.strip().lower())\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "There is no test for slugify in strings_util.py. Add a test_strings_util.py with at least two test functions using plain assert statements: one covering normal input like 'Hello World' -> 'hello-world', and one covering multiple internal spaces collapsing to one hyphen. Then run the tests with pytest and make sure they pass.",
+    "known_info": "The function to test and one example mapping.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "test_strings_util.py": {
+        "contains": ["def test_", "slugify"]
+      }
+    },
+    "nl_assertions": {
+      "contains": ["pass"]
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Write,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

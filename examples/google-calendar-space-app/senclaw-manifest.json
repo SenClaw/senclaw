@@ -1,0 +1,19 @@
+{
+  "id": "google-calendar",
+  "name": "Google Calendar",
+  "description": "Sync Google Calendar into the Space calendar module.",
+  "icon": "G",
+  "integration": {
+    "type": "iframe",
+    "url": "/api/space/apps/google-calendar/static/index.html"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "runtime": {
+    "kind": "static",
+    "buildCommand": "npm run build",
+    "staticDir": "out"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "input.guard.sensitive",
+  "version": 1,
+  "type": "noul",
+  "question": "Does this request or its attachments carry sensitive data (secrets, credentials, personal data) that changes how carefully the agent should handle it?",
+  "state_fields": ["query", "attachment_summary"],
+  "bands": { "act": 0.8, "fallback": 0.5 },
+  "on_uncertain": "narrow permissions for this turn, never hard-block",
+  "mode": "shadow",
+  "lifecycle": "shadow",
+  "lang": "en"
+}

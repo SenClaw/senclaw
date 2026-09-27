@@ -1,0 +1,27 @@
+{
+  "id": "vi-them-retry-backoff",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "goi_api.py": "import requests\n\n\ndef lay_du_lieu(url):\n    resp = requests.get(url)\n    resp.raise_for_status()\n    return resp.json()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Ham lay_du_lieu trong goi_api.py that bai ngay khi mang loi tam thoi. Hay them vong lap thu lai toi da 3 lan, moi lan cach nhau 2 ** attempt giay (dung time.sleep), chi bao loi sau lan thu cuoi cung.",
+    "known_info": "So lan thu toi da (3) va cong thuc cho.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "goi_api.py": {
+        "contains": ["import time", "range(3)", "time.sleep"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

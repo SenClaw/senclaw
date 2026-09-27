@@ -1,0 +1,32 @@
+{
+  "id": "off-by-one-fix",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "windowed_sum.py": "def windowed_sum(values, window):\n    \"\"\"Sum of each contiguous `window`-sized slice, sliding by 1.\"\"\"\n    sums = []\n    for i in range(len(values) - window):\n        sums.append(sum(values[i:i + window]))\n    return sums\n\n\nif __name__ == \"__main__\":\n    print(windowed_sum([1, 2, 3, 4, 5], 2))\n",
+      "test_windowed_sum.py": "from windowed_sum import windowed_sum\n\n\ndef test_covers_every_window():\n    assert windowed_sum([1, 2, 3, 4, 5], 2) == [3, 5, 7, 9]\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "test_windowed_sum.py is failing. Fix the bug in windowed_sum.py so the test passes, without changing the test file.",
+    "known_info": "The failing test and its expected output.",
+    "unknown_info": "Which line has the off-by-one error."
+  },
+  "criteria": {
+    "env_assertions": {
+      "windowed_sum.py": {
+        "contains": ["range(len(values) - window + 1)"],
+        "notContains": ["range(len(values) - window):"]
+      },
+      "test_windowed_sum.py": {
+        "contains": ["def test_covers_every_window():"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

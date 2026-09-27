@@ -1,0 +1,27 @@
+{
+  "id": "vi-them-kiem-tra-du-lieu",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "dang_ky.py": "def dang_ky_nguoi_dung(email, tuoi):\n    \"\"\"Dang ky mot nguoi dung moi.\"\"\"\n    return {\"email\": email, \"tuoi\": tuoi, \"trang_thai\": \"moi\"}\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Ham dang_ky_nguoi_dung trong dang_ky.py dang chap nhan moi gia tri tuoi, ke ca so am. Them kiem tra: neu tuoi nho hon 0 thi bao loi ValueError voi thong diep 'tuoi khong hop le'. Giu nguyen hanh vi cho du lieu hop le.",
+    "known_info": "Ten ham va thong diep loi can dung.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "dang_ky.py": {
+        "contains": ["ValueError", "tuoi khong hop le"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

@@ -1,0 +1,27 @@
+{
+  "id": "vi-doi-ten-ham-nhieu-file",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L3",
+  "split": "heldout",
+  "initial_state": {
+    "files": {
+      "kho_hang.py": "def kiem_tra_ton_kho(ma_sp, so_luong):\n    return so_luong > 0\n",
+      "don_hang.py": "from kho_hang import kiem_tra_ton_kho\n\n\ndef xac_nhan_don(ma_sp, so_luong):\n    if not kiem_tra_ton_kho(ma_sp, so_luong):\n        return \"het_hang\"\n    return \"da_xac_nhan\"\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Doi ten ham kiem_tra_ton_kho (dinh nghia trong kho_hang.py) thanh con_hang_khong o tat ca cac noi dinh nghia va su dung trong du an, dam bao don_hang.py van chay dung.",
+    "known_info": "Ham can doi ten va ten moi.",
+    "unknown_info": "File nao khac co su dung ham nay."
+  },
+  "criteria": {
+    "env_assertions": {
+      "kho_hang.py": { "contains": ["def con_hang_khong"], "notContains": ["def kiem_tra_ton_kho"] },
+      "don_hang.py": { "contains": ["con_hang_khong"], "notContains": ["kiem_tra_ton_kho"] }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Grep,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

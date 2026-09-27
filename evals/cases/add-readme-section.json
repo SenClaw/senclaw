@@ -1,0 +1,27 @@
+{
+  "id": "add-readme-section",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "README.md": "# Widget Service\n\nA small internal service for managing widgets.\n\n## Install\n\n```\npip install -r requirements.txt\n```\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Add a new '## Running tests' section to README.md, after the existing '## Install' section, with a fenced code block containing `pytest`. Do not change the existing content.",
+    "known_info": "Where the new section goes and its exact content.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "README.md": {
+        "contains": ["## Running tests", "pytest", "## Install"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

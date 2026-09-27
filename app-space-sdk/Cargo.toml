@@ -1,0 +1,28 @@
+# Its own workspace root: Space Apps and runtimes in other repositories depend
+# on this crate by path, and must not have to parse the daemon's manifest.
+[workspace]
+
+[package]
+name = "app-space-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+thiserror = "1"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { version = "0.7", features = ["json"] }
+# SSE bodies for `llm::openai_router` — the generator is written as a stream
+# rather than pushed through a channel wrapper so the `[DONE]` terminator can be
+# yielded after the provider's own events end.
+async-stream = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+# `ServiceExt::oneshot`, so the SSE contract is tested by driving the real
+# router over a real request rather than by inspecting the event builder.
+tower = { version = "0.5", features = ["util"] }

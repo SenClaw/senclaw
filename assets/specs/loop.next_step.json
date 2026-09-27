@@ -1,0 +1,20 @@
+{
+  "id": "loop.next_step",
+  "version": 1,
+  "type": "choice",
+  "question": "Given the last error and the paths already tried, what should happen next?",
+  "options": {
+    "retry_same": "run the identical call again unchanged",
+    "change_input": "run the same tool with different arguments",
+    "reroute": "use a different tool or approach for the same goal",
+    "fallback_model": "hand the turn to a stronger or different model",
+    "ask_user": "stop and ask the user a clarifying question",
+    "stop": "give up and report the failure honestly"
+  },
+  "state_fields": ["last_error", "failed_paths"],
+  "bands": { "act": 0.7, "fallback": 0.4 },
+  "on_uncertain": "escalate: ask_user rather than guessing",
+  "mode": "shadow",
+  "lifecycle": "shadow",
+  "lang": "en"
+}

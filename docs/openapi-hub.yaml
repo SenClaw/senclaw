@@ -1,0 +1,336 @@
+# The ClawHub registry's API. The *daemon's* own API is a separate,
+# generated document: docs/openapi-daemon.yaml.
+openapi: 3.0.3
+info:
+  title: ClawHub & SenClaw API
+  description: |
+    Comprehensive API specification for ClawHub Registry and SenClaw Channel synchronization.
+    Includes skill management, registry search, and real-time channel sync.
+  version: 1.1.0
+servers:
+  - url: https://api.senclaw.ai/v1
+    description: Public Gateway / Channel Sync
+  - url: https://lightmake.site/api/v1
+    description: ClawHub Registry API
+
+paths:
+  # === Channel Sync API ===
+  /agents:
+    get:
+      tags:
+        - Channel Sync
+      summary: List available agents for the connected channel
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+
+  /messages/{agentId}:
+    get:
+      tags:
+        - Channel Sync
+      summary: Fetch message history for an agent
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: before
+          in: query
+          schema:
+            type: string
+            format: date-time
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Message'
+
+  # === Registry API ===
+  /search:
+    get:
+      tags:
+        - Registry
+      summary: Search for skills in the registry
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SearchResult'
+
+  /skills/{slug}:
+    get:
+      tags:
+        - Registry
+      summary: Get metadata for a specific skill
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillMeta'
+
+  /download:
+    get:
+      tags:
+        - Registry
+      summary: Download skill package (ZIP)
+      parameters:
+        - name: slug
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: version
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill ZIP file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /resolve:
+    get:
+      tags:
+        - Registry
+      summary: Resolve skill version by hash
+      parameters:
+        - name: slug
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: hash
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Resolved version info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveResult'
+
+  /whoami:
+    get:
+      tags:
+        - Registry
+      summary: Get current authenticated user info
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/WhoamiResult'
+
+  /skills:
+    post:
+      tags:
+        - Registry
+      summary: Publish a new skill or version
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                payload:
+                  type: string
+                  description: JSON string containing slug, displayName, version, changelog, tags
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: Published skill info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skill:
+                    $ref: '#/components/schemas/PublishResult'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  schemas:
+    # --- Channel Sync Schemas ---
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        avatarUrl:
+          type: string
+        status:
+          type: string
+          enum: [idle, processing, error]
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, agent, system]
+        content:
+          type: string
+          description: Encrypted base64 string if E2EE is active
+        timestamp:
+          type: string
+          format: date-time
+        isEncrypted:
+          type: boolean
+
+    # --- Registry Schemas ---
+    SearchResult:
+      type: object
+      properties:
+        score:
+          type: number
+        slug:
+          type: string
+        displayName:
+          type: string
+        summary:
+          type: string
+        version:
+          type: string
+        updatedAt:
+          type: integer
+          description: Unix timestamp
+
+    SkillMeta:
+      type: object
+      properties:
+        skill:
+          type: object
+          properties:
+            slug:
+              type: string
+            displayName:
+              type: string
+            summary:
+              type: string
+            createdAt:
+              type: integer
+            updatedAt:
+              type: integer
+        latestVersion:
+          type: object
+          properties:
+            version:
+              type: string
+            createdAt:
+              type: integer
+            changelog:
+              type: string
+        moderation:
+          type: object
+          properties:
+            isSuspicious:
+              type: boolean
+            isMalwareBlocked:
+              type: boolean
+
+    ResolveResult:
+      type: object
+      properties:
+        match:
+          type: object
+          properties:
+            version:
+              type: string
+        latestVersion:
+          type: object
+          properties:
+            version:
+              type: string
+
+    WhoamiResult:
+      type: object
+      properties:
+        handle:
+          type: string
+        displayName:
+          type: string
+        image:
+          type: string
+
+    PublishResult:
+      type: object
+      properties:
+        slug:
+          type: string
+        version:
+          type: string
+        createdAt:
+          type: integer

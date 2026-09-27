@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+.senclaw/
+.DS_Store

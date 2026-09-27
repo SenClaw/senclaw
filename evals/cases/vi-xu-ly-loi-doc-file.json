@@ -1,0 +1,27 @@
+{
+  "id": "vi-xu-ly-loi-doc-file",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "doc_file.py": "def doc_noi_dung(duong_dan):\n    with open(duong_dan, encoding=\"utf-8\") as f:\n        return f.read()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Ham doc_noi_dung trong doc_file.py bi loi khong ro rang khi file khong ton tai. Hay bat loi FileNotFoundError va bao lai bang RuntimeError voi thong diep 'khong tim thay file: <duong_dan>'.",
+    "known_info": "Loai loi can bat va noi dung thong diep.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "doc_file.py": {
+        "contains": ["FileNotFoundError", "RuntimeError", "khong tim thay file"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

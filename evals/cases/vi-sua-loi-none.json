@@ -1,0 +1,27 @@
+{
+  "id": "vi-sua-loi-none",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "ho_so.py": "def ten_hien_thi(nguoi_dung):\n    return nguoi_dung[\"biet_danh\"].upper()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Ham ten_hien_thi trong ho_so.py bi loi khi 'biet_danh' la None. Hay sua de khi 'biet_danh' la None hoac rong, ham tra ve nguoi_dung['email'] thay the.",
+    "known_info": "Khoa 'biet_danh' va khoa du phong 'email'.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "ho_so.py": {
+        "contains": ["email"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

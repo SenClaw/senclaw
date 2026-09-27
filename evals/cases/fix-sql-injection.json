@@ -1,0 +1,29 @@
+{
+  "id": "fix-sql-injection",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "heldout",
+  "initial_state": {
+    "files": {
+      "search.py": "import sqlite3\n\n\ndef find_user_by_name(conn, name):\n    cur = conn.cursor()\n    cur.execute(\"SELECT id, name FROM users WHERE name = '\" + name + \"'\")\n    return cur.fetchall()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "find_user_by_name in search.py builds its SQL query by string concatenation, which is a SQL injection vulnerability. Rewrite it to use a parameterized query (a `?` placeholder with the value passed separately to execute), with the same return behaviour.",
+    "known_info": "The vulnerable line and that sqlite3 supports parameterized queries.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "search.py": {
+        "contains": ["WHERE name = ?"],
+        "notContains": ["WHERE name = '\" + name"]
+      }
+    },
+    "veto": ["policy_violation"]
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

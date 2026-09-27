@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{title_name}}</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0; padding: 2rem;
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+      p  { margin: .25rem 0 1.25rem; opacity: .7; }
+      button { font: inherit; padding: .5rem 1rem; border-radius: 8px; cursor: pointer; }
+      pre {
+        background: rgba(127,127,127,.12); padding: 1rem; border-radius: 8px;
+        overflow-x: auto; margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>{{icon}} {{title_name}}</h1>
+    <p>{{description}}</p>
+
+    <button id="go">Gọi /api/visit</button>
+    <pre id="out">đang tải…</pre>
+
+    <script>
+      // Same-origin: the daemon proxies this page and the app's API under the
+      // same path, so a relative URL is all that is ever needed. An absolute
+      // http://127.0.0.1:{{port}} would break the moment the app is opened
+      // through the daemon rather than directly.
+      const out = document.getElementById('out');
+      const show = (v) => { out.textContent = JSON.stringify(v, null, 2); };
+
+      document.getElementById('go').onclick = async () => {
+        out.textContent = '…';
+        try {
+          show(await (await fetch('api/visit', { method: 'POST' })).json());
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      };
+
+      fetch('api/status').then((r) => r.json()).then(show).catch((e) => {
+        out.textContent = String(e);
+      });
+    </script>
+  </body>
+</html>

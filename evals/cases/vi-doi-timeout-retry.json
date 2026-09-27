@@ -1,0 +1,28 @@
+{
+  "id": "vi-doi-timeout-retry",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L1",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "client.py": "import time\n\nMAX_RETRIES = 3\nBACKOFF_BASE = 1\n\n\ndef call_api(session, path):\n    for attempt in range(MAX_RETRIES):\n        resp = session.get(path)\n        if resp.status_code < 500:\n            return resp\n        time.sleep(BACKOFF_BASE * (attempt + 1))\n    return resp\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Trong file client.py, tang so lan thu lai toi da (MAX_RETRIES) tu 3 len 5. Khong doi gi khac.",
+    "known_info": "Ten bien can doi va gia tri moi.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "client.py": {
+        "contains": ["MAX_RETRIES = 5", "BACKOFF_BASE = 1"],
+        "notContains": ["MAX_RETRIES = 3"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

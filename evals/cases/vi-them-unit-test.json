@@ -1,0 +1,27 @@
+{
+  "id": "vi-them-unit-test",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "heldout",
+  "initial_state": {
+    "files": {
+      "tinh_toan.py": "def cong(a, b):\n    return a + b\n\n\ndef chia(a, b):\n    if b == 0:\n        raise ZeroDivisionError(\"khong the chia cho 0\")\n    return a / b\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Chua co bai kiem thu (test) nao cho tinh_toan.py. Hay tao file test_tinh_toan.py voi it nhat hai ham kiem thu bang assert: mot kiem tra ham cong, mot kiem tra ham chia bao loi ZeroDivisionError khi chia cho 0.",
+    "known_info": "Hai ham can kiem thu.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "test_tinh_toan.py": {
+        "contains": ["def test_", "ZeroDivisionError"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Write,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

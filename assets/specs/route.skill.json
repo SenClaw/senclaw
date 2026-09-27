@@ -1,0 +1,13 @@
+{
+  "id": "route.skill",
+  "version": 1,
+  "type": "choice",
+  "question": "Which skill should handle this request?",
+  "state_fields": ["query"],
+  "bands": { "act": 0.8, "fallback": 0.5 },
+  "on_uncertain": "hint the keyword pick only; never force-load",
+  "mode": "off",
+  "lifecycle": "active",
+  "lang": "en",
+  "wraps_existing": true
+}

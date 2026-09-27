@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "runtimes": [
+    {
+      "id": "llama.cpp-metal",
+      "name": "Metal llama.cpp",
+      "type": "llm-engine",
+      "description": "Upstream llama.cpp built with Metal acceleration for Apple Silicon — GGUF chat, embedding and vision (mmproj) models.",
+      "slots": ["gguf"],
+      "formats": ["gguf"],
+      "capabilities": ["chat", "embedding", "vision"],
+      "accelerator": "metal",
+      "platforms": ["darwin-arm64"],
+      "channels": { "stable": "b11201", "beta": "latest" },
+      "releases": [],
+      "upstream": {
+        "kind": "llama.cpp",
+        "repo": "ggml-org/llama.cpp",
+        "binary": "llama-server",
+        "assets": {
+          "darwin-arm64": { "asset": "llama-{version}-bin-macos-arm64.tar.gz" }
+        }
+      }
+    },
+    {
+      "id": "llama.cpp-cpu",
+      "name": "CPU llama.cpp",
+      "type": "llm-engine",
+      "description": "Upstream llama.cpp, CPU-only build — GGUF chat, embedding and vision (mmproj) models on any platform.",
+      "slots": ["gguf"],
+      "formats": ["gguf"],
+      "capabilities": ["chat", "embedding", "vision"],
+      "accelerator": "cpu",
+      "platforms": ["darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
+      "channels": { "stable": "b11201", "beta": "latest" },
+      "releases": [],
+      "upstream": {
+        "kind": "llama.cpp",
+        "repo": "ggml-org/llama.cpp",
+        "binary": "llama-server",
+        "assets": {
+          "darwin-x64": { "asset": "llama-{version}-bin-macos-x64.tar.gz" },
+          "linux-x64": { "asset": "llama-{version}-bin-ubuntu-x64.tar.gz" },
+          "linux-arm64": { "asset": "llama-{version}-bin-ubuntu-arm64.tar.gz" },
+          "windows-x64": { "asset": "llama-{version}-bin-win-cpu-x64.zip" },
+          "windows-arm64": { "asset": "llama-{version}-bin-win-cpu-arm64.zip" }
+        }
+      }
+    },
+    {
+      "id": "llama.cpp-vulkan",
+      "name": "Vulkan llama.cpp",
+      "type": "llm-engine",
+      "description": "Upstream llama.cpp built with Vulkan acceleration — GGUF chat, embedding and vision (mmproj) models on any GPU with a Vulkan driver.",
+      "slots": ["gguf"],
+      "formats": ["gguf"],
+      "capabilities": ["chat", "embedding", "vision"],
+      "accelerator": "vulkan",
+      "platforms": ["linux-x64", "linux-arm64", "windows-x64"],
+      "channels": { "stable": "b11201", "beta": "latest" },
+      "releases": [],
+      "upstream": {
+        "kind": "llama.cpp",
+        "repo": "ggml-org/llama.cpp",
+        "binary": "llama-server",
+        "assets": {
+          "linux-x64": { "asset": "llama-{version}-bin-ubuntu-vulkan-x64.tar.gz" },
+          "linux-arm64": { "asset": "llama-{version}-bin-ubuntu-vulkan-arm64.tar.gz" },
+          "windows-x64": { "asset": "llama-{version}-bin-win-vulkan-x64.zip" }
+        }
+      }
+    },
+    {
+      "id": "llama.cpp-cuda",
+      "name": "CUDA llama.cpp",
+      "type": "llm-engine",
+      "description": "Upstream llama.cpp built with CUDA acceleration — GGUF chat, embedding and vision (mmproj) models on NVIDIA GPUs.",
+      "slots": ["gguf"],
+      "formats": ["gguf"],
+      "capabilities": ["chat", "embedding", "vision"],
+      "accelerator": "cuda",
+      "platforms": ["linux-x64", "windows-x64"],
+      "channels": { "stable": "b11201", "beta": "latest" },
+      "releases": [],
+      "upstream": {
+        "kind": "llama.cpp",
+        "repo": "ggml-org/llama.cpp",
+        "binary": "llama-server",
+        "assets": {
+          "linux-x64": {
+            "asset": "llama-{version}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+            "extraAssets": ["cudart-llama-{version}-bin-ubuntu-cuda-12.8-x64.tar.gz"]
+          },
+          "windows-x64": {
+            "asset": "llama-{version}-bin-win-cuda-12.4-x64.zip",
+            "extraAssets": ["cudart-llama-bin-win-cuda-12.4-x64.zip"]
+          }
+        }
+      }
+    },
+    {
+      "id": "sen-mlx",
+      "name": "SenClaw MLX",
+      "type": "llm-engine",
+      "description": "MLX LLM runtime for Apple Silicon — chat and vision (Gemma 4) models.",
+      "slots": ["mlx"],
+      "formats": ["mlx"],
+      "capabilities": ["chat", "vision"],
+      "accelerator": "metal",
+      "platforms": ["darwin-arm64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
+      "id": "sen-sysone",
+      "name": "SenClaw System One",
+      "type": "decision",
+      "description": "Typed decisions (Laya on ONNX Runtime, or a hosted Jev-compatible backend).",
+      "slots": ["decision"],
+      "capabilities": ["decision"],
+      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
+      "id": "sen-ocr",
+      "name": "SenClaw OCR",
+      "type": "ocr",
+      "description": "PaddleOCR PP-OCRv4/v5 on MNN.",
+      "slots": ["ocr"],
+      "capabilities": ["ocr"],
+      "platforms": ["darwin-arm64", "linux-x64", "windows-x64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
+      "id": "sen-whisper",
+      "name": "SenClaw Whisper",
+      "type": "asr",
+      "description": "Whisper speech-to-text on MLX.",
+      "slots": ["asr"],
+      "capabilities": ["asr"],
+      "accelerator": "metal",
+      "platforms": ["darwin-arm64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
+      "id": "sen-tts",
+      "name": "SenClaw TTS",
+      "type": "tts",
+      "description": "VieNeu-TTS v3 Turbo (ONNX Runtime) plus the macOS `say` presets.",
+      "slots": ["tts"],
+      "capabilities": ["tts"],
+      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    }
+  ]
+}

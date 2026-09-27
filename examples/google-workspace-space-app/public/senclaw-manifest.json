@@ -1,0 +1,33 @@
+{
+  "id": "google-workspace",
+  "name": "Google Workspace",
+  "description": "Sync Gmail, Google Calendar, and future Google notes import into Space.",
+  "icon": "G",
+  "runtime": {
+    "kind": "server",
+    "start": "npm start",
+    "healthPath": "/health",
+    "port": 4310
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest"]
+  },
+  "mcp": {
+    "name": "google-workspace-mcp",
+    "transport": "http",
+    "path": "/mcp",
+    "description": "Google Workspace sync and settings tools (served by the app's Next.js server)",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "google-workspace",
+      "path": "skills/google-workspace"
+    }
+  ]
+}

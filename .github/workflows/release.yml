@@ -1,0 +1,66 @@
+name: release
+
+# Tag push (`v0.1.0`, …) → build the daemon binary per platform and publish it
+# on this repo's GitHub release. `scripts/install.sh`, `scripts/install.ps1`
+# and `senclaw update` (src/cli/commands/distrib.rs) download exactly these
+# asset names; the desktop repo builds its own copy to bundle into the app.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # git2 builds libgit2/libssh2 against the system OpenSSL on Linux.
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # The daemon links no inference code (docs/runtime-protocol.md), so every
+      # platform builds the same way — no feature matrix.
+      - name: Build senclaw
+        shell: bash
+        env:
+          # Google's desktop OAuth clients for the Antigravity and Gemini CLI
+          # sign-ins (src/providers/oauth/provider.rs). Without these secrets
+          # the build simply does not offer those two providers.
+          SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID: ${{ secrets.SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID }}
+          SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET: ${{ secrets.SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET }}
+          SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID: ${{ secrets.SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID }}
+          SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET: ${{ secrets.SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET }}
+        run: cargo build --release --bin senclaw --target ${{ matrix.target }}
+
+      - name: Collect asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          cp "target/${{ matrix.target }}/release/senclaw${ext}" "dist/senclaw-${{ matrix.target }}${ext}"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -1,0 +1,37 @@
+{
+  "id": "{{id}}",
+  "name": "{{title_name}}",
+  "description": "{{description}}",
+  "icon": "{{icon}}",
+  "version": "0.1.0",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "runner": "python",
+    "start": "python main.py",
+    "healthPath": "/api/status",
+    "port": {{port}},
+    "idleTimeoutSecs": 60
+  },
+  "requires": {
+    "python": ">=3.10"
+  },
+  "sandbox": {
+    "enabled": true,
+    "readMode": "open",
+    "network": "all",
+    "daemonApi": true
+  },
+  "integration": { "type": "iframe", "url": "/" },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["space.rest", "llm.request"]
+  },
+  "mcp": {
+    "name": "{{mcp_name}}",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "{{description}}",
+    "autoRegister": true
+  }
+}

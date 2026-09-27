@@ -1,0 +1,27 @@
+{
+  "id": "add-error-handling-json-parse",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "config_loader.py": "import json\n\n\ndef load_config(path):\n    with open(path) as f:\n        return json.load(f)\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "load_config in config_loader.py crashes with a raw traceback when the file has invalid JSON. Catch json.JSONDecodeError and re-raise a ValueError with a message that includes the file path, e.g. 'invalid JSON in <path>: <original error>'.",
+    "known_info": "Which exception to catch and the message shape.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "config_loader.py": {
+        "contains": ["JSONDecodeError", "ValueError", "invalid JSON in"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

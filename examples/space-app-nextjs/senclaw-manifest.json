@@ -1,0 +1,20 @@
+{
+  "id": "nextjs-dashboard",
+  "name": "Next.js Dashboard",
+  "description": "Example Space App embedded in the Space sidebar.",
+  "icon": "N",
+  "integration": {
+    "type": "iframe",
+    "url": "/api/space/apps/nextjs-dashboard/static/index.html"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": ["llm.request", "mcp.call", "space.rest"]
+  },
+  "runtime": {
+    "kind": "node",
+    "devCommand": "npm run dev",
+    "buildCommand": "npm run build",
+    "staticDir": "out"
+  }
+}

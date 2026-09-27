@@ -1,0 +1,29 @@
+{
+  "id": "vi-yeu-cau-mo-ho",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "thong_bao.py": "def gui_thong_bao(ma_nguoi_dung, noi_dung):\n    print(f\"bao {ma_nguoi_dung}: {noi_dung}\")\n",
+      "thanh_toan.py": "def tru_tien(ma_nguoi_dung, so_xu):\n    print(f\"tru {ma_nguoi_dung}: {so_xu} xu\")\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Sua loi trong file bi loi.",
+    "known_info": "Du an co hai file nho.",
+    "unknown_info": "File nao, ham nao, va loi la gi — yeu cau khong neu ten file, khong neu trieu chung, khong neu ket qua mong doi."
+  },
+  "criteria": {
+    "nl_assertions": {
+      "contains": ["file"]
+    },
+    "decision_assertions": [
+      { "spec_id": "clarify.needed", "acceptable": ["true"], "forbidden": ["false"] }
+    ]
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 180000
+}

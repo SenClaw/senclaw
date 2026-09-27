@@ -1,0 +1,126 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+examples/*/out/
+examples/*/.next/
+examples/*/*.zip
+*.tsbuildinfo
+coverage/
+
+# npm pack artifacts
+*.tgz
+
+# Environment & credentials
+.env
+.env.*
+!.env.example
+
+# Runtime data
+.sema/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Editor temp files
+*.swp
+*.swo
+*~
+
+# Tool caches
+.npm/
+.eslintcache
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log
+
+# Local settings
+settings.local.json
+
+# Rust
+target/
+**/*.rs.bk
+
+# code-old/
+hub-backend/bin/server
+hub-backend/server
+test_parse
+test_parse.rs
+test_prompt.sh
+
+
+*.tar.gz
+.cursor/
+.claude/
+.vscode/
+/workbench/
+skills/agent-browser/*.html
+apps/ssh-manager/release
+apps/*/release/
+apps/**/*.zip
+.next
+dist
+target
+out
+.senclaw
+.playwright-mcp
+# Local-only helper scripts (benchmarks, fixtures). NOTE: do NOT ignore bare
+# `scripts` — that hides the root installers and every app's pack scripts.
+scripts/dump_llm_prompt.py
+scripts/mlx_bench.sh
+scripts/tts_roundtrip.sh
+scripts/whisper_*
+code-old/cognee
+code-old/sema-code-core
+code-old/SemaClaw
+third_party/
+# Reference clone of the external 9router project — not part of this repo
+9router/
+test_tts
+apps/*/web/node_modules/
+
+# Space App packaging artifacts (built by apps/*/scripts/pack.sh)
+apps/*/release/
+apps/*/*.zip
+# Root staging tree + zip output written by scripts/pack-app.sh (CI packer).
+/release/
+
+# Python build artefacts (the Space App SDK + any local venv)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Built engine binaries copied next to their manifest for `register-local`
+# during development. `mlx.metallib` must sit beside the binary — MLX resolves
+# it relative to the executable — but neither belongs in git.
+apps/mlx-lm/mlx-lm
+apps/mlx-lm/mlx.metallib
+apps/candle/candle
+
+# Local scratch that must not be tracked
+cargo_check.log
+*.tar.gz
+workbench/
+9router/
+dashboard.png
+snap-current.yml
+dag-test-page.yml
+
+# Merge leftovers — one was committed once and read as a second copy of a module.
+*.orig
+*.rej

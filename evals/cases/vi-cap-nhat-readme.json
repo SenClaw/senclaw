@@ -1,0 +1,27 @@
+{
+  "id": "vi-cap-nhat-readme",
+  "source": "handcrafted",
+  "lang": "vi",
+  "difficulty": "L1",
+  "split": "train",
+  "initial_state": {
+    "files": {
+      "README.md": "# Dich Vu Widget\n\nMot dich vu noi bo nho de quan ly widget.\n\n## Cai dat\n\n```\npip install -r requirements.txt\n```\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "Them mot muc moi '## Chay kiem thu' vao README.md, ngay sau muc '## Cai dat', voi mot khoi code chua lenh `pytest`. Khong thay doi noi dung con lai.",
+    "known_info": "Vi tri va noi dung muc moi.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "README.md": {
+        "contains": ["## Chay kiem thu", "pytest", "## Cai dat"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Glob,Grep",
+  "timeoutMs": 300000
+}

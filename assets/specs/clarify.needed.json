@@ -1,0 +1,12 @@
+{
+  "id": "clarify.needed",
+  "version": 1,
+  "type": "noul",
+  "question": "Is there information missing that only the user can supply, such that answering now risks solving the wrong problem?",
+  "state_fields": ["query", "memory_card"],
+  "bands": { "act": 0.8, "fallback": 0.5 },
+  "on_uncertain": "proceed; ask only one clarifying question before continuing",
+  "mode": "shadow",
+  "lifecycle": "shadow",
+  "lang": "en"
+}

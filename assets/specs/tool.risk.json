@@ -1,0 +1,13 @@
+{
+  "id": "tool.risk",
+  "version": 1,
+  "type": "choice",
+  "question": "What does this shell command do?",
+  "state_fields": ["tool", "args"],
+  "bands": { "act": 0.9, "fallback": 0.5 },
+  "on_uncertain": "leave the permission prompt in place",
+  "mode": "off",
+  "lifecycle": "active",
+  "lang": "en",
+  "wraps_existing": true
+}

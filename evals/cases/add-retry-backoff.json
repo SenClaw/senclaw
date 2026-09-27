@@ -1,0 +1,27 @@
+{
+  "id": "add-retry-backoff",
+  "source": "handcrafted",
+  "lang": "en",
+  "difficulty": "L2",
+  "split": "dev",
+  "initial_state": {
+    "files": {
+      "http_client.py": "import requests\n\n\ndef get_json(url):\n    resp = requests.get(url)\n    resp.raise_for_status()\n    return resp.json()\n"
+    }
+  },
+  "user_scenario": {
+    "task_instructions": "get_json in http_client.py fails immediately on any transient network error. Add a retry loop: try up to 3 times, sleeping 2 ** attempt seconds between attempts (using time.sleep), and only propagate the exception after the last attempt fails.",
+    "known_info": "Max attempts (3) and the backoff formula.",
+    "unknown_info": ""
+  },
+  "criteria": {
+    "env_assertions": {
+      "http_client.py": {
+        "contains": ["import time", "range(3)", "time.sleep"]
+      }
+    }
+  },
+  "versions": { "jev_specs": 1, "tools": "Read,Edit,Bash", "llm": "auto", "judge": "none" },
+  "tools": "Read,Edit,Write,Bash,Glob,Grep",
+  "timeoutMs": 300000
+}

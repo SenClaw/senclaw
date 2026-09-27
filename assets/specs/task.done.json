@@ -1,0 +1,12 @@
+{
+  "id": "task.done",
+  "version": 1,
+  "type": "noul",
+  "question": "Does the environment evidence gathered so far prove the stated goal was met? A model's own claim that it is done is not evidence.",
+  "state_fields": ["goal", "evidence"],
+  "bands": { "act": 0.85, "fallback": 0.5 },
+  "on_uncertain": "treat as not done; retry rather than accept",
+  "mode": "shadow",
+  "lifecycle": "shadow",
+  "lang": "en"
+}
