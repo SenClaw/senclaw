@@ -124,8 +124,14 @@
       "slots": ["decision"],
       "capabilities": ["decision"],
       "platforms": ["darwin-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "channels": { "stable": "0.1.1", "beta": "0.1.1" },
       "releases": [
+        { "version": "0.1.1", "notesUrl": "https://github.com/SenClaw/sen-sysone/releases/tag/v0.1.1",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-sysone/releases/download/v0.1.1/sen-sysone-0.1.1-darwin-arm64.tar.gz", "sha256": "fc78caae3aa3c004a221f093c1c8772768e9f59c349240bb81ece06b58f67040", "size": 11119003},
+            {"platform": "linux-x64", "url": "https://github.com/SenClaw/sen-sysone/releases/download/v0.1.1/sen-sysone-0.1.1-linux-x64.tar.gz", "sha256": "74c694017abfec3ce81bbbf5dbac9ce1cfa6ac9e98d81df8b610ffc3eeb7d6e7", "size": 12225060},
+            {"platform": "windows-x64", "url": "https://github.com/SenClaw/sen-sysone/releases/download/v0.1.1/sen-sysone-0.1.1-windows-x64.tar.gz", "sha256": "f5eb17d9a334d16fe6d2c50d384aaf5caa2563616bd6d4f8c6afa73d0a2adf2b", "size": 10098414}
+          ] },
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-sysone/releases/tag/v0.1.0",
           "packages": [
             {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-sysone/releases/download/v0.1.0/sen-sysone-0.1.0-darwin-arm64.tar.gz", "sha256": "ef91716646a4633291e90f5a8b3e248a16b5571da244f9778a45e1a2224df001", "size": 11118861},
@@ -141,8 +147,14 @@
       "slots": ["ocr"],
       "capabilities": ["ocr"],
       "platforms": ["darwin-arm64", "linux-x64", "windows-x64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "channels": { "stable": "0.1.1", "beta": "0.1.1" },
       "releases": [
+        { "version": "0.1.1", "notesUrl": "https://github.com/SenClaw/sen-ocr/releases/tag/v0.1.1",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-ocr/releases/download/v0.1.1/sen-ocr-0.1.1-darwin-arm64.tar.gz", "sha256": "e883e2cd060f6d77c8c152d694ca08615e8748ebcb8cd985df6edec41e2f0aa4", "size": 5448000},
+            {"platform": "linux-x64", "url": "https://github.com/SenClaw/sen-ocr/releases/download/v0.1.1/sen-ocr-0.1.1-linux-x64.tar.gz", "sha256": "62e0ddc2e233ff93d625a7b7466bc7db4e22ff4e2be90ccae52c036e1c6f06f0", "size": 6086855},
+            {"platform": "windows-x64", "url": "https://github.com/SenClaw/sen-ocr/releases/download/v0.1.1/sen-ocr-0.1.1-windows-x64.tar.gz", "sha256": "c07c6647a6469a2203e2f9292250f751a79c576dff89b008f5b22c56ff81de5e", "size": 4979708}
+          ] },
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-ocr/releases/tag/v0.1.0",
           "packages": [
             {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-ocr/releases/download/v0.1.0/sen-ocr-0.1.0-darwin-arm64.tar.gz", "sha256": "31846cd8888910f16d0a17bb0825c48ebb2d53d00f2defeb9e27f2ff0880bf67", "size": 5448621},
@@ -175,8 +187,14 @@
       "slots": ["tts"],
       "capabilities": ["tts"],
       "platforms": ["darwin-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "channels": { "stable": "0.1.1", "beta": "0.1.1" },
       "releases": [
+        { "version": "0.1.1", "notesUrl": "https://github.com/SenClaw/sen-tts/releases/tag/v0.1.1",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-tts/releases/download/v0.1.1/sen-tts-0.1.1-darwin-arm64.tar.gz", "sha256": "b9f4fd7b0b672ee407b462175ca942e5455fbf774bddcdfb895f0b41617d3ad2", "size": 11595691},
+            {"platform": "linux-x64", "url": "https://github.com/SenClaw/sen-tts/releases/download/v0.1.1/sen-tts-0.1.1-linux-x64.tar.gz", "sha256": "8a015180c26e571a9b859b27b67df0221970aec0a1da8f49d511003d29e164b1", "size": 12800910},
+            {"platform": "windows-x64", "url": "https://github.com/SenClaw/sen-tts/releases/download/v0.1.1/sen-tts-0.1.1-windows-x64.tar.gz", "sha256": "8bc9a13b5628ac337e668e5a761f75e2dec3fe17296a01f661fd7519e311ba2f", "size": 10710111}
+          ] },
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-tts/releases/tag/v0.1.0",
           "packages": [
             {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-tts/releases/download/v0.1.0/sen-tts-0.1.0-darwin-arm64.tar.gz", "sha256": "9a70004158f7d7c3448b478eeefad02e47e046304352831878cc7da0ab83c42d", "size": 11596534},
