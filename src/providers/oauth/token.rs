@@ -100,15 +100,15 @@ pub async fn exchange_code(
         ("grant_type", "authorization_code".into()),
         ("code", code.to_string()),
         ("redirect_uri", redirect_uri.to_string()),
-        ("client_id", def.client_id.to_string()),
+        ("client_id", def.client_id()),
         ("code_verifier", code_verifier.to_string()),
     ];
     if def.id == "claude" {
         fields.push(("state", state.to_string()));
     }
     if def.sends_client_secret {
-        if let Some(secret) = def.client_secret {
-            fields.push(("client_secret", secret.to_string()));
+        if let Some(secret) = def.client_secret() {
+            fields.push(("client_secret", secret));
         }
     }
 
@@ -124,14 +124,14 @@ pub async fn refresh(
     let mut fields: Vec<(&str, String)> = vec![
         ("grant_type", "refresh_token".into()),
         ("refresh_token", refresh_token.to_string()),
-        ("client_id", def.client_id.to_string()),
+        ("client_id", def.client_id()),
     ];
     if def.refresh_includes_scope {
         fields.push(("scope", def.scope_string()));
     }
     if def.sends_client_secret {
-        if let Some(secret) = def.client_secret {
-            fields.push(("client_secret", secret.to_string()));
+        if let Some(secret) = def.client_secret() {
+            fields.push(("client_secret", secret));
         }
     }
 
@@ -178,7 +178,7 @@ pub async fn request_device_code(
         .device_code_url
         .ok_or_else(|| anyhow!("{} has no device-code endpoint", def.id))?;
 
-    let mut fields: Vec<(&str, String)> = vec![("client_id", def.client_id.to_string())];
+    let mut fields: Vec<(&str, String)> = vec![("client_id", def.client_id())];
     if !def.scopes.is_empty() {
         fields.push(("scope", def.scope_string()));
     }
@@ -258,11 +258,11 @@ pub async fn poll_device_token(
             "urn:ietf:params:oauth:grant-type:device_code".into(),
         ),
         ("device_code", device_code.to_string()),
-        ("client_id", def.client_id.to_string()),
+        ("client_id", def.client_id()),
     ];
     if def.sends_client_secret {
-        if let Some(secret) = def.client_secret {
-            fields.push(("client_secret", secret.to_string()));
+        if let Some(secret) = def.client_secret() {
+            fields.push(("client_secret", secret));
         }
     }
 
@@ -523,11 +523,10 @@ mod tests {
     #[test]
     fn only_providers_that_declare_a_secret_would_send_one() {
         // Guards the exchange/refresh body builders against sending an empty
-        // client_secret field. A provider built without its client (no id)
-        // never reaches them — its sign-in is refused up front.
-        for p in provider::all().iter().filter(|p| !p.client_id.is_empty()) {
+        // client_secret field.
+        for p in provider::all() {
             if p.sends_client_secret {
-                assert!(p.client_secret.is_some_and(|s| !s.is_empty()), "{}", p.id);
+                assert!(p.client_secret().is_some_and(|s| !s.is_empty()), "{}", p.id);
             }
         }
     }

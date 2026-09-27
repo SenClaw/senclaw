@@ -79,13 +79,6 @@ pub struct StartedFlow {
 pub async fn start(manager: Arc<OauthManager>, provider_id: &str) -> Result<StartedFlow> {
     let def = provider::get(provider_id)
         .ok_or_else(|| anyhow!("unknown OAuth provider `{provider_id}`"))?;
-    if !def.is_available() {
-        bail!(
-            "{} sign-in is not available in this build: it was compiled without the provider's \
-             OAuth client (see src/providers/oauth/provider.rs)",
-            def.display_name
-        );
-    }
 
     match def.flow {
         provider::FlowKind::AuthCodePkce => start_auth_code(manager, def).await,
@@ -300,7 +293,7 @@ pub fn build_authorize_url(
     code_challenge: &str,
 ) -> String {
     let mut params: Vec<(String, String)> = vec![
-        ("client_id".into(), def.client_id.to_string()),
+        ("client_id".into(), def.client_id()),
         ("response_type".into(), "code".into()),
         ("redirect_uri".into(), redirect_uri.to_string()),
         ("scope".into(), def.scope_string()),

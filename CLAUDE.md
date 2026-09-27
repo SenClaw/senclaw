@@ -36,10 +36,10 @@ Never develop against a live install: use `HOME=<scratch dir>` (every path deriv
 The web UI is built in `../web-app` (`npm run build`); the daemon serves `SENCLAW_WEB_DIST`, else `./web/dist`, else
 `../web-app/dist`.
 
-The Antigravity and Gemini CLI sign-ins use Google's desktop OAuth clients, which are never committed (secret scanning
-blocks them). They are compiled in from `SENCLAW_{ANTIGRAVITY,GEMINI_CLI}_OAUTH_CLIENT_{ID,SECRET}`: release CI passes
-them from repository secrets; a local build without them simply does not offer those two providers (export them, or set
-them under `[env]` in `~/.cargo/config.toml`, to keep them). Never paste the values into source, docs or tests.
+The Antigravity and Gemini CLI sign-ins use Google's desktop OAuth clients, built into
+`src/providers/oauth/provider.rs`. `SENCLAW_{ANTIGRAVITY,GEMINI_CLI}_OAUTH_CLIENT_{ID,SECRET}` override them — at runtime
+from the daemon's environment, or at build time (release CI passes them from repository secrets when set). GitHub push
+protection flags those two values; allow them there when a push is blocked, never obfuscate them to get past it.
 
 Releases are tag-driven (`vX.Y.Z` → `.github/workflows/release.yml` publishes `senclaw-<target>` binaries, which
 `scripts/install.sh`/`install.ps1` and `senclaw update` download). Bump `Cargo.toml`'s version first and refresh

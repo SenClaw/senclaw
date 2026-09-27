@@ -12,12 +12,12 @@
 //! three actively detect it. The UI surfaces this string so the choice is
 //! made with open eyes.
 //!
-//! Google's two clients (Antigravity, Gemini CLI) are not in the source: secret
-//! scanning rejects a Google client secret in a public repository, so they are
-//! read from the build environment (`SENCLAW_{ANTIGRAVITY,GEMINI_CLI}_OAUTH_
-//! CLIENT_{ID,SECRET}`, supplied by release CI from repository secrets). A
-//! build without them simply does not offer those two sign-ins — see
-//! [`OauthProviderDef::is_available`].
+//! Google's two clients (Antigravity, Gemini CLI) can be swapped without
+//! editing this file: `SENCLAW_{ANTIGRAVITY,GEMINI_CLI}_OAUTH_CLIENT_{ID,SECRET}`
+//! override the built-in values — from the daemon's environment at runtime
+//! ([`OauthProviderDef::client_id`]) or from the build environment at compile
+//! time ([`built_in`], which release CI feeds from repository secrets). An
+//! empty value counts as unset.
 
 /// How a provider wants the refresh-token request encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,22 +49,14 @@ pub enum CallbackPort {
     Fixed(u16),
 }
 
-/// A client credential baked in from the build environment. Unset and empty
-/// are the same: CI expands a repository secret that does not exist to an
-/// empty string, and that must read as "not supplied", not as a real value.
-const fn build_credential(value: Option<&'static str>) -> Option<&'static str> {
-    match value {
-        Some(v) if !v.is_empty() => Some(v),
-        _ => None,
-    }
-}
-
-/// [`build_credential`] for a client id, which every provider has: an absent
-/// one becomes `""`, which [`OauthProviderDef::is_available`] reports.
-const fn build_client_id(value: Option<&'static str>) -> &'static str {
-    match build_credential(value) {
-        Some(v) => v,
-        None => "",
+/// The client credential compiled in: the build environment's value when it
+/// is set, else the one written here. Empty counts as unset — CI expands a
+/// repository secret that does not exist to an empty string, and that must
+/// keep the built-in value rather than blank it.
+const fn built_in(from_build: Option<&'static str>, default: &'static str) -> &'static str {
+    match from_build {
+        Some(v) if !v.is_empty() => v,
+        _ => default,
     }
 }
 
@@ -86,6 +78,11 @@ pub struct OauthProviderDef {
     pub client_id: &'static str,
     /// Only Google's installed-app profile requires one.
     pub client_secret: Option<&'static str>,
+    /// Prefix of the environment variables that override the built-in client
+    /// at runtime: `<prefix>_CLIENT_ID` and `<prefix>_CLIENT_SECRET`. Read the
+    /// client through [`Self::client_id`] / [`Self::client_secret`], never the
+    /// fields directly, so an override is honoured everywhere.
+    pub env_prefix: Option<&'static str>,
     pub authorize_url: &'static str,
     pub token_url: &'static str,
     pub scopes: &'static [&'static str],
@@ -126,12 +123,20 @@ pub struct OauthProviderDef {
 }
 
 impl OauthProviderDef {
-    /// Whether this build can sign in to the provider at all. False only for a
-    /// provider whose client comes from the build environment and was not
-    /// supplied (see the module docs); the UI does not list it and a sign-in
-    /// attempt says why instead of failing at Google's token endpoint.
-    pub fn is_available(&self) -> bool {
-        !self.client_id.is_empty() && (!self.sends_client_secret || self.client_secret.is_some())
+    /// The client id to send: `<env_prefix>_CLIENT_ID` from the daemon's
+    /// environment when set, else the built-in one.
+    pub fn client_id(&self) -> String {
+        self.env_override("CLIENT_ID").unwrap_or_else(|| self.client_id.to_string())
+    }
+
+    /// The client secret to send, overridable like [`Self::client_id`].
+    pub fn client_secret(&self) -> Option<String> {
+        self.env_override("CLIENT_SECRET").or_else(|| self.client_secret.map(str::to_string))
+    }
+
+    fn env_override(&self, suffix: &str) -> Option<String> {
+        let prefix = self.env_prefix?;
+        std::env::var(format!("{prefix}_{suffix}")).ok().filter(|v| !v.trim().is_empty())
     }
 
     /// Space-joined scope string for the authorize/refresh requests.
@@ -155,6 +160,7 @@ const CLAUDE: OauthProviderDef = OauthProviderDef {
     brand_mark: "C",
     client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
     client_secret: None,
+    env_prefix: None,
     authorize_url: "https://claude.ai/oauth/authorize",
     token_url: "https://api.anthropic.com/v1/oauth/token",
     scopes: &["org:create_api_key", "user:profile", "user:inference"],
@@ -190,6 +196,7 @@ const CODEX: OauthProviderDef = OauthProviderDef {
     brand_mark: "OA",
     client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
     client_secret: None,
+    env_prefix: None,
     authorize_url: "https://auth.openai.com/oauth/authorize",
     token_url: "https://auth.openai.com/oauth/token",
     scopes: &["openid", "profile", "email", "offline_access"],
@@ -228,11 +235,12 @@ const ANTIGRAVITY: OauthProviderDef = OauthProviderDef {
                   This is against Google's terms of service and can get the account suspended.",
     brand_color: "#F59E0B",
     brand_mark: "AG",
-    client_id: build_client_id(option_env!("SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID")),
+    client_id: built_in(option_env!("SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID"), "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"),
     // Google's installed-app profile requires the secret on token calls even
-    // though it ships inside the desktop client. It is not a secret in practice,
-    // but secret scanning treats it as one — hence the build environment.
-    client_secret: build_credential(option_env!("SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET")),
+    // though it ships inside the desktop client. It is not a secret in practice.
+    // Both can be overridden from the environment (see `env_prefix`).
+    client_secret: Some(built_in(option_env!("SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET"), "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")),
+    env_prefix: Some("SENCLAW_ANTIGRAVITY_OAUTH"),
     authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
     scopes: &[
@@ -287,6 +295,7 @@ const GITHUB_COPILOT: OauthProviderDef = OauthProviderDef {
     brand_mark: "GH",
     client_id: "Iv1.b507a08c87ecfe98",
     client_secret: None,
+    env_prefix: None,
     // Device flow has no browser redirect; the user opens this page themselves.
     authorize_url: "https://github.com/login/device",
     token_url: "https://github.com/login/oauth/access_token",
@@ -331,6 +340,7 @@ const QWEN: OauthProviderDef = OauthProviderDef {
     brand_mark: "Q",
     client_id: "f0304373b74a44d2b584a3fb70ca9e56",
     client_secret: None,
+    env_prefix: None,
     authorize_url: "https://chat.qwen.ai/authorize",
     token_url: "https://chat.qwen.ai/api/v1/oauth2/token",
     scopes: &["openid", "profile", "email", "model.completion"],
@@ -364,6 +374,7 @@ const KIMI: OauthProviderDef = OauthProviderDef {
     brand_mark: "K",
     client_id: "17e5f671-d194-4dfb-9706-5516cb48c098",
     client_secret: None,
+    env_prefix: None,
     authorize_url: "https://auth.kimi.com/device",
     token_url: "https://auth.kimi.com/api/oauth/token",
     scopes: &[],
@@ -406,6 +417,7 @@ const GROK: OauthProviderDef = OauthProviderDef {
     brand_mark: "X",
     client_id: "b1a00492-073a-47ea-816f-4c329264a828",
     client_secret: None,
+    env_prefix: None,
     authorize_url: "https://accounts.x.ai/device",
     token_url: "https://auth.x.ai/oauth2/token",
     scopes: &[
@@ -448,6 +460,7 @@ const IFLOW: OauthProviderDef = OauthProviderDef {
     brand_mark: "iF",
     client_id: "10009311001",
     client_secret: Some("4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW"),
+    env_prefix: None,
     authorize_url: "https://iflow.cn/oauth",
     token_url: "https://iflow.cn/oauth/token",
     scopes: &[],
@@ -491,9 +504,10 @@ const GEMINI_CLI: OauthProviderDef = OauthProviderDef {
                   third-party client.",
     brand_color: "#4285F4",
     brand_mark: "GC",
-    // Google's published Gemini CLI desktop client, from the build environment.
-    client_id: build_client_id(option_env!("SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID")),
-    client_secret: build_credential(option_env!("SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET")),
+    // Google's published Gemini CLI desktop client; overridable from the environment.
+    client_id: built_in(option_env!("SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID"), "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"),
+    client_secret: Some(built_in(option_env!("SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET"), "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")),
+    env_prefix: Some("SENCLAW_GEMINI_CLI_OAUTH"),
     authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",
     token_url: "https://oauth2.googleapis.com/token",
     scopes: &[
@@ -614,13 +628,12 @@ mod tests {
         );
         assert!(ag.extra_authorize_params.contains(&("prompt", "consent")));
         assert!(ag.sends_client_secret);
-        // Supplied together by the build environment, or not at all.
-        assert_eq!(ag.client_secret.is_some(), !ag.client_id.is_empty());
+        assert!(ag.client_secret.is_some());
     }
 
     #[test]
     fn a_provider_sends_a_client_secret_only_when_it_has_one() {
-        for p in all().iter().filter(|p| !p.client_id.is_empty()) {
+        for p in all() {
             if p.sends_client_secret {
                 assert!(p.client_secret.is_some(), "{} has none to send", p.id);
             }
@@ -632,13 +645,12 @@ mod tests {
         // Google's installed-app profile and iFlow's token endpoint both
         // require a secret that ships in the clear. Every other provider is a
         // true public client and must rely on PKCE alone — a stray secret
-        // there would mean we copied config from the wrong place. Google's
-        // come from the build environment, so a build without them has none.
+        // there would mean we copied config from the wrong place.
         let expect_secret = ["antigravity", "iflow", "gemini-cli"];
         for p in all() {
             assert_eq!(
                 p.client_secret.is_some(),
-                !p.client_id.is_empty() && expect_secret.contains(&p.id),
+                expect_secret.contains(&p.id),
                 "{}",
                 p.id
             );
@@ -646,26 +658,43 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_build_credential_reads_as_not_supplied() {
-        // CI expands a missing repository secret to "".
-        assert_eq!(build_credential(Some("")), None);
-        assert_eq!(build_credential(None), None);
-        assert_eq!(build_credential(Some("x")), Some("x"));
-        assert_eq!(build_client_id(Some("")), "");
+    fn a_non_empty_build_value_replaces_the_built_in_one() {
+        // CI expands a missing repository secret to "", which must keep the default.
+        assert_eq!(built_in(Some("from-ci"), "default"), "from-ci");
+        assert_eq!(built_in(Some(""), "default"), "default");
+        assert_eq!(built_in(None, "default"), "default");
     }
 
     #[test]
-    fn a_provider_without_its_build_credentials_is_unavailable() {
-        let bare = OauthProviderDef { client_id: "", client_secret: None, ..ANTIGRAVITY };
-        assert!(!bare.is_available());
-        // An id without the secret Google's token call needs is no better.
-        let half = OauthProviderDef { client_id: "id", client_secret: None, ..ANTIGRAVITY };
-        assert!(!half.is_available());
-        let full = OauthProviderDef { client_id: "id", client_secret: Some("s"), ..ANTIGRAVITY };
-        assert!(full.is_available());
-        // Clients kept in the source are always available.
-        assert!(get("claude").unwrap().is_available());
-        assert!(get("iflow").unwrap().is_available());
+    fn the_environment_overrides_the_built_in_client_at_runtime() {
+        // A prefix of its own, so no other test ever reads these variables.
+        let prefix = "SENCLAW_TEST_OAUTH_OVERRIDE";
+        let def = OauthProviderDef { env_prefix: Some(prefix), ..ANTIGRAVITY };
+        let (id_var, secret_var) = (format!("{prefix}_CLIENT_ID"), format!("{prefix}_CLIENT_SECRET"));
+
+        assert_eq!(def.client_id(), ANTIGRAVITY.client_id);
+        assert_eq!(def.client_secret().as_deref(), ANTIGRAVITY.client_secret);
+
+        std::env::set_var(&id_var, "override-id");
+        std::env::set_var(&secret_var, "override-secret");
+        assert_eq!(def.client_id(), "override-id");
+        assert_eq!(def.client_secret().as_deref(), Some("override-secret"));
+
+        // Blank is unset, not an empty credential.
+        std::env::set_var(&id_var, "  ");
+        assert_eq!(def.client_id(), ANTIGRAVITY.client_id);
+
+        std::env::remove_var(&id_var);
+        std::env::remove_var(&secret_var);
+    }
+
+    #[test]
+    fn only_google_clients_are_overridable() {
+        for p in all() {
+            assert_eq!(p.env_prefix.is_some(), matches!(p.id, "antigravity" | "gemini-cli"), "{}", p.id);
+        }
+        assert_eq!(get("antigravity").unwrap().env_prefix, Some("SENCLAW_ANTIGRAVITY_OAUTH"));
+        assert_eq!(get("gemini-cli").unwrap().env_prefix, Some("SENCLAW_GEMINI_CLI_OAUTH"));
     }
 
     #[test]

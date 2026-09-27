@@ -43,9 +43,9 @@ jobs:
       - name: Build senclaw
         shell: bash
         env:
-          # Google's desktop OAuth clients for the Antigravity and Gemini CLI
-          # sign-ins (src/providers/oauth/provider.rs). Without these secrets
-          # the build simply does not offer those two providers.
+          # Optional: replace the Google OAuth clients built into the daemon
+          # for the Antigravity and Gemini CLI sign-ins
+          # (src/providers/oauth/provider.rs). An unset secret keeps the built-in one.
           SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID: ${{ secrets.SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_ID }}
           SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET: ${{ secrets.SENCLAW_ANTIGRAVITY_OAUTH_CLIENT_SECRET }}
           SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID: ${{ secrets.SENCLAW_GEMINI_CLI_OAUTH_CLIENT_ID }}

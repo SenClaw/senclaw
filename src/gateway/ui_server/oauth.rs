@@ -30,12 +30,9 @@ fn manager() -> Result<Arc<oauth::OauthManager>, AppError> {
 }
 
 /// GET /api/oauth/providers — what can be signed in to, and the risk of each.
-/// A provider this build has no OAuth client for is left out rather than
-/// offered and then refused.
 pub(crate) async fn oauth_providers_list() -> Json<serde_json::Value> {
     let providers: Vec<_> = provider::all()
         .iter()
-        .filter(|p| p.is_available())
         .map(|p| {
             serde_json::json!({
                 "id": p.id,
@@ -434,12 +431,10 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn providers_endpoint_lists_every_available_entry_with_its_risk() {
+    async fn providers_endpoint_lists_every_registry_entry_with_its_risk() {
         let Json(body) = oauth_providers_list().await;
         let providers = body["providers"].as_array().unwrap();
-        let available: Vec<_> = provider::all().iter().filter(|p| p.is_available()).map(|p| p.id).collect();
-        let listed: Vec<_> = providers.iter().map(|p| p["id"].as_str().unwrap()).collect();
-        assert_eq!(listed, available, "a build without a provider's client must not offer it");
+        assert_eq!(providers.len(), provider::all().len());
 
         for p in providers {
             assert!(!p["id"].as_str().unwrap().is_empty());
@@ -456,8 +451,8 @@ mod tests {
         let Json(body) = oauth_providers_list().await;
         let json = serde_json::to_string(&body).unwrap();
         for p in provider::all() {
-            if let Some(secret) = p.client_secret {
-                assert!(!json.contains(secret), "{} secret leaked", p.id);
+            if let Some(secret) = p.client_secret() {
+                assert!(!json.contains(&secret), "{} secret leaked", p.id);
             }
         }
     }
