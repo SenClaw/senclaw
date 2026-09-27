@@ -123,7 +123,7 @@
       "description": "Typed decisions (Laya on ONNX Runtime, or a hosted Jev-compatible backend).",
       "slots": ["decision"],
       "capabilities": ["decision"],
-      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
+      "platforms": ["darwin-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
       "channels": { "stable": "0.1.0", "beta": "0.1.0" },
       "releases": [
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-sysone/releases/tag/v0.1.0",
@@ -174,7 +174,7 @@
       "description": "VieNeu-TTS v3 Turbo (ONNX Runtime) plus the macOS `say` presets.",
       "slots": ["tts"],
       "capabilities": ["tts"],
-      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
+      "platforms": ["darwin-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"],
       "channels": { "stable": "0.1.0", "beta": "0.1.0" },
       "releases": [
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-tts/releases/tag/v0.1.0",
