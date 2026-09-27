@@ -117,6 +117,19 @@
       ]
     },
     {
+      "id": "sen-turbo-fieldfare",
+      "name": "SenClaw TurboFieldfare",
+      "type": "llm-engine",
+      "description": "TurboFieldfare runtime for Apple Silicon — Gemma 4 26B-A4B chat and vision in about 2 GB of RAM. Install with `make install-local` from the sen-turbo-fieldfare checkout; no GitHub release package yet.",
+      "slots": ["gturbo"],
+      "formats": ["gturbo"],
+      "capabilities": ["chat", "vision"],
+      "accelerator": "metal",
+      "platforms": ["darwin-arm64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
       "id": "sen-sysone",
       "name": "SenClaw System One",
       "type": "decision",

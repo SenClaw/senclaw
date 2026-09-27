@@ -18,7 +18,7 @@ document.
 |---|---|
 | **Runtime** | An engine program plus its `senclaw-runtime.json`, installed as a *package*. |
 | **Package** | `~/.senclaw/runtimes/<id>/<version>/` — immutable once installed. |
-| **Slot** | What a runtime is selected *for*: `gguf`, `mlx` (model formats) or `decision`, `ocr`, `asr`, `tts` (capabilities). One selection per slot. |
+| **Slot** | What a runtime is selected *for*: `gguf`, `mlx`, `gturbo` (model formats) or `decision`, `ocr`, `asr`, `tts` (capabilities). One selection per slot. |
 | **Mode** | `service` — one process per runtime, it manages its own models. `model` — one process per loaded model, passed on the command line. |
 | **Process** | A running launch of a runtime, owned and supervised by the daemon. |
 
@@ -27,6 +27,7 @@ document.
 | id | repo | type | slots | mode | capabilities | platforms | replaces (old repo) |
 |---|---|---|---|---|---|---|---|
 | `sen-mlx` | SenClaw/sen-mlx | llm-engine | mlx | model | chat, vision | darwin-arm64 | `apps/mlx-lm` + `apps/local-model-core` (Space App) |
+| `sen-turbo-fieldfare` | SenClaw/sen-turbo-fieldfare | llm-engine | gturbo | model | chat, vision | darwin-arm64 | `turbo-fieldfare-senclaw` Space App |
 | `llama.cpp-metal` | upstream ggml-org/llama.cpp | llm-engine | gguf | model | chat, embedding, vision | darwin-arm64 | `apps/candle`, candle `local-embed` |
 | `llama.cpp-cpu` | upstream | llm-engine | gguf | model | chat, embedding, vision | darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64 | — |
 | `llama.cpp-vulkan` | upstream | llm-engine | gguf | model | chat, embedding, vision | linux-x64, linux-arm64, windows-x64 | — |
@@ -180,6 +181,7 @@ OpenAI-compatible, relative to `api.openaiBase` (`/v1`):
 `POST /v1/embeddings` (embedding models). `/health` answers **503 while the model loads** and 200 once it can generate.
 
 - **sen-mlx**: `sen-mlx serve --host {host} --port {port} --model {model_path}`; loads the model at startup (`Readiness::loading` → `set_ready`), serves exactly that model. Sampling/KV settings come from the shared `<models_dir>/settings.json` (snake_case, the file `local-model-core` used; never rename its fields). Vision (Gemma-4) supported as before.
+- **sen-turbo-fieldfare**: `sen-turbo-fieldfare serve --host {host} --port {port} --model {model_path} --max-context {context_length}`. The process spawns `TurboFieldfareServer` (Swift + Metal, from [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare)) against one completed `.gturbo` directory and proxies `/v1`. `/health` is 503 until that engine binds. `{context_length}` is snapped to 4096, 8192, 16384, 32768, or 65536. The OpenAI `model` field must be the daemon's model key (`SENCLAW_MODEL_ID`). A sibling `<stem>.vision.gturbo` pack enables image input.
 - **llama.cpp**: `llama-server -m {model_path} --host {host} --port {port} --api-key {token} -c {context_length}` + `capabilityArgs`. The daemon generates this manifest at install time (§7.2).
 
 ### 4.3 Decision — `sen-sysone` (service)
@@ -386,6 +388,7 @@ installed embedding-capable local models `{key, name, repo, quant, sizeBytes, co
 
 - MLX / safetensors snapshots: `<local-models>/<org>__<repo>/` (the `local-model-core` layout).
 - GGUF: `<local-models>/gguf/<org>__<repo>/<file>.gguf` (+ `mmproj-*.gguf` beside it).
+- TurboFieldfare: `<local-models>/<name>.gturbo/` (`manifest.json` magic `GTURBO` plus `model_weights.bin`). The optional image pack is the sibling `<name>.vision.gturbo/` and is not listed as its own model.
 - Engine-private stores stay exactly where the in-daemon engines put them, and each runtime derives the same
   defaults from `SENCLAW_HOME` and honors the same override variables the daemon's `Config` read:
   `<local-models>/laya/` (Laya), `<local-models>/hf-cache/`, `SENCLAW_WHISPER_MODELS_DIR` (default

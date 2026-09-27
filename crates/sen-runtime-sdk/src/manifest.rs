@@ -80,7 +80,7 @@ pub enum RuntimeType {
 
 /// What a user selects a runtime *for* — the "Runtime Selections" rows.
 ///
-/// Model slots (`gguf`, `mlx`) are chosen per model file format; the others per
+/// Model slots (`gguf`, `mlx`, `gturbo`) are chosen per model file format; the others per
 /// capability, and the daemon routes that capability's legacy REST namespace
 /// (see [`Slot::legacy_prefix`]) to whichever runtime fills the slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -88,6 +88,8 @@ pub enum RuntimeType {
 pub enum Slot {
     Gguf,
     Mlx,
+    /// A completed TurboFieldfare `.gturbo` directory (Gemma 4 26B-A4B).
+    Gturbo,
     Decision,
     Ocr,
     Asr,
@@ -95,12 +97,21 @@ pub enum Slot {
 }
 
 impl Slot {
-    pub const ALL: [Slot; 6] = [Slot::Gguf, Slot::Mlx, Slot::Decision, Slot::Ocr, Slot::Asr, Slot::Tts];
+    pub const ALL: [Slot; 7] = [
+        Slot::Gguf,
+        Slot::Mlx,
+        Slot::Gturbo,
+        Slot::Decision,
+        Slot::Ocr,
+        Slot::Asr,
+        Slot::Tts,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Slot::Gguf => "gguf",
             Slot::Mlx => "mlx",
+            Slot::Gturbo => "gturbo",
             Slot::Decision => "decision",
             Slot::Ocr => "ocr",
             Slot::Asr => "asr",
@@ -117,6 +128,7 @@ impl Slot {
         match self {
             Slot::Gguf => "GGUF",
             Slot::Mlx => "MLX",
+            Slot::Gturbo => "TurboFieldfare",
             Slot::Decision => "Decision (System One)",
             Slot::Ocr => "OCR",
             Slot::Asr => "Speech to text",
@@ -129,6 +141,7 @@ impl Slot {
         match self {
             Slot::Gguf => Some(ModelFormat::Gguf),
             Slot::Mlx => Some(ModelFormat::Mlx),
+            Slot::Gturbo => Some(ModelFormat::Gturbo),
             _ => None,
         }
     }
@@ -138,6 +151,7 @@ impl Slot {
         match format {
             ModelFormat::Gguf => Slot::Gguf,
             ModelFormat::Mlx => Slot::Mlx,
+            ModelFormat::Gturbo => Slot::Gturbo,
         }
     }
 
@@ -150,14 +164,14 @@ impl Slot {
             Slot::Ocr => Some("/api/ocr"),
             Slot::Asr => Some("/api/whisper"),
             Slot::Tts => Some("/api/tts"),
-            Slot::Gguf | Slot::Mlx => None,
+            Slot::Gguf | Slot::Mlx | Slot::Gturbo => None,
         }
     }
 
     /// The runtime type that may fill this slot.
     pub fn runtime_type(self) -> RuntimeType {
         match self {
-            Slot::Gguf | Slot::Mlx => RuntimeType::LlmEngine,
+            Slot::Gguf | Slot::Mlx | Slot::Gturbo => RuntimeType::LlmEngine,
             Slot::Decision => RuntimeType::Decision,
             Slot::Ocr => RuntimeType::Ocr,
             Slot::Asr => RuntimeType::Asr,
@@ -180,6 +194,8 @@ pub enum ModelFormat {
     Gguf,
     /// A directory of MLX safetensors with `config.json`.
     Mlx,
+    /// A completed TurboFieldfare directory (`manifest.json` magic `GTURBO`).
+    Gturbo,
 }
 
 impl ModelFormat {
@@ -187,6 +203,7 @@ impl ModelFormat {
         match self {
             ModelFormat::Gguf => "gguf",
             ModelFormat::Mlx => "mlx",
+            ModelFormat::Gturbo => "gturbo",
         }
     }
 }
@@ -811,5 +828,7 @@ mod tests {
         }
         assert_eq!(Slot::Asr.legacy_prefix(), Some("/api/whisper"));
         assert_eq!(Slot::for_format(ModelFormat::Mlx), Slot::Mlx);
+        assert_eq!(Slot::for_format(ModelFormat::Gturbo), Slot::Gturbo);
+        assert_eq!(Slot::Gturbo.format(), Some(ModelFormat::Gturbo));
     }
 }

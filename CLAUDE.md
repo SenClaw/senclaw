@@ -13,6 +13,7 @@ Sibling repositories (checked out next to this one, `../<name>`):
 | `desktop` | Flutter desktop console; bundles and supervises this daemon |
 | `web-app` | React web UI the daemon serves (dev fallback `../web-app/dist`) |
 | `sen-mlx` | MLX LLM runtime (model mode) |
+| `sen-turbo-fieldfare` | TurboFieldfare LLM runtime for `.gturbo` models (model mode, Apple Silicon) |
 | `sen-sysone` | Laya / Jev typed-decision runtime |
 | `sen-ocr`, `sen-whisper`, `sen-tts` | OCR, speech-to-text, text-to-speech runtimes |
 | upstream llama.cpp | GGUF runtime, installed by the daemon from ggml-org releases |
@@ -279,6 +280,7 @@ environment, the server scaffold every `sen-*` runtime mounts).
 |---|---|---|
 | GGUF chat / embedding / vision | upstream llama.cpp (`llama.cpp-{metal,cpu,vulkan,cuda}`) | `local:<key>` LLM config → `/api/runtimes/models/:key/v1/*` |
 | MLX chat / vision | `sen-mlx` | same, `local:<key>` |
+| Gemma 4 `.gturbo` chat / vision | `sen-turbo-fieldfare` | same, `local:<key>` |
 | Typed decisions | `sen-sysone` | `/api/decision/*` (proxied, control-plane routes excepted) |
 | OCR | `sen-ocr` | `/api/ocr/*` (proxied) |
 | Speech to text | `sen-whisper` | `/api/whisper/*` (proxied) |
