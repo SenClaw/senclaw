@@ -838,7 +838,16 @@ async fn parse_openai_stream(
 
         // On stream end, flush the buffer once: a provider that omits the
         // trailing newline would otherwise strand its last event.
-        let batch = match stream.next().await {
+        // Wait for the next chunk *or* the cancel. A local model's prefill
+        // sends nothing for tens of seconds, and a cancel noticed only when
+        // the next byte arrived (a keep-alive, or the first token) kept the
+        // runtime computing an answer nobody wanted.
+        let next = tokio::select! {
+            biased;
+            () = cancel.cancelled() => bail!("Stream cancelled"),
+            next = stream.next() => next,
+        };
+        let batch = match next {
             Some(chunk_result) => {
                 let chunk = chunk_result.context("OpenAI stream chunk error")?;
                 lines.push(&chunk)
@@ -1131,7 +1140,16 @@ async fn parse_anthropic_stream(
             bail!("Stream cancelled");
         }
 
-        let batch = match stream.next().await {
+        // Wait for the next chunk *or* the cancel. A local model's prefill
+        // sends nothing for tens of seconds, and a cancel noticed only when
+        // the next byte arrived (a keep-alive, or the first token) kept the
+        // runtime computing an answer nobody wanted.
+        let next = tokio::select! {
+            biased;
+            () = cancel.cancelled() => bail!("Stream cancelled"),
+            next = stream.next() => next,
+        };
+        let batch = match next {
             Some(chunk_result) => {
                 let chunk = chunk_result.context("Anthropic stream chunk error")?;
                 lines.push(&chunk)
@@ -1707,6 +1725,49 @@ mod loopback_tests {
         // a total deadline would cut it mid-sentence.
         p.base_url = "http://127.0.0.1:11434/v1".into();
         assert_eq!(total_request_timeout(&p), None);
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::{parse_anthropic_stream, parse_openai_stream};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    /// A response whose body never sends a byte: a local model still in its
+    /// prefill.
+    fn silent_response() -> reqwest::Response {
+        let body = reqwest::Body::wrap_stream(futures::stream::pending::<
+            Result<Vec<u8>, std::io::Error>,
+        >());
+        reqwest::Response::from(axum::http::Response::new(body))
+    }
+
+    /// A cancel has to end the read while the server is still silent. Checked
+    /// only between chunks, it waited for the next byte (a keep-alive, or the
+    /// first token) while the runtime went on computing the abandoned prompt.
+    #[tokio::test]
+    async fn a_cancel_ends_a_silent_stream_without_waiting_for_a_byte() {
+        for anthropic in [false, true] {
+            let cancel = CancellationToken::new();
+            let trigger = cancel.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                trigger.cancel();
+            });
+            let read = async {
+                if anthropic {
+                    parse_anthropic_stream(silent_response(), &cancel, None).await
+                } else {
+                    parse_openai_stream(silent_response(), &cancel, None).await
+                }
+            };
+            let err = tokio::time::timeout(Duration::from_secs(5), read)
+                .await
+                .expect("the cancel did not end a silent stream")
+                .unwrap_err();
+            assert!(err.to_string().contains("Stream cancelled"), "{err:#}");
+        }
     }
 }
 

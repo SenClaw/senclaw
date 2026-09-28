@@ -340,10 +340,16 @@ async fn parse_stream(response: reqwest::Response, cancel: &CancellationToken) -
     // SSE frames can split mid-line across chunks.
     let mut pending = String::new();
 
-    while let Some(chunk) = stream.next().await {
-        if cancel.is_cancelled() {
-            bail!("Stream cancelled");
-        }
+    loop {
+        // Wait for the next chunk *or* the cancel: a reasoning phase can
+        // stream nothing for a long while, and a cancel checked only when the
+        // next byte arrived kept the turn running until then.
+        let chunk = tokio::select! {
+            biased;
+            () = cancel.cancelled() => bail!("Stream cancelled"),
+            chunk = stream.next() => chunk,
+        };
+        let Some(chunk) = chunk else { break };
         let chunk = chunk.context("Codex stream chunk error")?;
         pending.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -758,5 +764,29 @@ mod tests {
             ContentBlock::ToolUse { .. }
         ));
         assert!(msg.usage.is_some());
+    }
+
+    /// A cancel ends the read while the server is still silent (a long
+    /// reasoning phase), instead of waiting for the next byte to check it.
+    #[tokio::test]
+    async fn a_cancel_ends_a_silent_stream_without_waiting_for_a_byte() {
+        let body = reqwest::Body::wrap_stream(futures::stream::pending::<
+            Result<Vec<u8>, std::io::Error>,
+        >());
+        let response = reqwest::Response::from(axum::http::Response::new(body));
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            trigger.cancel();
+        });
+        let err = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            parse_stream(response, &cancel),
+        )
+        .await
+        .expect("the cancel did not end a silent stream")
+        .unwrap_err();
+        assert!(err.to_string().contains("Stream cancelled"), "{err:#}");
     }
 }
