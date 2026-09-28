@@ -76,6 +76,8 @@ pub enum RuntimeType {
     Asr,
     /// Text to speech.
     Tts,
+    /// Drives a web browser for the browser agent (observe, guarded act).
+    Browser,
 }
 
 /// What a user selects a runtime *for* — the "Runtime Selections" rows.
@@ -94,10 +96,11 @@ pub enum Slot {
     Ocr,
     Asr,
     Tts,
+    Browser,
 }
 
 impl Slot {
-    pub const ALL: [Slot; 7] = [
+    pub const ALL: [Slot; 8] = [
         Slot::Gguf,
         Slot::Mlx,
         Slot::Gturbo,
@@ -105,6 +108,7 @@ impl Slot {
         Slot::Ocr,
         Slot::Asr,
         Slot::Tts,
+        Slot::Browser,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -116,6 +120,7 @@ impl Slot {
             Slot::Ocr => "ocr",
             Slot::Asr => "asr",
             Slot::Tts => "tts",
+            Slot::Browser => "browser",
         }
     }
 
@@ -133,6 +138,7 @@ impl Slot {
             Slot::Ocr => "OCR",
             Slot::Asr => "Speech to text",
             Slot::Tts => "Text to speech",
+            Slot::Browser => "Browser",
         }
     }
 
@@ -164,6 +170,7 @@ impl Slot {
             Slot::Ocr => Some("/api/ocr"),
             Slot::Asr => Some("/api/whisper"),
             Slot::Tts => Some("/api/tts"),
+            Slot::Browser => Some("/api/browser"),
             Slot::Gguf | Slot::Mlx | Slot::Gturbo => None,
         }
     }
@@ -176,6 +183,7 @@ impl Slot {
             Slot::Ocr => RuntimeType::Ocr,
             Slot::Asr => RuntimeType::Asr,
             Slot::Tts => RuntimeType::Tts,
+            Slot::Browser => RuntimeType::Browser,
         }
     }
 }
@@ -219,6 +227,7 @@ pub enum Capability {
     Ocr,
     Asr,
     Tts,
+    Browser,
 }
 
 /// How the daemon runs the program.
@@ -538,6 +547,7 @@ fn type_name(t: RuntimeType) -> &'static str {
         RuntimeType::Ocr => "ocr",
         RuntimeType::Asr => "asr",
         RuntimeType::Tts => "tts",
+        RuntimeType::Browser => "browser",
     }
 }
 
@@ -789,6 +799,25 @@ mod tests {
         }
         let m = RuntimeManifest::parse(service_manifest()).unwrap().manifest;
         assert_eq!(m.command_path(Path::new("/pkg")).unwrap(), PathBuf::from("/pkg/bin/sen-ocr"));
+    }
+
+    #[test]
+    fn browser_slot_round_trips() {
+        let text = service_manifest()
+            .replace(r#""id": "sen-ocr""#, r#""id": "sen-browser""#)
+            .replace(r#""type": "ocr""#, r#""type": "browser""#)
+            .replace(r#""slots": ["ocr"]"#, r#""slots": ["browser"]"#)
+            .replace(r#""capabilities": ["ocr"]"#, r#""capabilities": ["browser"]"#);
+        let m = RuntimeManifest::parse(&text).unwrap().manifest;
+        assert_eq!(m.runtime_type, RuntimeType::Browser);
+        assert_eq!(m.slots, vec![Slot::Browser]);
+        assert_eq!(Slot::parse("browser"), Some(Slot::Browser));
+        assert_eq!(Slot::Browser.legacy_prefix(), Some("/api/browser"));
+        assert_eq!(Slot::Browser.runtime_type(), RuntimeType::Browser);
+        assert!(Slot::Browser.format().is_none());
+        // A browser runtime cannot claim a decision slot, or the reverse.
+        let wrong = text.replace(r#""slots": ["browser"]"#, r#""slots": ["decision"]"#);
+        assert!(matches!(RuntimeManifest::parse(&wrong), Err(ManifestError::Invalid(_))));
     }
 
     #[test]

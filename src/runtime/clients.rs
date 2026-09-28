@@ -38,6 +38,18 @@ async fn call(
     Ok((status, bytes.to_vec()))
 }
 
+/// A JSON call to the browser runtime (`sen-browser`): `path` is its own
+/// route (`/v1/...`). Returns the status and body; the caller reads the
+/// runtime's `{error, code}` shape itself.
+pub async fn browser_call(
+    manager: &RuntimeManager,
+    method: Method,
+    path: &str,
+    body: Option<Vec<u8>>,
+) -> Result<(StatusCode, Vec<u8>), RuntimeClientError> {
+    call(manager, Slot::Browser, method, path, body, Some("application/json")).await
+}
+
 /// `POST /api/decision/ask` on the decision slot. `request_text` must already
 /// be serialized (built from a [`crate::decision::types::AskRequest`] via
 /// `serde_json::to_string`, never through `serde_json::Value`) so key order
