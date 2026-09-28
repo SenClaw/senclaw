@@ -531,6 +531,10 @@ impl McpBrowserServer {
     /// of the gateway is deliberately *not* checked here: connections are
     /// opened per call, so an extension that starts later still works.
     pub fn from_env() -> Result<Option<Self>> {
+        // Engine v2 takes the `senclaw-browser` slot instead (browser_agent_server).
+        if std::env::var("SENCLAW_BROWSER_ENGINE").ok().as_deref() == Some("v2") {
+            return Ok(None);
+        }
         let Ok(raw_port) = std::env::var("SENCLAW_WS_PORT") else {
             return Ok(None);
         };
@@ -1506,6 +1510,11 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
+    if let Some(v2) = super::browser_agent_server::McpBrowserAgentServer::from_env()? {
+        let service = v2.serve(rmcp::transport::io::stdio()).await?;
+        service.waiting().await?;
+        return Ok(());
+    }
     let server = McpBrowserServer::from_env()?.context("SENCLAW_WS_PORT not set")?;
     if let Some(aid) = &server.agent_id {
         tracing::info!("[BrowserServer] Serving agent: {aid}");

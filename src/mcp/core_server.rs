@@ -28,6 +28,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServiceExt};
 
 use super::background_server::McpBackgroundServer;
+use super::browser_agent_server::McpBrowserAgentServer;
 use super::browser_server::McpBrowserServer;
 use super::dispatch_server::McpDispatchServer;
 use super::js_server::McpJsServer;
@@ -90,6 +91,7 @@ macro_rules! for_each_child {
         if let Some($child) = &$self.space $body
         if let Some($child) = &$self.send $body
         if let Some($child) = &$self.browser $body
+        if let Some($child) = &$self.browser_agent $body
         if let Some($child) = &$self.ocr $body
         if let Some($child) = &$self.patterns $body
         if let Some($child) = &$self.litho $body
@@ -176,6 +178,8 @@ pub struct CoreServer {
     space: Option<Child<McpSpaceServer>>,
     send: Option<Child<McpSendServer>>,
     browser: Option<Child<McpBrowserServer>>,
+    /// Engine v2 — exactly one of `browser` / `browser_agent` builds.
+    browser_agent: Option<Child<McpBrowserAgentServer>>,
     ocr: Option<Child<McpOcrServer>>,
     patterns: Option<Child<McpPatternsServer>>,
     litho: Option<Child<McpLithoServer>>,
@@ -251,6 +255,12 @@ impl CoreServer {
                 "senclaw-browser",
                 McpBrowserServer,
                 McpBrowserServer::from_env()
+            ),
+            browser_agent: build_child!(
+                w,
+                "senclaw-browser",
+                McpBrowserAgentServer,
+                McpBrowserAgentServer::from_env()
             ),
             ocr: build_child!(w, "senclaw-ocr", McpOcrServer, McpOcrServer::from_env()),
             patterns: build_child!(

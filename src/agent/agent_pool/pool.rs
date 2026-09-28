@@ -1075,6 +1075,8 @@ impl AgentPool {
             let litho_model = (!cfg.mcp.litho_model_efficient.is_empty())
                 .then_some(cfg.mcp.litho_model_efficient.as_str());
             let wiki_dir_s = cfg.paths.wiki_dir.to_string_lossy().to_string();
+            let browser_v2 = crate::browser_agent::settings::engine_at(&cfg.paths.global_config_path)
+                == crate::browser_agent::settings::Engine::V2;
 
             if cfg.mcp.bundled {
                 // One subprocess hosting every built-in server, instead of the
@@ -1102,6 +1104,7 @@ impl AgentPool {
                         ws_port: cfg.ws_port,
                         agent_id: &binding.jid,
                         ui_port: cfg.ui_server.port,
+                        browser_v2,
                         litho_binary: cfg.mcp.litho_binary.as_str(),
                         litho_model_efficient: litho_model,
                         user_profile_path: &user_profile_s,
@@ -1189,7 +1192,7 @@ impl AgentPool {
                     openai_key,
                     litho_model,
                 ));
-                mcp_servers.push(browser_mcp_config(cfg.ws_port, &binding.jid));
+                mcp_servers.push(browser_mcp_config(cfg.ws_port, cfg.ui_server.port, &binding.jid, browser_v2));
                 mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
                 // Sandboxed JS executor — no shared state, just default limits.
                 mcp_servers.push(js_mcp_config(5_000, 128));

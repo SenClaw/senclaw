@@ -524,6 +524,351 @@ paths:
       - background
       x-handler: runs
       x-untyped: true
+  /api/browser-agent/approvals/{id}:
+    post:
+      operationId: post_api_browser_agent_approvals_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Approval
+      tags:
+      - browser-agent
+      x-handler: approval
+      x-untyped: true
+  /api/browser-agent/do:
+    post:
+      operationId: post_api_browser_agent_do
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Do step
+      tags:
+      - browser-agent
+      x-handler: do_step
+      x-untyped: true
+  /api/browser-agent/extension:
+    get:
+      operationId: get_api_browser_agent_extension
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Extension status
+      tags:
+      - browser-agent
+      x-handler: extension_status
+      x-untyped: true
+  /api/browser-agent/extension/paired/{ext_id}:
+    delete:
+      operationId: delete_api_browser_agent_extension_paired_ext_id
+      parameters:
+      - in: path
+        name: ext_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Extension revoke
+      tags:
+      - browser-agent
+      x-handler: extension_revoke
+      x-untyped: true
+  /api/browser-agent/extension/pairings/{code}/approve:
+    post:
+      operationId: post_api_browser_agent_extension_pairings_code_approve
+      parameters:
+      - in: path
+        name: code
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Extension approve
+      tags:
+      - browser-agent
+      x-handler: extension_approve
+      x-untyped: true
+  /api/browser-agent/handover:
+    post:
+      operationId: post_api_browser_agent_handover
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Handover
+      tags:
+      - browser-agent
+      x-handler: handover
+      x-untyped: true
+  /api/browser-agent/look:
+    post:
+      operationId: post_api_browser_agent_look
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Look
+      tags:
+      - browser-agent
+      x-handler: look
+      x-untyped: true
+  /api/browser-agent/open:
+    post:
+      operationId: post_api_browser_agent_open
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Open
+      tags:
+      - browser-agent
+      x-handler: open
+      x-untyped: true
+  /api/browser-agent/read:
+    post:
+      operationId: post_api_browser_agent_read
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Read
+      tags:
+      - browser-agent
+      x-handler: read
+      x-untyped: true
+  /api/browser-agent/screenshot:
+    post:
+      operationId: post_api_browser_agent_screenshot
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Screenshot
+      tags:
+      - browser-agent
+      x-handler: screenshot
+      x-untyped: true
+  /api/browser-agent/status:
+    get:
+      operationId: get_api_browser_agent_status
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Status
+      tags:
+      - browser-agent
+      x-handler: status
+      x-untyped: true
+  /api/browser-agent/tabs:
+    get:
+      operationId: get_api_browser_agent_tabs
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Tabs
+      tags:
+      - browser-agent
+      x-handler: tabs
+      x-untyped: true
+  /api/browser-agent/tasks:
+    post:
+      operationId: post_api_browser_agent_tasks
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Task
+      tags:
+      - browser-agent
+      x-handler: task
+      x-untyped: true
+  /api/browser-agent/tasks/{id}/resume:
+    post:
+      operationId: post_api_browser_agent_tasks_id_resume
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Task resume
+      tags:
+      - browser-agent
+      x-handler: task_resume
+      x-untyped: true
+  /api/browser/{rest}:
+    get:
+      operationId: get_api_browser_rest
+      parameters:
+      - in: path
+        name: rest
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Proxy browser
+      tags:
+      - browser
+      x-handler: proxy_browser
+      x-untyped: true
   /api/chat/files:
     get:
       operationId: get_api_chat_files
@@ -10316,6 +10661,8 @@ tags:
 - name: agents-rules
 - name: auth
 - name: background
+- name: browser
+- name: browser-agent
 - name: chat
 - name: chats
 - name: code
@@ -10367,5 +10714,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 366
-x-untyped-operations: 454
+x-route-count: 381
+x-untyped-operations: 469

@@ -178,6 +178,7 @@ slot_proxy_handler!(proxy_ocr, Slot::Ocr);
 slot_proxy_handler!(proxy_tts, Slot::Tts);
 slot_proxy_handler!(proxy_whisper, Slot::Asr);
 slot_proxy_handler!(proxy_decision, Slot::Decision);
+slot_proxy_handler!(proxy_browser, Slot::Browser);
 
 // ===== Decision settings: merge daemon-owned gate/skills into the proxied body =====
 

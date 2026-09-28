@@ -19,6 +19,7 @@ pub mod agent;
 pub mod apps;
 pub mod background;
 pub mod browser;
+pub mod browser_agent;
 pub mod build_info;
 pub mod channels;
 pub mod checkpoints;
@@ -1937,6 +1938,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // this one might start a competing process on the same port.
     runtime_manager.cleanup_orphans().await;
     runtime_manager.spawn_idle_sweeper();
+    // The browser extension's pipe (`/browser/ext`) opens the browser runtime.
+    crate::browser_agent::extension::set_runtime_manager(Arc::clone(&runtime_manager));
 
     let agent_pool = agent::agent_pool::AgentPool::new(zen_core_api.clone());
     // The object every user message is queued through — the WS gateway and
@@ -2339,7 +2342,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     virtual_worker_pool.set_extra_mcp_servers(vec![{
         // Coarse identity: all virtual workers share one browser tab for now.
         // Per-persona tabs need VirtualWorkerPool to build configs per worker.
-        let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port, "virtual-worker");
+        let helper_cfg = crate::mcp::helper::browser_mcp_config(
+            cfg.ws_port,
+            cfg.ui_server.port,
+            "virtual-worker",
+            crate::browser_agent::settings::engine_at(&cfg.paths.global_config_path)
+                == crate::browser_agent::settings::Engine::V2,
+        );
         crate::zen_core::McpServerConfig {
             name: helper_cfg.name,
             command: helper_cfg.command,

@@ -3,6 +3,7 @@
 pub mod admin_server;
 pub mod background_server;
 pub mod bridge;
+pub mod browser_agent_server;
 pub mod browser_server;
 pub mod client;
 pub mod cognitive_server;

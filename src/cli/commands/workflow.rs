@@ -241,7 +241,13 @@ fn print_run(run: &WorkflowRun, detail: bool) {
 /// have their tools. The subprocess talks to the daemon's WS port; without a
 /// running daemon the tools degrade gracefully.
 pub fn default_extra_mcp_servers(cfg: &Config) -> Vec<crate::zen_core::McpServerConfig> {
-    let helper_cfg = crate::mcp::helper::browser_mcp_config(cfg.ws_port, "workflow");
+    let helper_cfg = crate::mcp::helper::browser_mcp_config(
+        cfg.ws_port,
+        cfg.ui_server.port,
+        "workflow",
+        crate::browser_agent::settings::engine_at(&cfg.paths.global_config_path)
+            == crate::browser_agent::settings::Engine::V2,
+    );
     vec![crate::zen_core::McpServerConfig {
         name: helper_cfg.name,
         command: helper_cfg.command,

@@ -32,7 +32,7 @@ mod embedding_config;
 mod embedding_models;
 mod failures;
 mod kits;
-mod llm_config;
+pub(crate) mod llm_config;
 mod lsp;
 mod marketplace;
 pub mod openapi;

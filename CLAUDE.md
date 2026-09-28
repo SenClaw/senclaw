@@ -15,6 +15,7 @@ Sibling repositories (checked out next to this one, `../<name>`):
 | `sen-mlx` | MLX LLM runtime (model mode) |
 | `sen-turbo-fieldfare` | TurboFieldfare LLM runtime for `.gturbo` models (model mode, Apple Silicon) |
 | `sen-sysone` | Laya / Jev typed-decision runtime |
+| `sen-browser` | Browser runtime (managed Chrome + extension relay) for the browser engine v2 |
 | `sen-ocr`, `sen-whisper`, `sen-tts` | OCR, speech-to-text, text-to-speech runtimes |
 | upstream llama.cpp | GGUF runtime, installed by the daemon from ggml-org releases |
 
@@ -285,6 +286,7 @@ environment, the server scaffold every `sen-*` runtime mounts).
 | OCR | `sen-ocr` | `/api/ocr/*` (proxied) |
 | Speech to text | `sen-whisper` | `/api/whisper/*` (proxied) |
 | Text to speech | `sen-tts` | `/api/tts/*` (proxied) |
+| Browser (observe, guarded act) | `sen-browser` | `/api/browser-agent/*` (the daemon's loop), `/api/browser/*` (GET-only proxy) |
 
 `src/runtime/`: `store` (installed packages; install-local from a directory or
 `.tar.gz`/`.zip` with traversal guards), `settings` (slot selections, update
@@ -365,6 +367,44 @@ Rules for Claude:
   seeds `dimensions()` from the model key's slug (`large`/`base`/else, same as
   before the split), then overwrites it with the checkpoint's actual output
   length once a request succeeds — the pattern `OllamaProvider` already used.
+
+## Browser engine v2 (`src/browser_agent/`)
+
+The agent's browser tools (`senclaw-browser`) run on one of two engines:
+`legacy` (the extension's content-script executor over the WS gateway) or `v2`
+— a decision loop in the daemon (**rule → Jev → LLM → person**) driving the
+`sen-browser` runtime. `browserAgent.engine` in `config.json` picks it; `auto`
+(default) means v2 once `sen-browser` is installed. `browser_mcp_config` sets
+`SENCLAW_BROWSER_ENGINE=v2` and exactly one of `McpBrowserServer` /
+`McpBrowserAgentServer` builds. One decision request per step asks the
+operation and every operation's target at once; the joint confidence
+p(op) × p(target) picks act / LLM fallback / review. Design record:
+`plans/260929-0143-sen-browser-runtime/design.html`.
+
+Rules for Claude:
+
+- **Risk tiers are decided in code (`policy::risk_tier`), never by a model.**
+  A click on a purchase / send / delete control (EN and VI keywords, word
+  boundaries) or a confirm dialog parks the task as `needs_approval`; typing
+  into a credential or one-time-code field is `needs_user` (hand the tab
+  over). `browser_do` refuses both with 403 rather than executing.
+- **`browser_approve` is confirmed per call** (`PER_CALL_MCP_TOOLS` in
+  `zen_core/permissions.rs`): no "never ask again", no saved grant honoured,
+  and the prompt shows the pending action (`run::describe_approval`), not the
+  id the agent sent. Global accept-all / bypass modes still skip it — that is
+  the person's explicit choice.
+- **A step names an element of the observation the LLM was shown.**
+  `rest::SHOWN` keeps it per tab; re-observing before mapping an index
+  recreates the old stale-index bug. The runtime refuses a changed page with
+  409 and nothing is sent.
+- **`/browser/ext` checks the Origin before the upgrade** (only
+  `chrome-extension://<32 a-p>`) and then pairs: an 8-character code, approved
+  with `pair approve <CODE>` in chat or the REST route; the token is stored as
+  a SHA-256 only. Never add a write pass-through under `/api/browser/*` — it
+  would skip the risk tiers.
+- **Never parse the decision request into `serde_json::Value`** (same rule as
+  the decision client): `encoder` builds `Json` so option markers keep their
+  order. `encoder` tests pin jev-full and laya-v3 against the upstream Python.
 
 ## Space Apps that serve models (`llm` manifest block)
 

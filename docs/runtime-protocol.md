@@ -18,7 +18,7 @@ document.
 |---|---|
 | **Runtime** | An engine program plus its `senclaw-runtime.json`, installed as a *package*. |
 | **Package** | `~/.senclaw/runtimes/<id>/<version>/` — immutable once installed. |
-| **Slot** | What a runtime is selected *for*: `gguf`, `mlx`, `gturbo` (model formats) or `decision`, `ocr`, `asr`, `tts` (capabilities). One selection per slot. |
+| **Slot** | What a runtime is selected *for*: `gguf`, `mlx`, `gturbo` (model formats) or `decision`, `ocr`, `asr`, `tts`, `browser` (capabilities). One selection per slot. |
 | **Mode** | `service` — one process per runtime, it manages its own models. `model` — one process per loaded model, passed on the command line. |
 | **Process** | A running launch of a runtime, owned and supervised by the daemon. |
 
@@ -36,6 +36,7 @@ document.
 | `sen-ocr` | SenClaw/sen-ocr | ocr | ocr | service | ocr | darwin-arm64, linux-x64, windows-x64 | `src/local_model/ocr`, `ui_server/ocr.rs` |
 | `sen-whisper` | SenClaw/sen-whisper | asr | asr | service | asr | darwin-arm64 | `crates/senclaw-media`, `media_sidecar.rs`, `ui_server/whisper.rs` |
 | `sen-tts` | SenClaw/sen-tts | tts | tts | service | tts | all six | `src/tts`, `ui_server/tts.rs` |
+| `sen-browser` | SenClaw/sen-browser | browser | browser | service | browser | all six (needs Chrome) | the extension's content-script executor, `src/browser` bridge |
 
 The daemon keeps only *clients* of these engines: the decision gate and skill
 router (control plane), OCR of images for text-only models, the `senclaw-ocr`
@@ -224,6 +225,24 @@ Old namespace verbatim (`ui_server/tts.rs`): `GET /api/tts/models` · `GET|PUT /
 plus OpenAI `POST /v1/audio/speech` (`{model?, input, voice?, response_format: "wav", speed?}`).
 A removed voice still degrades to the macOS `say` preset with `X-TTS-Fallback` / `fallback_reason` — never a 400.
 
+### 4.7 Browser — `sen-browser` (service)
+
+The *hands and eyes* of the browser engine v2: it observes a page, executes one guarded action with trusted CDP input,
+and hands a tab to the person. It never sees the goal and never calls a model — the decision loop (Jev + LLM) is the
+daemon's `src/browser_agent`. Two drivers share one core: **managed** (a Chrome it launches with its own profile under
+`<data_dir>/profiles/<name>`) and **extension** (the person's Chrome through the SenClaw extension's `chrome.debugger`,
+relayed by the daemon — the extension connects to the daemon's WS gateway at `/browser/ext`, never to the runtime).
+
+`GET /v1/status` · `GET /v1/scripts` · `GET|POST /v1/sessions` · `DELETE /v1/sessions/:sid` ·
+`GET|POST /v1/sessions/:sid/tabs` · `DELETE /v1/tabs/:tid` · `POST /v1/tabs/:tid/{observe,act,navigate,read,screenshot}` ·
+`POST|DELETE /v1/tabs/:tid/handover` · `GET /v1/drivers/extension` (WebSocket, the daemon's relay).
+
+An action names an id from the latest observation; it is refused before any input when the page changed
+(`stale_page`, 409), another element covers the target (`target_covered`, 409) or the id is unknown
+(`invalid_target`, 422). A mutation is never retried (`uncertain_mutation`, 500). Only approved scripts run in a page,
+in an isolated world; their SHA-256 bundle (`sen-browser scripts`) is what the extension enforces. Full API and
+safety model: the `sen-browser` README.
+
 ## 5. Daemon REST API
 
 All routes below are served by the daemon on its UI port and go through its normal API auth.
@@ -329,6 +348,9 @@ only touches a 2xx body).
 No runtime for the slot → **503** `{"error": "No OCR runtime is installed. Install one in Settings → Runtime.", "code": "runtime_not_installed", "slot": "ocr"}`
 (`runtime_not_selected` when installed but unselected, `runtime_start_failed` with the log tail when it would not start).
 Clients show that state with a link to Settings → Runtime.
+
+`/api/browser/*` → `browser` is **GET only** (status, tabs): acting on a page goes through the daemon's own
+`/api/browser-agent/*`, which applies the browser engine's risk tiers — a write pass-through would skip them.
 
 ### 5.3 Local models — `/api/local-models`
 

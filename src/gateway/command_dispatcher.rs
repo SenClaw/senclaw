@@ -55,6 +55,18 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
 
     if let Some(caps) = re_pair_approve().captures(t) {
         let code = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        // A code from the SenClaw extension's side panel pairs the extension
+        // (the browser engine's `/browser/ext`), not a chat.
+        let ext_hub = crate::browser_agent::extension::hub();
+        if ext_hub.has_pending(code) {
+            return Some(match ext_hub.approve_code(code) {
+                Ok(ext_id) => format!(
+                    "✅ Đã kết nối extension SenClaw ({ext_id}).\n\
+                     Agent chỉ dùng Chrome của bạn khi bạn yêu cầu."
+                ),
+                Err(e) => format!("❌ {e}"),
+            });
+        }
         return Some(match crate::gateway::pairing::approve_by_code(db, code) {
             Ok(a) => format!(
                 "✅ Đã duyệt {} ({}) → agent '{}'.\n\

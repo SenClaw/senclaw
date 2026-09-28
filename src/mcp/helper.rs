@@ -395,13 +395,25 @@ pub fn js_mcp_config(default_timeout_ms: u64, default_memory_mb: u64) -> McpServ
 
 /// `agent_id` identifies the agent this server instance serves; the extension
 /// allocates one tab per agent_id so concurrent agents don't share a tab.
-pub fn browser_mcp_config(ws_port: u16, agent_id: &str) -> McpServerConfig {
+/// `v2` selects the Jev + LLM browser engine (`crate::browser_agent`), whose
+/// tools call the daemon's `/api/browser-agent/*` over loopback — hence the UI
+/// port and the daemon token. Without it the legacy extension tools talk to
+/// the WS gateway.
+pub fn browser_mcp_config(ws_port: u16, ui_port: u16, agent_id: &str, v2: bool) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-browser", "browser-server");
     cfg.env
         .insert("SENCLAW_WS_PORT".into(), ws_port.to_string());
     if !agent_id.is_empty() {
         cfg.env
             .insert("SENCLAW_AGENT_ID".into(), agent_id.to_string());
+    }
+    if v2 {
+        cfg.env.insert("SENCLAW_BROWSER_ENGINE".into(), "v2".into());
+        cfg.env.insert(
+            "SENCLAW_BROWSER_API_URL".into(),
+            format!("http://127.0.0.1:{ui_port}"),
+        );
+        with_daemon_token(&mut cfg);
     }
     cfg
 }
@@ -466,6 +478,8 @@ pub struct CoreMcpParams<'a> {
     pub ws_port: u16,
     pub agent_id: &'a str,
     pub ui_port: u16,
+    /// The browser tools run on the v2 engine (see [`browser_mcp_config`]).
+    pub browser_v2: bool,
     pub litho_binary: &'a str,
     pub litho_model_efficient: Option<&'a str>,
     /// Path to `USER.md` (Soul Core). See [`user_profile_mcp_config`].
@@ -552,7 +566,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
             p.openai_api_key,
             p.litho_model_efficient,
         ),
-        browser_mcp_config(p.ws_port, p.agent_id),
+        browser_mcp_config(p.ws_port, p.ui_port, p.agent_id, p.browser_v2),
         ocr_mcp_config(p.ui_port),
         patterns_mcp_config(p.ui_port),
         js_mcp_config(p.js_timeout_ms, p.js_memory_mb),
@@ -594,6 +608,7 @@ mod tests {
             ws_port: 18789,
             agent_id: "tg:group:1",
             ui_port: 18788,
+            browser_v2: false,
             litho_binary: "deepwiki-rs",
             litho_model_efficient: None,
             user_profile_path: "/data/USER.md",
@@ -619,7 +634,7 @@ mod tests {
                 Some(&allowed),
             ),
             wiki_mcp_config("/data/wiki"),
-            browser_mcp_config(18789, "tg:group:1"),
+            browser_mcp_config(18789, 18788, "tg:group:1", false),
             ocr_mcp_config(18788),
             space_mcp_config("/data/db.sqlite", "team-a", "tg:group:1", 18788),
             js_mcp_config(5_000, 128),

@@ -276,9 +276,19 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .with_state(Arc::clone(&state.api_auth));
 
+    // Browser engine v2 (`crate::browser_agent`): tasks, single steps,
+    // approvals and the extension's pairing. Its own state, like auth_router.
+    let browser_agent_router =
+        crate::browser_agent::rest::router(Arc::new(crate::browser_agent::rest::AgentState {
+            config_path: state.config.paths.global_config_path.clone(),
+            manager: state.runtime_manager.clone(),
+            ports_override: None,
+        }));
+
     Router::new()
         // API endpoints
         .merge(auth_router)
+        .merge(browser_agent_router)
         .nest_service("/api/sandbox", sandbox_router)
         .route("/api/config", get(config_handler))
         // The API's own contract, generated from these routers (see openapi.rs).
@@ -649,6 +659,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/tts/*rest", any(runtime_proxy::proxy_tts))
         .route("/api/ocr", any(runtime_proxy::proxy_ocr))
         .route("/api/ocr/*rest", any(runtime_proxy::proxy_ocr))
+        // The browser runtime, read-only: status and tabs for the UI. Acting
+        // on a page goes through `/api/browser-agent/*`, which applies the
+        // risk tiers; a pass-through for writes would skip them.
+        .route("/api/browser/*rest", get(runtime_proxy::proxy_browser))
         // Typed decisions: the gate and the pre-turn skill router stay in the
         // daemon (control plane); everything else about `sen-sysone` (model
         // management, `/ask`, backend settings) is proxied. Static routes win

@@ -35,6 +35,13 @@ const SKILL_TOOL_NAME: &str = "Skill";
 /// MCP tool prefix.
 const MCP_TOOL_PREFIX: &str = "mcp__";
 
+/// MCP tools whose every call is the person's own decision, so no "never ask
+/// again" is offered and none saved earlier is honoured: `browser_approve`
+/// carries the person's yes to a purchase, a send or a delete the browser
+/// engine paused on (its risk tiers), and a standing grant would let the
+/// agent answer for them.
+const PER_CALL_MCP_TOOLS: &[&str] = &["browser_approve"];
+
 // ============================================================================
 // Permission manager
 // ============================================================================
@@ -104,6 +111,27 @@ impl PermissionManager {
 
     fn is_mcp_tool(name: &str) -> bool {
         name.starts_with(MCP_TOOL_PREFIX)
+    }
+
+    /// `mcp__<server>__<tool>` in any server spelling (`core`, `senclaw-browser`).
+    fn is_per_call_mcp_tool(name: &str) -> bool {
+        Self::is_mcp_tool(name)
+            && name
+                .rsplit("__")
+                .next()
+                .is_some_and(|tool| PER_CALL_MCP_TOOLS.contains(&tool))
+    }
+
+    /// The pending browser action a `browser_approve` call would release, in
+    /// place of the bare `{approval_id, approve}` the agent sent.
+    fn browser_approval_content(name: &str, input: &serde_json::Value) -> Option<serde_json::Value> {
+        if !Self::is_per_call_mcp_tool(name) {
+            return None;
+        }
+        let id = input.get("approval_id")?.as_str()?;
+        let mut described = crate::browser_agent::run::describe_approval(id)?;
+        described["approve"] = input.get("approve").cloned().unwrap_or(serde_json::Value::Null);
+        Some(described)
     }
 
     fn is_allowed(&self, key: &str) -> bool {
@@ -242,6 +270,13 @@ impl PermissionManager {
             return opts;
         }
 
+        if Self::is_per_call_mcp_tool(name) {
+            let mut opts = HashMap::new();
+            opts.insert("agree".into(), "Confirm".into());
+            opts.insert("refuse".into(), "Reject".into());
+            return opts;
+        }
+
         if Self::is_mcp_tool(name) {
             let mut opts = HashMap::new();
             opts.insert("agree".into(), "Confirm".into());
@@ -303,7 +338,8 @@ impl PermissionManager {
             title: permission_info
                 .as_ref()
                 .map_or(name.clone(), |p| p.title.clone()),
-            content: Self::resolve_permission_content(permission_info, input),
+            content: Self::browser_approval_content(tool.permission_name(), input)
+                .unwrap_or_else(|| Self::resolve_permission_content(permission_info, input)),
             options,
         };
 
@@ -457,7 +493,7 @@ impl PermissionChecker for PermissionManager {
             if self.skip_mcp.load(Ordering::Relaxed) {
                 return Ok(true);
             }
-            if self.is_allowed(name) {
+            if self.is_allowed(name) && !Self::is_per_call_mcp_tool(name) {
                 return Ok(true);
             }
             return self
@@ -648,6 +684,66 @@ mod tests {
         assert!(!pm.matches_saved_prefix("npm run build > /etc/passwd"));
         // Nor unrelated commands
         assert!(!pm.matches_saved_prefix("npx evil"));
+    }
+
+    struct NamedMcpTool(&'static str);
+    #[async_trait::async_trait]
+    impl Tool for NamedMcpTool {
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "mcp tool"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
+            Ok(vec![])
+        }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: self.0.into(),
+                summary: "".into(),
+                content: serde_json::json!({}),
+            }
+        }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            self.0.into()
+        }
+    }
+
+    /// A browser approval is the person's answer to one paused action: a
+    /// saved "never ask again" must not answer it for them, and none is
+    /// offered. Any other MCP tool keeps its saved grant. A cancelled token
+    /// turns "asked" into `false`, so the two cases are told apart.
+    #[tokio::test]
+    async fn browser_approve_is_confirmed_on_every_call() {
+        let pm = PermissionManager::new(EventBus::new(), Arc::new(ResponseRegistry::new()));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let input = serde_json::json!({"approval_id": "apv_1", "approve": true});
+        for name in ["mcp__core__browser_approve", "mcp__senclaw-browser__browser_approve"] {
+            pm.add_allowed_tool(name);
+            let tool = NamedMcpTool(name);
+            assert!(!pm.check(&tool, &input, &cancel, "main").await.unwrap(), "{name} was allowed by a saved grant");
+            let options = PermissionManager::build_options(&tool, &input, None);
+            assert!(!options.contains_key("allow"), "{name} offered a standing grant");
+        }
+        pm.add_allowed_tool("mcp__core__browser_look");
+        let look = NamedMcpTool("mcp__core__browser_look");
+        assert!(pm.check(&look, &serde_json::json!({}), &cancel, "main").await.unwrap());
     }
 
     /// An alias is a display name. Renaming `Write` used to move it out of

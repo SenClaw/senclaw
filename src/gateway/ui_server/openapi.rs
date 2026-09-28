@@ -30,6 +30,7 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("", include_str!("core.rs")),
     ("/api/kanban", include_str!("../../kanban/api.rs")),
     ("/api/sandbox", include_str!("../../sandbox/api.rs")),
+    ("", include_str!("../../browser_agent/rest.rs")),
 ];
 
 /// One route as the router declares it.

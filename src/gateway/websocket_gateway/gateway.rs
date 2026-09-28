@@ -206,10 +206,34 @@ impl WebSocketGateway {
             }
         });
 
+        // The browser engine v2 extension channel. Refused before the upgrade
+        // unless Chrome stamped an extension Origin (a web page cannot forge
+        // one); the extension then pairs or presents its token in-band.
+        let browser_ext_route = axum::routing::get(
+            |headers: axum::http::HeaderMap, ws: axum::extract::WebSocketUpgrade| async move {
+                use axum::response::IntoResponse;
+                let origin = headers
+                    .get(axum::http::header::ORIGIN)
+                    .and_then(|v| v.to_str().ok());
+                match crate::browser_agent::extension::origin_extension_id(origin) {
+                    Ok(ext_id) => ws
+                        .on_upgrade(move |socket| {
+                            crate::browser_agent::extension::handle_socket(socket, ext_id)
+                        })
+                        .into_response(),
+                    Err(reason) => {
+                        tracing::warn!("[browser] refused /browser/ext: {reason}");
+                        (axum::http::StatusCode::FORBIDDEN, reason).into_response()
+                    }
+                }
+            },
+        );
+
         axum::Router::new()
             .route("/", main_route)
             .route("/browser", browser_route)
             .route("/browser-mcp", browser_mcp_route)
+            .route("/browser/ext", browser_ext_route)
     }
 
     // ===== Broadcast helpers =====
