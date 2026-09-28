@@ -41,7 +41,7 @@ detection (`SENCLAW_STALL_TOOL_TURNS`), `auto_compact`, sổ sự cố
 "controlPlane": {
   "jevOff": false,
   "shadow": false,
-  "agentStatus": true,
+  "agentStatus": false,
   "recordDecisionInputs": false,
   "workspace": { "enabled": true, "substituteToolOutput": false }
 }
@@ -51,7 +51,7 @@ detection (`SENCLAW_STALL_TOOL_TURNS`), `auto_compact`, sổ sự cố
 |---|---|---|
 | `jevOff` (hoặc `SENCLAW_JEV_OFF=1`) | tắt | Đường cơ sở ablation (§13): bỏ qua **mọi** tầng Jev, kể cả gate/router đang chạy — chúng quay về hành vi không-engine cũ |
 | `shadow` | tắt | Quyết định của lead: spec mới ở chế độ `shadow` (`input.guard.*`, `clarify.needed`, `task.done`, `loop.next_step`) chỉ thật sự gọi decision runtime khi bật cờ này (hoặc khi chính spec đó để `mode: active`). Lý do: một lần load Laya tốn 1.2–1.7 GB RAM và khởi động tiến trình `sen-sysone` — bản cài mặc định không được trả giá đó chỉ để thu nhãn |
-| `agentStatus` | **bật** | `<agent_status>` do code tính (§7) — không gọi Jev, không đổi quyết định, nên mặc định bật an toàn. **Đã nối vào mỗi lần gọi LLM** (xem §4) |
+| `agentStatus` | tắt | `<agent_status>` do code tính (§7) — không gọi Jev, không đổi quyết định. Mặc định **tắt** vì khối này nằm ở message user *cuối*, mỗi lần gọi một chỗ khác, nên prompt lần trước không bao giờ là tiền tố của lần sau: engine local (sen-mlx) chỉ dùng lại KV cache khi khớp tiền tố tuyệt đối, bật lên thì mỗi bước agent prefill lại toàn bộ (Gemma 4 E2B, 16k token: ~30s thay vì ~1,3s). Bật được khi cần (xem §4) |
 | `recordDecisionInputs` | tắt | G1: ghi state/questions đầy đủ gửi cho một spec vào file riêng (không lẫn vào trace) để `--g1-replay` dùng lại |
 | `workspace.enabled` | bật | Mirror `progress.md`/`todo.json` — chỉ ghi thêm, không đổi tool result |
 | `workspace.substituteToolOutput` | tắt | L1 offload thật sự thay tool result bằng preview — đây là phần duy nhất của Workspace **có thể đổi quyết định**, nên giữ tắt |

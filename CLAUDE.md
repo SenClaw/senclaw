@@ -1295,7 +1295,10 @@ Rules for Claude:
   non-regression check — if it ever fails, the gate started auto-approving
   something the floor disagrees with.
 - **`<agent_status>` is appended to a per-call CLONE, never to the persisted
-  history.** `zen_core::conversation::outgoing_messages` returns
+  history — and `controlPlane.agentStatus` defaults OFF.** It lands on a
+  different message each call, so it defeats a local engine's exact-prefix KV
+  reuse (every sen-mlx agent step re-prefilled the whole prompt). Keep it off
+  by default. `zen_core::conversation::outgoing_messages` returns
   `Cow::Borrowed(messages)` untouched when `controlPlane.agentStatus` is off,
   or a cloned `Vec` with one `ContentBlock::Text` pushed onto the *last
   user-role* message when on — never mutates `messages` itself, which is what

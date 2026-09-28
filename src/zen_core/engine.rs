@@ -1812,7 +1812,8 @@ impl ZenEngine {
                 hook_profile: Some(profile.clone()),
                 session_id: session_id_spawn.clone(),
                 enable_cache: false,
-                // `controlPlane.agentStatus` (default on) — read fresh per
+                // `controlPlane.agentStatus` (default off: it defeats a local
+                // engine's prefix cache, see `ControlPlaneSettings`) — read fresh per
                 // turn like the pre-skill router/shadow specs, not injected
                 // via `set_runtime_config` (a documented no-op here: "config
                 // is passed via environment"). Not affected by JEV_OFF — this

@@ -54,11 +54,14 @@ pub struct ControlPlaneSettings {
     #[serde(default)]
     pub shadow: bool,
     /// `<agent_status>` tail appended per LLM call (§7), computed by code —
-    /// never a decision, never a web-content leak, so on by default is safe
-    /// under "everything new that would change a decision runs behind a
-    /// switch": this does not change what the agent decides, only what it
-    /// can see about its own turn budget.
-    #[serde(default = "default_true")]
+    /// never a decision, never a web-content leak. Off by default all the
+    /// same: the block rides on the *last* user-role message, which is a
+    /// different message on every call of a multi-step turn, so the previous
+    /// call's prompt is never a prefix of the next one. A local engine reuses
+    /// its KV cache only on an exact prefix (sen-mlx), so with this on every
+    /// agent step re-prefilled the whole prompt — measured on Gemma 4 E2B,
+    /// a 16k-token step took ~30s instead of ~1.3s.
+    #[serde(default)]
     pub agent_status: bool,
     /// G1 prefix regression (§13): record the exact `state`/`questions` sent
     /// to a spec, not just the metadata trace normally keeps. Off by
@@ -75,7 +78,7 @@ impl Default for ControlPlaneSettings {
         ControlPlaneSettings {
             jev_off: false,
             shadow: false,
-            agent_status: true,
+            agent_status: false,
             record_decision_inputs: false,
             workspace: WorkspaceSettings::default(),
         }
@@ -91,7 +94,7 @@ mod tests {
         let s = ControlPlaneSettings::default();
         assert!(!s.jev_off);
         assert!(!s.shadow, "shadow must default off — no RAM cost on a default install");
-        assert!(s.agent_status, "agent_status is a status readout, not a decision");
+        assert!(!s.agent_status, "agent_status moves every call and would defeat a local engine's prefix cache");
         assert!(!s.record_decision_inputs);
         assert!(s.workspace.enabled);
         assert!(!s.workspace.substitute_tool_output);
