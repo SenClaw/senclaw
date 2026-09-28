@@ -420,6 +420,11 @@ pub(super) struct GlobalConfig {
     /// key, so it round-trips as a typed struct.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "controlPlane")]
     pub(super) control_plane: Option<crate::control_plane::ControlPlaneSettings>,
+    /// Browser engine v2 (`crate::browser_agent::settings::BrowserSettings`).
+    /// Raw JSON so every other section's save round-trips it untouched — a
+    /// key missing here is erased by the next unrelated save.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "browserAgent")]
+    pub(super) browser_agent: Option<serde_json::Value>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

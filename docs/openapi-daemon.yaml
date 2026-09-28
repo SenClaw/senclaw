@@ -760,6 +760,45 @@ paths:
       - browser-agent
       x-handler: screenshot
       x-untyped: true
+  /api/browser-agent/settings:
+    get:
+      operationId: get_api_browser_agent_settings
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Settings get
+      tags:
+      - browser-agent
+      x-handler: settings_get
+      x-untyped: true
+    put:
+      operationId: put_api_browser_agent_settings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Settings put
+      tags:
+      - browser-agent
+      x-handler: settings_put
+      x-untyped: true
   /api/browser-agent/status:
     get:
       operationId: get_api_browser_agent_status
@@ -10714,5 +10753,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 381
-x-untyped-operations: 469
+x-route-count: 382
+x-untyped-operations: 471

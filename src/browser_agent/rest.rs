@@ -93,6 +93,7 @@ impl AgentState {
 pub fn router<S: Clone + Send + Sync + 'static>(state: AppState) -> Router<S> {
     Router::new()
         .route("/api/browser-agent/status", get(status))
+        .route("/api/browser-agent/settings", get(settings_get).put(settings_put))
         .route("/api/browser-agent/tasks", post(task))
         .route("/api/browser-agent/tasks/:id/resume", post(task_resume))
         .route("/api/browser-agent/approvals/:id", post(approval))
@@ -107,6 +108,42 @@ pub fn router<S: Clone + Send + Sync + 'static>(state: AppState) -> Router<S> {
         .route("/api/browser-agent/extension/pairings/:code/approve", post(extension_approve))
         .route("/api/browser-agent/extension/paired/:ext_id", delete(extension_revoke))
         .with_state(state)
+}
+
+/// What the settings screens show: the stored settings with defaults filled
+/// in, plus the engine `auto` resolves to right now.
+fn settings_view(s: &AgentState, settings: &BrowserSettings) -> Value {
+    let home = s.config_path.parent().unwrap_or(std::path::Path::new("."));
+    json!({
+        "settings": settings,
+        "engine": match settings::resolved_engine(&s.config_path, home) {
+            settings::Engine::V2 => "v2",
+            _ => "legacy",
+        },
+        "runtimeInstalled": settings::runtime_installed(home),
+    })
+}
+
+async fn settings_get(State(s): State<AppState>) -> ApiResult {
+    Ok(Json(settings_view(&s, &s.settings())))
+}
+
+/// A partial update: the fields sent replace the stored ones, the rest stay.
+/// The engine choice reaches the agent's tools in chats started afterwards.
+async fn settings_put(State(s): State<AppState>, Json(patch): Json<Value>) -> ApiResult {
+    let Value::Object(patch) = patch else {
+        return Err(err(StatusCode::BAD_REQUEST, "bad_request", "send a JSON object of browserAgent fields"));
+    };
+    let mut merged = serde_json::to_value(s.settings()).unwrap_or_else(|_| json!({}));
+    for (k, v) in patch {
+        merged[k] = v;
+    }
+    let next: BrowserSettings = serde_json::from_value(merged)
+        .map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", e.to_string()))?;
+    let next = next.validated().map_err(|e| err(StatusCode::UNPROCESSABLE_ENTITY, "invalid_settings", e))?;
+    crate::gateway::group_manager::save_browser_agent_settings(&s.config_path, &next)
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string()))?;
+    Ok(Json(settings_view(&s, &next)))
 }
 
 async fn status(State(s): State<AppState>) -> ApiResult {
@@ -386,6 +423,36 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
+    async fn settings_endpoint_merges_and_validates() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AgentState { config_path: dir.path().join("config.json"), manager: None, ports_override: None });
+        // Settings: a partial update keeps the other fields, and nonsense is refused.
+        let put = |body: Value| {
+            let app: axum::Router = router(state.clone());
+            async move {
+                app.oneshot(
+                    axum::http::Request::builder()
+                        .method("PUT")
+                        .uri("/api/browser-agent/settings")
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        let r = put(json!({ "defaultDriver": "extension", "hostedDomains": ["example.com"] })).await;
+        assert_eq!(r.status(), 200);
+        let saved = settings::load(&state.config_path);
+        assert_eq!(saved.default_driver, Driver::Extension);
+        assert_eq!(saved.local_model, "laya-browser", "untouched fields keep their value");
+        assert_eq!(put(json!({ "maxSteps": 0 })).await.status(), 422);
+        assert_eq!(put(json!({ "defaultDriver": "carrier-pigeon" })).await.status(), 422);
+        assert_eq!(settings::load(&state.config_path).default_driver, Driver::Extension, "a refused update changes nothing");
+    }
+
+    #[tokio::test]
     async fn task_endpoint_runs_the_loop() {
         let dir = tempfile::tempdir().unwrap();
         let state = Arc::new(AgentState {
@@ -393,7 +460,8 @@ mod tests {
             manager: None,
             ports_override: Some(fake_ports(FakeBrowser::new(true))),
         });
-        let app: axum::Router = router(state);
+        let app: axum::Router = router(state.clone());
+
         let body = json!({ "goal": "Search for books", "url": "https://shop.test/", "done_criteria": ["Search results are shown"], "chat_jid": "rest-chat" });
         let resp = app
             .clone()

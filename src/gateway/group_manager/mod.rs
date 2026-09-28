@@ -2,6 +2,7 @@
 //! Mirrors `src-old/gateway/GroupManager.ts`.
 
 pub mod apps;
+pub mod browser_agent;
 pub mod chat;
 pub(crate) mod config;
 pub mod control_plane;
@@ -15,6 +16,7 @@ pub mod types;
 
 // Re-exports for external consumers
 pub use apps::{delete_feishu_app, get_feishu_apps, save_feishu_app};
+pub use browser_agent::save_browser_agent_settings;
 pub use chat::{delete_telegram_bot, get_telegram_bots, get_wechat_accounts, save_telegram_bot};
 pub use control_plane::{load_control_plane_settings, save_control_plane_settings};
 pub use dirs::{ensure_agent_dirs, read_memory_md, read_soul_md, write_memory_md, write_soul_md};
