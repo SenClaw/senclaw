@@ -112,12 +112,19 @@ pub struct ConfigLlm {
     pub config_path: PathBuf,
 }
 
+/// How long one step waits for the LLM. Not a provider timeout (a local
+/// provider has none, on purpose): a step whose answer is a short JSON object
+/// is better parked than stalled while a local model runs on for minutes.
+const LLM_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[async_trait]
 impl Llm for ConfigLlm {
     async fn complete(&self, model: Option<&str>, system: &str, user: &str, max_tokens: u32) -> Result<String, String> {
-        crate::gateway::ui_server::llm_config::chat_completion(&self.config_path, model, system, user, max_tokens, None)
-            .await
-            .map(|r| r.text)
+        let call = crate::gateway::ui_server::llm_config::chat_completion(&self.config_path, model, system, user, max_tokens, None);
+        match tokio::time::timeout(LLM_STEP_TIMEOUT, call).await {
+            Ok(answer) => answer.map(|r| r.text),
+            Err(_) => Err(format!("the LLM did not answer within {} s", LLM_STEP_TIMEOUT.as_secs())),
+        }
     }
 }
 

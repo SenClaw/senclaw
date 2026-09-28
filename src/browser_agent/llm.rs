@@ -28,12 +28,45 @@ pub fn text_context(goal: &str, field: &Value, observation: &Value, history: &[H
     })
 }
 
-/// Pull the JSON object out of an answer that may be wrapped in a code fence.
+/// Pull the JSON object out of an answer. Small local models wrap it in a
+/// code fence, prefix a `<think>` block, or explain themselves first; the
+/// object that *ends* the answer is the answer. What it may contain is still
+/// checked strictly by each caller.
 fn json_object(raw: &str) -> Option<serde_json::Map<String, Value>> {
-    let t = raw.trim();
-    let t = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t);
-    let t = t.strip_suffix("```").unwrap_or(t).trim();
-    serde_json::from_str::<Value>(t).ok()?.as_object().cloned()
+    let mut t = raw.trim();
+    if let Some(end) = t.find("</think>") {
+        t = t[end + "</think>".len()..].trim();
+    }
+    let t = t.strip_suffix("```").unwrap_or(t).trim_end();
+    let whole = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t);
+    if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(whole.trim()) {
+        return Some(o);
+    }
+    // The last object that runs to the end of the answer.
+    for (start, _) in t.match_indices('{').collect::<Vec<_>>().into_iter().rev() {
+        if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&t[start..]) {
+            return Some(o);
+        }
+    }
+    None
+}
+
+/// One more try when an answer breaks its contract: local models sample, and
+/// the second answer is usually well-formed. Never more — a model that cannot
+/// follow the contract gets the step taken from it.
+async fn complete_twice<T>(
+    llm: &dyn Llm,
+    model: Option<&str>,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    parse: impl Fn(&str) -> Result<T, String>,
+) -> Result<T, String> {
+    let first = parse(&llm.complete(model, system, user, max_tokens).await?);
+    match first {
+        Ok(v) => Ok(v),
+        Err(_) => parse(&llm.complete(model, system, user, max_tokens).await?),
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -58,8 +91,7 @@ pub fn parse_text_value(raw: &str) -> Result<TextValue, String> {
 }
 
 pub async fn text_value(llm: &dyn Llm, model: Option<&str>, context: &Value) -> Result<TextValue, String> {
-    let raw = llm.complete(model, TEXT_VALUE, &context.to_string(), 256).await?;
-    parse_text_value(&raw)
+    complete_twice(llm, model, TEXT_VALUE, &context.to_string(), 256, parse_text_value).await
 }
 
 /// The LLM tier's pick: an offered operation and, when it needs one, an offered target.
@@ -82,8 +114,7 @@ pub async fn fallback(
         "recent_actions": history.iter().rev().take(10).rev().collect::<Vec<_>>(),
         "decision_model_guesses": model_guesses,
     });
-    let raw = llm.complete(model, FALLBACK, &input.to_string(), 300).await?;
-    parse_fallback(&raw, encoded)
+    complete_twice(llm, model, FALLBACK, &input.to_string(), 300, |raw| parse_fallback(raw, encoded)).await
 }
 
 pub fn parse_fallback(raw: &str, encoded: &Encoded) -> Result<(String, Option<String>, String), String> {
@@ -158,6 +189,26 @@ mod tests {
         }
         let long = format!(r#"{{"text":"{}"}}"#, "x".repeat(MAX_TEXT + 1));
         assert!(parse_text_value(&long).is_err());
+        // What small local models add around the object; the object ending the answer counts.
+        assert_eq!(parse_text_value("<think>The goal says London.</think>\n{\"text\": \"London\"}").unwrap(), TextValue::Text("London".into()));
+        assert_eq!(parse_text_value("The field is the destination, so:\n```json\n{\"text\": \"London\"}\n```").unwrap(), TextValue::Text("London".into()));
+        assert!(parse_text_value("{\"text\": \"London\"} and then I would also type Paris").is_err(), "the object must end the answer");
+    }
+
+    #[tokio::test]
+    async fn an_off_contract_answer_gets_one_retry() {
+        struct Answers(std::sync::Mutex<Vec<&'static str>>);
+        #[async_trait::async_trait]
+        impl Llm for Answers {
+            async fn complete(&self, _m: Option<&str>, _s: &str, _u: &str, _t: u32) -> Result<String, String> {
+                Ok(self.0.lock().unwrap().remove(0).to_string())
+            }
+        }
+        let ctx = json!({});
+        let llm = Answers(std::sync::Mutex::new(vec!["I think the value is London.", r#"{"text":"London"}"#]));
+        assert_eq!(text_value(&llm, None, &ctx).await.unwrap(), TextValue::Text("London".into()));
+        let llm = Answers(std::sync::Mutex::new(vec!["London", "London again", r#"{"text":"London"}"#]));
+        assert!(text_value(&llm, None, &ctx).await.is_err(), "never a third try");
     }
 
     #[test]

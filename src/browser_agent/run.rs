@@ -111,6 +111,10 @@ struct TaskState {
     llm_next: bool,
     option_chars: usize,
     pending: Option<Pending>,
+    /// Every action taken, keyed with the page state it was taken from.
+    tried: Vec<u64>,
+    /// A text field the last step clicked into without changing the page.
+    type_into: Option<i64>,
 }
 
 /// Paused tasks by task id, and approvals → task id.
@@ -135,12 +139,40 @@ fn new_id(prefix: &str) -> String {
 
 /// Semantic identity of a page: what changed matters, not animation.
 fn fingerprint(obs: &Value) -> String {
+    fingerprint_where(obs, |_| true)
+}
+
+/// The page without what focus alone changes (the "Press Enter in …" key
+/// control appears once a field has focus).
+fn fingerprint_unfocused(obs: &Value) -> String {
+    fingerprint_where(obs, |a| a.get("kind").and_then(Value::as_str) != Some("key"))
+}
+
+fn fingerprint_where(obs: &Value, keep: impl Fn(&Value) -> bool) -> String {
     let actions: Vec<Value> = obs
         .get("actions")
         .and_then(Value::as_array)
-        .map(|a| a.iter().map(|x| json!([x.get("id"), x.get("label"), x.get("value"), x.get("checked")])).collect())
+        .map(|a| a.iter().filter(|x| keep(x)).map(|x| json!([x.get("id"), x.get("label"), x.get("value"), x.get("checked")])).collect())
         .unwrap_or_default();
     json!([obs.get("url"), obs.get("text"), actions, obs.pointer("/viewport/scroll_y"), obs.get("dialog")]).to_string()
+}
+
+/// The TYPE_TEXT action of the editable field `node`, when the page offers one.
+fn fill_action(obs: &Value, node: i64) -> Option<Value> {
+    obs.get("actions")?
+        .as_array()?
+        .iter()
+        .find(|a| a.get("kind").and_then(Value::as_str) == Some("fill") && a.get("node").and_then(Value::as_i64) == Some(node))
+        .cloned()
+}
+
+/// One action from one page state. Pages are deterministic enough that taking
+/// the same action from the same state again only repeats a detour.
+fn cycle_key(obs: &Value, operation: &str, label: &str, text: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (fingerprint_unfocused(obs), operation, label, text).hash(&mut h);
+    h.finish()
 }
 
 fn outcome(state: &TaskState, status: &str, message: impl Into<String>) -> TaskOutcome {
@@ -212,6 +244,8 @@ pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> 
         done_rejections: 0,
         llm_next: false,
         pending: None,
+        tried: Vec::new(),
+        type_into: None,
     };
     drive(ports, state).await
 }
@@ -382,6 +416,28 @@ fn text_of(obs: &Value, limit: usize) -> String {
     obs.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(limit).collect()
 }
 
+/// Text a criterion quotes (`The page shows "Business class"`) that the page
+/// does not contain. A quote is a literal claim, so no model is asked; a
+/// negated criterion (`does not show "Error"`) is left to the models.
+fn missing_quote(criterion: &str, page_text: &str) -> Option<String> {
+    let lower = criterion.to_lowercase();
+    if [" not ", " no ", "without", "never", "n't "].iter().any(|n| lower.contains(n)) {
+        return None;
+    }
+    let page = page_text.to_lowercase();
+    let mut rest = criterion;
+    while let Some(open) = rest.find(['"', '“']) {
+        let after = &rest[open + rest[open..].chars().next().map(char::len_utf8).unwrap_or(1)..];
+        let Some(close) = after.find(['"', '”']) else { break };
+        let quoted = after[..close].trim();
+        if !quoted.is_empty() && !page.contains(&quoted.to_lowercase()) {
+            return Some(quoted.to_string());
+        }
+        rest = &after[close + after[close..].chars().next().map(char::len_utf8).unwrap_or(1)..];
+    }
+    None
+}
+
 /// Ask the decision model whether the page proves each criterion.
 async fn verify_done(ports: &Ports, state: &mut TaskState, route: &DecisionRoute) -> (bool, Vec<Value>) {
     if state.criteria.is_none() {
@@ -395,6 +451,16 @@ async fn verify_done(ports: &Ports, state: &mut TaskState, route: &DecisionRoute
     let criteria = state.criteria.clone().unwrap_or_default();
     let redact = matches!(route, DecisionRoute::Model { redact: true, .. });
     let text = text_of(&state.observation, 6000);
+
+    // Rule first: a quoted text the page lacks fails its criterion outright.
+    let unmet: Vec<Value> = criteria
+        .iter()
+        .filter_map(|c| missing_quote(c, &text).map(|q| json!({ "criterion": c, "verdict": false, "by": "rule", "missing": q })))
+        .collect();
+    if !unmet.is_empty() {
+        return (false, unmet);
+    }
+
     let text = if redact { policy::redact_pii(&text) } else { text };
     let page = json!({ "url": state.observation.get("url"), "title": state.observation.get("title"), "text": text });
 
@@ -514,15 +580,22 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
             return park(state, "needs_approval", msg, Some(pending));
         }
 
+        // Rule tier, continued: clicking a plain text field only focuses it.
+        // When that changed nothing, the click was the decision model opening
+        // the field to type into (the "open, then type" of comboboxes); asked
+        // again, it would open it again.
+        let focused = state.type_into.take().and_then(|node| fill_action(&obs, node));
+
         // Decision tier.
         let route = policy::select_backend(&state.settings, &url, state.spec.driver);
         let decision_started = Instant::now();
         let mut model_step: Option<Step> = None;
         let mut guesses = Value::Null;
-        let encoded_for_llm;
+        let mut encoded_for_llm = None;
         match &route {
+            _ if focused.is_some() => {}
             DecisionRoute::LlmOnly => {
-                encoded_for_llm = encode(&obs, &state.spec.goal, &state.history, Profile::JevFull, None, None);
+                encoded_for_llm = Some(encode(&obs, &state.spec.goal, &state.history, Profile::JevFull, None, None));
             }
             DecisionRoute::Model { profile, backend, model, redact } => {
                 let (mut view, _) = if *profile == Profile::LayaV3 { budget::prune(&obs, &state.spec.goal, state.option_chars) } else { (obs.clone(), 0) };
@@ -550,7 +623,7 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                     }
                     Err(e) => tracing::warn!("[browser] decision runtime unavailable: {e}"),
                 }
-                encoded_for_llm = encode(&obs, &state.spec.goal, &state.history, Profile::JevFull, None, None);
+                encoded_for_llm = Some(encode(&obs, &state.spec.goal, &state.history, Profile::JevFull, None, None));
             }
         }
 
@@ -559,7 +632,10 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
             None => true,
             Some(s) => s.band != Band::Act || s.operation == "BLOCKED" || state.llm_next,
         };
-        let (operation, target, action, by, confidence, band) = if needs_llm {
+        let (operation, target, action, by, confidence, band) = if let Some(field) = focused {
+            ("TYPE_TEXT".to_string(), None, field, "rule", None, None)
+        } else if needs_llm {
+            let encoded_for_llm = encoded_for_llm.expect("every decision route encodes the page for the LLM");
             state.llm_next = false;
             state.stats.llm_calls += 1;
             state.stats.fallbacks += 1;
@@ -674,12 +750,35 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
             text = Some(value);
         }
 
+        // Going in circles: the same action from the same page state already
+        // led back here (Search → empty results → New search → Search …).
+        // The LLM gets the step; if it picks the same action, stop — a page
+        // change alone is not progress.
+        let key = cycle_key(&obs, &operation, &label, text.as_deref());
+        if state.tried.contains(&key) {
+            if by == "llm" {
+                return park(state, "blocked", format!("Going in circles: \"{label}\" was already tried from this same page"), None);
+            }
+            state.history.push(HistoryItem {
+                action: format!("{operation} \"{label}\" was already done from this same page and led back here"),
+                kind: "rejected".into(),
+                text: None,
+                page_changed: Some(false),
+            });
+            state.llm_next = true;
+            continue;
+        }
+        state.tried.push(key);
+
         let steps_before = state.stats.steps;
         if let Err(done) = execute(ports, &mut state, &operation, &action_id, &label, &kind, text.as_deref(), observation_id, by, confidence, band, decision_ms).await {
             return done;
         }
         if let Some(last) = state.steps.last_mut() {
             last.target = target;
+        }
+        if operation == "CLICK" && fingerprint_unfocused(&obs) == fingerprint_unfocused(&state.observation) {
+            state.type_into = action.get("node").and_then(Value::as_i64).filter(|node| fill_action(&obs, *node).is_some());
         }
 
         // No progress: three executed non-wait steps that changed nothing.
@@ -822,6 +921,196 @@ pub(crate) mod tests {
         assert_eq!(out.steps[0].target.as_deref(), Some("1"));
         assert_eq!(out.evidence[0]["verdict"], true);
         assert_eq!(chat_tab("test-chat", Driver::Managed).as_deref(), Some("t1"));
+    }
+
+    /// Search leads to an empty results page whose only way on is "New
+    /// search", which leads back to the identical start page.
+    struct CycleSite {
+        on_results: std::sync::Mutex<bool>,
+        seq: AtomicU64,
+    }
+
+    impl CycleSite {
+        fn page(&self) -> Value {
+            let id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+            let (url, text, label) = if *self.on_results.lock().unwrap() {
+                ("https://shop.test/results", "Enter a search term", "New search")
+            } else {
+                ("https://shop.test/", "Find books", "Search")
+            };
+            json!({
+                "observation_id": id, "tab_id": "t1", "url": url, "title": "Shop", "text": text,
+                "actions": [{"id": "e1", "node": 1, "kind": "click", "role": "button", "label": label, "value": ""}],
+                "dialog": null, "viewport": {"scroll_y": 0}
+            })
+        }
+    }
+
+    #[async_trait]
+    impl BrowserPort for CycleSite {
+        async fn call(&self, _method: &str, path: &str, _body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" {
+                return Ok(json!({ "id": "s1" }));
+            }
+            if path.ends_with("/tabs") {
+                return Ok(json!({ "tab": { "id": "t1" }, "observation": self.page() }));
+            }
+            if path.ends_with("/act") {
+                let mut on = self.on_results.lock().unwrap();
+                *on = !*on;
+                drop(on);
+                return Ok(json!({ "executed": "e1", "observation": self.page() }));
+            }
+            Ok(self.page())
+        }
+    }
+
+    /// Confidently clicks whatever the page offers.
+    struct ClickDecider;
+
+    #[async_trait]
+    impl Decider for ClickDecider {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            let ops: Vec<String> = request.questions.get("operation").and_then(|q| q.get("criteria")).and_then(|c| c.as_object())
+                .map(|o| o.iter().map(|(k, _)| k.clone()).collect()).unwrap_or_default();
+            let ops: Vec<&str> = ops.iter().map(String::as_str).collect();
+            Ok(json!({ "operation": choice(&ops, "CLICK", 0.97), "click_target": choice(&["1"], "1", 1.0) }))
+        }
+    }
+
+    /// An LLM that, asked for a better step, picks the same click again.
+    struct SameClickLlm;
+
+    #[async_trait]
+    impl Llm for SameClickLlm {
+        async fn complete(&self, _m: Option<&str>, _s: &str, _u: &str, _t: u32) -> Result<String, String> {
+            Ok(r#"{"operation":"CLICK","target":"1","reason":"try again"}"#.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn loop_leaves_a_cycle_to_the_llm_and_stops_when_it_repeats() {
+        let site = Arc::new(CycleSite { on_results: std::sync::Mutex::new(false), seq: AtomicU64::new(0) });
+        let ports = Ports { browser: site, decider: Arc::new(ClickDecider), llm: Arc::new(SameClickLlm) };
+        let out = start(&ports, BrowserSettings::default(), spec("Search for books")).await;
+        assert_eq!(out.status, "blocked", "{}", out.message);
+        assert!(out.message.contains("circles"), "{}", out.message);
+        // Search and New search ran once each; the repeat was never executed.
+        assert_eq!(out.stats.steps, 2);
+        assert_eq!(out.stats.llm_calls, 1, "only the repeat went to the LLM: {:?}", out.steps);
+        assert!(out.steps.iter().all(|s| s.by == "jev"));
+    }
+
+    /// A search box: clicking into it changes nothing, typing fills it, and
+    /// Search shows results for what was typed.
+    struct SearchBox {
+        typed: std::sync::Mutex<Option<String>>,
+        searched: std::sync::Mutex<bool>,
+        seq: AtomicU64,
+    }
+
+    impl SearchBox {
+        fn page(&self) -> Value {
+            let id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+            let typed = self.typed.lock().unwrap().clone().unwrap_or_default();
+            if *self.searched.lock().unwrap() {
+                return json!({
+                    "observation_id": id, "tab_id": "t1", "url": format!("https://shop.test/results?q={typed}"),
+                    "title": "Shop", "text": format!("Results for {typed}: 3 found"), "actions": [],
+                    "dialog": null, "viewport": {"scroll_y": 0}
+                });
+            }
+            json!({
+                "observation_id": id, "tab_id": "t1", "url": "https://shop.test/", "title": "Shop", "text": "Find books",
+                "actions": [
+                    {"id": "e1", "node": 1, "kind": "fill", "role": "searchbox", "label": "Query", "value": typed},
+                    {"id": "e2", "node": 1, "kind": "click", "role": "searchbox", "label": "Open Query", "value": typed},
+                    {"id": "e3", "node": 2, "kind": "click", "role": "button", "label": "Search", "value": ""}
+                ],
+                "dialog": null, "viewport": {"scroll_y": 0}
+            })
+        }
+    }
+
+    #[async_trait]
+    impl BrowserPort for SearchBox {
+        async fn call(&self, _method: &str, path: &str, body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" {
+                return Ok(json!({ "id": "s1" }));
+            }
+            if path.ends_with("/tabs") {
+                return Ok(json!({ "tab": { "id": "t1" }, "observation": self.page() }));
+            }
+            if path.ends_with("/act") {
+                let body = body.unwrap_or_default();
+                match body["action_id"].as_str() {
+                    Some("e1") => *self.typed.lock().unwrap() = body["text"].as_str().map(str::to_string),
+                    Some("e3") => *self.searched.lock().unwrap() = true,
+                    _ => {}
+                }
+                return Ok(json!({ "executed": body["action_id"], "observation": self.page() }));
+            }
+            Ok(self.page())
+        }
+    }
+
+    /// Clicks into an empty query box (the "open, then type" habit), searches
+    /// once it holds text, and says DONE on results.
+    struct OpenThenSearch;
+
+    #[async_trait]
+    impl Decider for OpenThenSearch {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            let text = serde_json::to_string(&request.state).unwrap();
+            if request.questions.get("c1").is_some() {
+                let ok = text.contains("Results for books");
+                return Ok(json!({ "c1": { "type": "noul", "noul": if ok { 0.95 } else { 0.05 }, "confidence": 0.9 } }));
+            }
+            let ops: Vec<String> = request.questions.get("operation").and_then(|q| q.get("criteria")).and_then(|c| c.as_object())
+                .map(|o| o.iter().map(|(k, _)| k.clone()).collect()).unwrap_or_default();
+            let ops: Vec<&str> = ops.iter().map(String::as_str).collect();
+            if text.contains("Results") {
+                return Ok(json!({ "operation": choice(&ops, "DONE", 0.95) }));
+            }
+            let clicks: Vec<String> = request.questions.get("click_target").and_then(|q| q.get("criteria")).and_then(|c| c.as_object())
+                .map(|o| o.iter().map(|(k, _)| k.clone()).collect()).unwrap_or_default();
+            let clicks: Vec<&str> = clicks.iter().map(String::as_str).collect();
+            let criteria = serde_json::to_string(&request.questions).unwrap();
+            let target = if criteria.contains("= 'books'") { clicks[1] } else { clicks[0] };
+            Ok(json!({ "operation": choice(&ops, "CLICK", 0.95), "click_target": choice(&clicks, target, 0.9) }))
+        }
+    }
+
+    struct WritesBooks;
+
+    #[async_trait]
+    impl Llm for WritesBooks {
+        async fn complete(&self, _m: Option<&str>, _s: &str, _u: &str, _t: u32) -> Result<String, String> {
+            Ok(r#"{"text":"books"}"#.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn clicking_into_a_text_field_leads_to_typing_in_it() {
+        let site = Arc::new(SearchBox { typed: Default::default(), searched: Default::default(), seq: AtomicU64::new(0) });
+        let ports = Ports { browser: site, decider: Arc::new(OpenThenSearch), llm: Arc::new(WritesBooks) };
+        let mut s = spec("Search for books");
+        s.done_criteria = vec!["Results for books are shown".into()];
+        let out = start(&ports, BrowserSettings::default(), s).await;
+        assert_eq!(out.status, "done", "{}: {:?}", out.message, out.steps);
+        let ops: Vec<(&str, &str)> = out.steps.iter().map(|s| (s.operation.as_str(), s.by)).collect();
+        assert_eq!(ops, [("CLICK", "jev"), ("TYPE_TEXT", "rule"), ("CLICK", "jev")]);
+        assert_eq!(out.steps[1].text.as_deref(), Some("books"));
+    }
+
+    #[test]
+    fn quoted_criteria_are_checked_literally() {
+        let page = "3 flights from Zurich to London · Economy class";
+        assert_eq!(missing_quote("The flights shown are \"Business class\"", page).as_deref(), Some("Business class"));
+        assert_eq!(missing_quote("The page lists \"London\" flights", page), None);
+        assert_eq!(missing_quote("Shows “economy CLASS”", page), None, "case-insensitive, curly quotes");
+        assert_eq!(missing_quote("The page does not show \"Error\"", page), None, "negations go to the models");
+        assert_eq!(missing_quote("Business class flights are shown", page), None, "nothing quoted");
     }
 
     #[tokio::test]
