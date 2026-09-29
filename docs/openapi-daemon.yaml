@@ -524,6 +524,23 @@ paths:
       - background
       x-handler: runs
       x-untyped: true
+  /api/browser-agent/approvals:
+    get:
+      operationId: get_api_browser_agent_approvals
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Approvals list
+      tags:
+      - browser-agent
+      x-handler: approvals_list
+      x-untyped: true
   /api/browser-agent/approvals/{id}:
     post:
       operationId: post_api_browser_agent_approvals_id
@@ -10753,5 +10770,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 382
-x-untyped-operations: 471
+x-route-count: 383
+x-untyped-operations: 472

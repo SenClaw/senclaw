@@ -1233,6 +1233,8 @@ impl IntoResponse for AppError {
 /// gated by the auth middleware.
 pub async fn start_ui_server(state: Arc<UiState>, port: u16) -> Result<()> {
     let host = state.config.ui_server.bind_host.clone();
+    // The browser tools must never open SenClaw's own API (it trusts loopback).
+    crate::browser_agent::policy::set_own_ports(&[port, state.ws_port]);
     let api_auth = Arc::clone(&state.api_auth);
     let router = build_router(state).layer(axum::middleware::from_fn_with_state(
         api_auth,

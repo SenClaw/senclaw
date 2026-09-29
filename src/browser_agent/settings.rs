@@ -105,9 +105,10 @@ impl Default for BrowserSettings {
 impl BrowserSettings {
     /// Refuse values the loop cannot use, with a message for a person.
     pub fn validated(self) -> Result<BrowserSettings, String> {
-        let name_ok = |s: &str| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
+        // The runtime's own limit for a profile directory name.
+        let name_ok = |s: &str| !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_');
         if !name_ok(&self.profile) {
-            return Err("profile: use lowercase letters, digits, - or _ (at most 64)".into());
+            return Err("profile: use lowercase letters, digits, - or _ (at most 40)".into());
         }
         if !(1..=120).contains(&self.max_steps) {
             return Err("maxSteps: between 1 and 120".into());

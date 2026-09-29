@@ -22,36 +22,48 @@ pub enum Tier {
     Human,
 }
 
-/// Words that make a click consequential, English and Vietnamese (diacritics
-/// folded). Matched on word boundaries so "Sendai" is not "send".
+/// Words that make an action consequential, English and Vietnamese
+/// (diacritics folded). Matched as whole words, a phrase's words in order with
+/// up to two words between them: "Place your order" is "place order", while
+/// "Sendai" is not "send" and "Books" is not "book". A false alarm costs one
+/// confirmation; a miss is a purchase nobody approved.
 const RISKY: &[&str] = &[
-    "buy", "purchase", "pay", "payment", "checkout", "check out", "place order", "order now", "book now",
-    "reserve", "confirm", "submit order", "send", "post", "publish", "tweet", "reply", "delete", "remove",
-    "cancel subscription", "unsubscribe", "transfer", "donate", "subscribe", "sign up", "register", "withdraw",
-    "mua", "mua ngay", "thanh toan", "dat hang", "dat ngay", "dat ve", "dat phong", "xac nhan", "gui", "dang bai",
-    "dang tin", "xoa", "huy", "chuyen khoan", "chuyen tien", "dang ky", "nap tien", "rut tien", "ung ho",
+    "buy", "purchase", "pay", "payment", "checkout", "check out", "place order", "complete order", "confirm order",
+    "order now", "submit", "book", "booking", "reserve", "confirm", "send", "post", "publish", "tweet", "reply",
+    "post comment", "add comment", "share", "delete", "remove", "trash", "discard", "cancel subscription", "unsubscribe", "transfer",
+    "donate", "subscribe", "sign up", "register", "withdraw", "sell", "bid", "apply now",
+    "mua", "thanh toan", "dat hang", "dat ngay", "dat ve", "dat phong", "dat cho", "hoan tat", "xac nhan", "gui",
+    "dang bai", "dang tin", "binh luan", "chia se", "xoa", "huy", "chuyen khoan", "chuyen tien", "dang ky",
+    "nap tien", "rut tien", "ung ho",
 ];
 
 const SEARCH_WORDS: &[&str] = &["search", "query", "find", "tim", "tim kiem", "tra cuu"];
 
-fn has_word(haystack: &str, word: &str) -> bool {
-    let hay = fold(haystack);
-    let mut start = 0;
-    while let Some(pos) = hay[start..].find(word) {
-        let i = start + pos;
-        let before = hay[..i].chars().next_back();
-        let after = hay[i + word.len()..].chars().next();
-        let boundary = |c: Option<char>| c.map(|c| !c.is_alphanumeric()).unwrap_or(true);
-        if boundary(before) && boundary(after) {
-            return true;
+fn tokens(text: &str) -> Vec<String> {
+    fold(text).split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).map(str::to_string).collect()
+}
+
+/// `phrase`'s words appear in `text`, in order, each within two words of the last.
+fn has_phrase(text: &[String], phrase: &str) -> bool {
+    let want: Vec<&str> = phrase.split(' ').collect();
+    (0..text.len()).any(|start| {
+        if text[start] != want[0] {
+            return false;
         }
-        start = i + word.len();
-    }
-    false
+        let mut at = start;
+        want[1..].iter().all(|w| match text[at + 1..text.len().min(at + 4)].iter().position(|t| t == w) {
+            Some(offset) => {
+                at += 1 + offset;
+                true
+            }
+            None => false,
+        })
+    })
 }
 
 fn any_word(text: &str, words: &'static [&'static str]) -> Option<&'static str> {
-    words.iter().copied().find(|w| has_word(text, w))
+    let text = tokens(text);
+    words.iter().copied().find(|w| has_phrase(&text, w))
 }
 
 /// The tier of executing `operation` on `action`, with the reason shown to the person.
@@ -74,16 +86,30 @@ pub fn risk_tier(operation: &str, action: &Value, dialog_type: Option<&str>) -> 
             None => (Tier::Auto, String::new()),
         },
         "SELECT" => (Tier::Logged, "dropdown choice".into()),
+        // Enter submits: a search is harmless; a text area or a chat box may
+        // send what was typed; otherwise it presses the form's own button.
         "KEY_ENTER" => {
-            if any_word(label, SEARCH_WORDS).is_some() {
-                (Tier::Auto, "submit a search".into())
-            } else {
-                (Tier::Logged, "submit a field".into())
+            let flag = |k: &str| action.get(k).and_then(Value::as_bool) == Some(true);
+            if flag("search") || any_word(label, SEARCH_WORDS).is_some() {
+                return (Tier::Auto, "submit a search".into());
+            }
+            if flag("multiline") {
+                return (Tier::Approve, format!("{label} may send what was typed"));
+            }
+            match action.get("submit").and_then(Value::as_str) {
+                Some(submit) => match any_word(submit, RISKY) {
+                    Some(word) => (Tier::Approve, format!("Enter presses \"{submit}\" ({word})")),
+                    None => (Tier::Logged, format!("Enter presses \"{submit}\"")),
+                },
+                None => (Tier::Approve, format!("{label}: what Enter does outside a form is unknown")),
             }
         }
+        // Only an alert is harmless to accept; confirm, prompt and
+        // beforeunload are decisions, and an unknown dialog is treated as one.
         "DIALOG_ACCEPT" => match dialog_type {
-            Some("alert") | None => (Tier::Auto, String::new()),
+            Some("alert") => (Tier::Auto, String::new()),
             Some(kind) => (Tier::Approve, format!("accept a {kind} dialog")),
+            None => (Tier::Approve, "accept a dialog".into()),
         },
         _ => (Tier::Auto, String::new()),
     }
@@ -109,9 +135,35 @@ pub fn redact_pii(text: &str) -> String {
         .into_owned()
 }
 
+static OWN_PORTS: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+
+/// The daemon's own ports (UI and WebSocket gateway), set once at start.
+pub fn set_own_ports(ports: &[u16]) {
+    let _ = OWN_PORTS.set(ports.to_vec());
+}
+
+/// A page on this machine at one of SenClaw's own ports. Its API answers any
+/// loopback caller in the default auth mode, so a tab there could read the
+/// settings, provider keys included, for whoever is steering the agent.
+pub fn is_own_api(url: &str) -> bool {
+    OWN_PORTS.get().is_some_and(|ports| is_local_port(url, ports))
+}
+
+fn is_local_port(url: &str, ports: &[u16]) -> bool {
+    let Ok(u) = reqwest::Url::parse(url.trim()) else { return false };
+    let host = u.host_str().unwrap_or_default().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    let local = host == "localhost"
+        || host.ends_with(".localhost")
+        || host.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback() || ip.is_unspecified()).unwrap_or(false);
+    local && u.port_or_known_default().is_some_and(|p| ports.contains(&p))
+}
+
+/// The host a browser would contact (WHATWG parsing: `https://evil.test\\@mail.google.com/` is evil.test).
 pub fn host_of(url: &str) -> String {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    rest.split(['/', '?', '#']).next().unwrap_or_default().split('@').last().unwrap_or_default().split(':').next().unwrap_or_default().to_ascii_lowercase()
+    reqwest::Url::parse(url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase()))
+        .unwrap_or_default()
 }
 
 fn matches_domain(host: &str, domain: &str) -> bool {
@@ -223,7 +275,32 @@ mod tests {
         assert_eq!(risk_tier("TYPE_TEXT", &search, None).0, Tier::Auto);
         assert_eq!(risk_tier("DIALOG_ACCEPT", &json!({}), Some("confirm")).0, Tier::Approve);
         assert_eq!(risk_tier("DIALOG_ACCEPT", &json!({}), Some("alert")).0, Tier::Auto);
+        assert_eq!(risk_tier("DIALOG_ACCEPT", &json!({}), None).0, Tier::Approve, "an unknown dialog is a decision");
         assert_eq!(risk_tier("SCROLL_DOWN", &json!({}), None).0, Tier::Auto);
+    }
+
+    #[test]
+    fn final_purchase_labels_need_the_person() {
+        for label in ["Place your order", "Complete booking", "Book", "Submit", "Complete order", "Move to trash", "Pay now", "Hoàn tất đặt chỗ"] {
+            assert_eq!(risk_tier("CLICK", &click(label), None).0, Tier::Approve, "{label}");
+        }
+        for label in ["Books", "Order by price", "53 comments", "Facebook", "Cài đặt", "Đăng nhập", "Free cancellation"] {
+            assert_eq!(risk_tier("CLICK", &click(label), None).0, Tier::Auto, "{label}");
+        }
+    }
+
+    #[test]
+    fn enter_is_judged_by_what_it_submits() {
+        let enter = |extra: Value| {
+            let mut a = json!({"id": "key_enter", "kind": "key", "label": "Press Enter in Message"});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            risk_tier("KEY_ENTER", &a, None).0
+        };
+        assert_eq!(enter(json!({"search": true})), Tier::Auto);
+        assert_eq!(enter(json!({"multiline": true})), Tier::Approve, "a chat box sends on Enter");
+        assert_eq!(enter(json!({"submit": "Place order"})), Tier::Approve);
+        assert_eq!(enter(json!({"submit": "Sign in"})), Tier::Logged);
+        assert_eq!(enter(json!({})), Tier::Approve, "outside a form Enter may do anything");
     }
 
     #[test]
@@ -261,5 +338,14 @@ mod tests {
         s.decision_backend = DecisionBackend::LlmOnly;
         assert_eq!(select_backend(&s, "https://example.com/", Driver::Managed), DecisionRoute::LlmOnly);
         assert_eq!(host_of("https://user@Sub.Example.com:8443/path?q=1"), "sub.example.com");
+        assert_eq!(host_of("https://evil.test\\@mail.google.com/"), "evil.test", "a backslash ends the host");
+        assert_eq!(host_of("not a url"), "");
+        let own = [18788, 18789];
+        for url in ["http://127.0.0.1:18788/api/llm-config", "http://localhost:18789/", "http://[::1]:18788/x", "http://0.0.0.0:18788/"] {
+            assert!(is_local_port(url, &own), "{url}");
+        }
+        for url in ["http://127.0.0.1:28795/", "https://example.com:18788/", "http://127.0.0.1/"] {
+            assert!(!is_local_port(url, &own), "{url}");
+        }
     }
 }

@@ -36,10 +36,31 @@ type AppState = Arc<AgentState>;
 static SHOWN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Value>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
+const MAX_SHOWN: usize = 256;
+
 fn remember_shown(tab: &str, obs: &Value) {
     if let Ok(mut m) = SHOWN.lock() {
+        if m.len() >= MAX_SHOWN && !m.contains_key(tab) {
+            if let Some(k) = m.keys().next().cloned() {
+                m.remove(&k);
+            }
+        }
         m.insert(tab.to_string(), obs.clone());
     }
+}
+
+fn forget_shown(tab: &str) {
+    if let Ok(mut m) = SHOWN.lock() {
+        m.remove(tab);
+    }
+}
+
+/// SenClaw's own API is never a page the browser tools may open or read.
+fn refuse_own_api(url: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    if policy::is_own_api(url) {
+        return Err(err(StatusCode::FORBIDDEN, "blocked", "SenClaw's own API is off limits to the browser"));
+    }
+    Ok(())
 }
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
@@ -96,6 +117,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(state: AppState) -> Router<S> {
         .route("/api/browser-agent/settings", get(settings_get).put(settings_put))
         .route("/api/browser-agent/tasks", post(task))
         .route("/api/browser-agent/tasks/:id/resume", post(task_resume))
+        .route("/api/browser-agent/approvals", get(approvals_list))
         .route("/api/browser-agent/approvals/:id", post(approval))
         .route("/api/browser-agent/look", post(look))
         .route("/api/browser-agent/do", post(do_step))
@@ -184,6 +206,9 @@ async fn task(State(s): State<AppState>, Json(req): Json<TaskReq>) -> ApiResult 
     if req.goal.trim().is_empty() || req.goal.len() > 4000 {
         return Err(err(StatusCode::BAD_REQUEST, "bad_goal", "goal must be 1-4000 characters"));
     }
+    if let Some(url) = req.url.as_deref() {
+        refuse_own_api(url)?;
+    }
     let requested = parse_driver(req.browser.as_deref())?;
     let driver = s.driver(requested, req.url.as_deref()).await?;
     let ports = s.ports()?;
@@ -202,6 +227,10 @@ async fn task(State(s): State<AppState>, Json(req): Json<TaskReq>) -> ApiResult 
 }
 
 async fn task_resume(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
+    // A task paused in the person's Chrome needs the extension pipe again.
+    if run::driver_of_task(&id) == Some(Driver::Extension) {
+        s.driver(Some(Driver::Extension), None).await?;
+    }
     let ports = s.ports()?;
     match run::resume(&ports, &id).await {
         Some(out) => Ok(Json(serde_json::to_value(out).unwrap_or_default())),
@@ -214,7 +243,16 @@ struct ApprovalReq {
     approve: bool,
 }
 
+/// Actions waiting for the person — for the settings screens, which approve
+/// through the route below without going through an agent.
+async fn approvals_list() -> Json<Value> {
+    Json(json!({ "approvals": run::pending_approvals() }))
+}
+
 async fn approval(State(s): State<AppState>, Path(id): Path<String>, Json(req): Json<ApprovalReq>) -> ApiResult {
+    if run::driver_of_approval(&id) == Some(Driver::Extension) {
+        s.driver(Some(Driver::Extension), None).await?;
+    }
     let ports = s.ports()?;
     match run::approve(&ports, &id, req.approve).await {
         Some(out) => Ok(Json(serde_json::to_value(out).unwrap_or_default())),
@@ -229,15 +267,32 @@ struct TabReq {
     tab_id: Option<String>,
 }
 
-/// The chat's current tab for this driver.
+/// The chat's current tab for this driver — only ever a tab this chat opened.
+/// A remembered id that no longer names one (closed, or the runtime restarted
+/// and its ids started over) is forgotten, never followed into another chat's tab.
 async fn current_tab(s: &AgentState, req: &TabReq) -> Result<(String, Driver), (StatusCode, Json<Value>)> {
     let driver = s.driver(parse_driver(req.browser.as_deref())?, None).await?;
-    if let Some(t) = req.tab_id.clone().filter(|t| !t.is_empty()) {
-        return Ok((t, driver));
-    }
-    run::chat_tab(&owner(req.chat_jid.as_deref()), driver)
-        .map(|t| (t, driver))
-        .ok_or_else(|| err(StatusCode::NOT_FOUND, "no_tab", "this chat has no browser tab yet; open a page first (browser_open or browser_task)"))
+    let who = owner(req.chat_jid.as_deref());
+    let no_tab = || err(StatusCode::NOT_FOUND, "no_tab", "this chat has no open browser tab; open a page first (browser_open or browser_task)");
+    let tab = match req.tab_id.clone().filter(|t| !t.is_empty()) {
+        Some(t) => t,
+        None => run::chat_tab(&who, driver).ok_or_else(no_tab)?,
+    };
+    let ports = s.ports()?;
+    let sessions = ports.browser.call("GET", "/v1/sessions", None).await.map_err(port_err)?;
+    let owned = sessions["sessions"].as_array().into_iter().flatten().flat_map(|s| s["tabs"].as_array().into_iter().flatten()).find(|t| {
+        t["id"].as_str() == Some(tab.as_str()) && t["owner"].as_str() == Some(who.as_str()) && t["closed"] != Value::Bool(true)
+    });
+    let Some(owned) = owned else {
+        if run::chat_tab(&who, driver).as_deref() == Some(tab.as_str()) {
+            run::forget_chat_tab(&who, driver);
+        }
+        forget_shown(&tab);
+        return Err(no_tab());
+    };
+    // A link can lead there even though opening it is refused.
+    refuse_own_api(owned["url"].as_str().unwrap_or_default())?;
+    Ok((tab, driver))
 }
 
 fn port_err(e: ports::PortError) -> (StatusCode, Json<Value>) {
@@ -261,6 +316,7 @@ async fn look(State(s): State<AppState>, Json(req): Json<TabReq>) -> ApiResult {
     let (tab, _) = current_tab(&s, &req).await?;
     let ports = s.ports()?;
     let obs = ports::observe(ports.browser.as_ref(), &tab).await.map_err(port_err)?;
+    refuse_own_api(obs["url"].as_str().unwrap_or_default())?;
     remember_shown(&tab, &obs);
     Ok(Json(table(&obs)))
 }
@@ -277,7 +333,7 @@ struct DoReq {
 
 /// One step chosen by the LLM itself (after `look`), under the same policy.
 async fn do_step(State(s): State<AppState>, Json(req): Json<DoReq>) -> ApiResult {
-    let (tab, _) = current_tab(&s, &req.tab).await?;
+    let (tab, driver) = current_tab(&s, &req.tab).await?;
     let ports = s.ports()?;
     let shown = SHOWN.lock().ok().and_then(|m| m.get(&tab).cloned()).unwrap_or(Value::Null);
     if shown.get("observation_id").and_then(Value::as_u64) != Some(req.observation_id) {
@@ -290,7 +346,13 @@ async fn do_step(State(s): State<AppState>, Json(req): Json<DoReq>) -> ApiResult
         None => encoded.space.control(&operation).cloned(),
     }
     .ok_or_else(|| err(StatusCode::BAD_REQUEST, "not_offered", format!("{operation} {:?} is not offered on that page", req.target)))?;
-    let (tier, reason) = policy::risk_tier(&operation, &action, None);
+    let dialog_type = shown.pointer("/dialog/type").and_then(Value::as_str);
+    let (mut tier, mut reason) = policy::risk_tier(&operation, &action, dialog_type);
+    if tier < policy::Tier::Approve {
+        if let Some(raised) = run::manual_step_raises_risk(&ports, &s.settings(), driver, &shown, &operation, &action).await {
+            (tier, reason) = (policy::Tier::Approve, raised);
+        }
+    }
     if tier >= policy::Tier::Approve {
         return Err(err(
             StatusCode::FORBIDDEN,
@@ -318,6 +380,7 @@ struct OpenReq {
 }
 
 async fn open(State(s): State<AppState>, Json(req): Json<OpenReq>) -> ApiResult {
+    refuse_own_api(&req.url)?;
     let driver = s.driver(parse_driver(req.tab.browser.as_deref())?, Some(&req.url)).await?;
     let ports = s.ports()?;
     let settings = s.settings();
@@ -341,6 +404,7 @@ async fn read(State(s): State<AppState>, Json(req): Json<ReadReq>) -> ApiResult 
     let (tab, _) = current_tab(&s, &req.tab).await?;
     let ports = s.ports()?;
     let page = ports::read(ports.browser.as_ref(), &tab, req.max_chars.unwrap_or(20_000)).await.map_err(port_err)?;
+    refuse_own_api(page["url"].as_str().unwrap_or_default())?;
     match req.question.filter(|q| !q.trim().is_empty()) {
         Some(q) => {
             let settings = s.settings();
@@ -387,14 +451,26 @@ struct TabsQuery {
     chat_jid: Option<String>,
 }
 
+/// Open tabs. A chat (the agent's `browser_tabs`) sees only its own; the
+/// settings screens, asking for no chat, see all. Pairing codes are never here.
 async fn tabs(State(s): State<AppState>, Query(q): Query<TabsQuery>) -> ApiResult {
     let ports = s.ports()?;
     let sessions = ports.browser.call("GET", "/v1/sessions", None).await.map_err(port_err)?;
-    let who = owner(q.chat_jid.as_deref());
+    let mut sessions = sessions.get("sessions").cloned().unwrap_or(json!([]));
+    let chat = q.chat_jid.as_deref().map(str::trim).filter(|j| !j.is_empty());
+    if let (Some(who), Some(list)) = (chat, sessions.as_array_mut()) {
+        for session in list.iter_mut() {
+            if let Some(tabs) = session.get_mut("tabs").and_then(Value::as_array_mut) {
+                tabs.retain(|t| t["owner"].as_str() == Some(who));
+            }
+        }
+        list.retain(|s| s["tabs"].as_array().is_some_and(|t| !t.is_empty()));
+    }
+    let who = owner(chat);
     Ok(Json(json!({
-        "sessions": sessions.get("sessions"),
+        "sessions": sessions,
         "current": { "managed": run::chat_tab(&who, Driver::Managed), "extension": run::chat_tab(&who, Driver::Extension) },
-        "extension": extension::hub().status(),
+        "extension": { "connected": extension::hub().is_connected(), "shared_tabs": extension::hub().shared_tabs() },
     })))
 }
 
@@ -492,6 +568,48 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(look.status(), StatusCode::OK);
+
+        // Another chat can neither steer that tab nor see it.
+        let other_look = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post("/api/browser-agent/look")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(json!({ "chat_jid": "other-chat", "tab_id": "t1" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other_look.status(), StatusCode::NOT_FOUND);
+        let tabs_of = |chat: &'static str| {
+            let app = app.clone();
+            async move {
+                let r = app
+                    .oneshot(axum::http::Request::get(format!("/api/browser-agent/tabs?chat_jid={chat}")).body(axum::body::Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+                serde_json::from_slice::<Value>(&bytes).unwrap()
+            }
+        };
+        assert_eq!(tabs_of("rest-chat").await["sessions"][0]["tabs"][0]["id"], "t1");
+        let other = tabs_of("other-chat").await;
+        assert_eq!(other["sessions"], json!([]), "{other}");
+        assert!(other["extension"].get("pending").is_none(), "pairing codes stay on the settings screens");
+
+        // SenClaw's own API is not a page the browser tools may open.
+        crate::browser_agent::policy::set_own_ports(&[18788, 18789]);
+        let own = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post("/api/browser-agent/open")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(json!({ "chat_jid": "rest-chat", "url": "http://127.0.0.1:18788/api/llm-config" }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(own.status(), StatusCode::FORBIDDEN);
 
         // A bad browser value is a clear 400.
         let bad = app

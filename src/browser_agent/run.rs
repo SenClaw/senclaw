@@ -19,7 +19,7 @@ use super::encoder::{encode, to_json, HistoryItem, Profile};
 use super::llm::{self as llm_role, TextValue};
 use super::policy::{self, DecisionRoute, Tier};
 use super::ports::{self, PortError, Ports};
-use super::prompts::VERIFY;
+use super::prompts::{RISK, VERIFY};
 use super::settings::{BrowserSettings, Driver};
 use crate::decision::json::Json;
 use crate::decision::types::{AskRequest, Backend};
@@ -115,6 +115,14 @@ struct TaskState {
     tried: Vec<u64>,
     /// A text field the last step clicked into without changing the page.
     type_into: Option<i64>,
+    /// Steps and decisions already spent when this run began: a resumed task
+    /// gets a fresh budget instead of stopping at once.
+    budget_base: (u32, u32),
+    /// Recoverable failures in a row (the page changed under the target).
+    stale_streak: u32,
+    /// Answers of the raise-only risk check, by page and action.
+    risk_checked: HashMap<u64, bool>,
+    parked_at: Option<Instant>,
 }
 
 /// Paused tasks by task id, and approvals → task id.
@@ -122,6 +130,17 @@ static TASKS: LazyLock<Mutex<HashMap<String, TaskState>>> = LazyLock::new(|| Mut
 static APPROVALS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 /// The tab each chat works in, per driver: `owner|driver` → tab id.
 static CHAT_TABS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Tasks driving the person's Chrome right now (the extension pipe stays open while any run).
+static RUNNING_EXTENSION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Paused tasks kept for resume or approval; the oldest goes first.
+const MAX_PARKED: usize = 100;
+const MAX_CHAT_TABS: usize = 512;
+/// One run of the loop, so a tool call always gets an answer: the task parks
+/// as `budget` (resumable) instead of being cut off by the caller's timeout.
+const RUN_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(14 * 60);
+/// Recoverable failures in a row before the task waits for the person.
+const MAX_STALE_STREAK: u32 = 5;
 
 pub fn chat_tab(owner: &str, driver: Driver) -> Option<String> {
     CHAT_TABS.lock().ok()?.get(&format!("{owner}|{}", driver.as_str())).cloned()
@@ -129,7 +148,87 @@ pub fn chat_tab(owner: &str, driver: Driver) -> Option<String> {
 
 pub fn remember_chat_tab(owner: &str, driver: Driver, tab: &str) {
     if let Ok(mut m) = CHAT_TABS.lock() {
+        if m.len() >= MAX_CHAT_TABS {
+            if let Some(k) = m.keys().next().cloned() {
+                m.remove(&k);
+            }
+        }
         m.insert(format!("{owner}|{}", driver.as_str()), tab.to_string());
+    }
+}
+
+/// The remembered tab is gone (closed, or the runtime restarted).
+pub fn forget_chat_tab(owner: &str, driver: Driver) {
+    if let Ok(mut m) = CHAT_TABS.lock() {
+        m.remove(&format!("{owner}|{}", driver.as_str()));
+    }
+}
+
+/// The driver of the paused task an approval belongs to.
+pub fn driver_of_approval(approval_id: &str) -> Option<Driver> {
+    let task = APPROVALS.lock().ok()?.get(approval_id)?.clone();
+    driver_of_task(&task)
+}
+
+pub fn driver_of_task(task_id: &str) -> Option<Driver> {
+    TASKS.lock().ok()?.get(task_id).map(|t| t.spec.driver)
+}
+
+/// How long a task paused in the person's Chrome keeps the extension pipe
+/// (and so its tabs) open while it waits for them.
+const PARKED_LEASE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Whether a task needs the extension pipe: one running in the person's
+/// Chrome, or one paused there recently enough to still be answered.
+pub fn extension_busy() -> bool {
+    RUNNING_EXTENSION.load(std::sync::atomic::Ordering::SeqCst) > 0
+        || TASKS
+            .lock()
+            .map(|t| {
+                t.values().any(|s| s.spec.driver == Driver::Extension && s.parked_at.is_none_or(|at| at.elapsed() < PARKED_LEASE))
+            })
+            .unwrap_or(true)
+}
+
+/// Every action waiting for the person, for the settings screens.
+pub fn pending_approvals() -> Vec<Value> {
+    let Ok(tasks) = TASKS.lock() else { return Vec::new() };
+    let mut list: Vec<(Instant, Value)> = tasks
+        .values()
+        .filter_map(|s| {
+            let p = s.pending.as_ref()?;
+            Some((
+                s.parked_at.unwrap_or_else(Instant::now),
+                json!({
+                    "approval_id": p.approval_id, "task_id": s.id, "chat": s.spec.owner, "goal": s.spec.goal,
+                    "action": p.label, "operation": p.operation, "text": p.text, "driver": s.spec.driver,
+                    "url": s.observation.get("url"), "waiting_secs": s.parked_at.map(|t| t.elapsed().as_secs()),
+                }),
+            ))
+        })
+        .collect();
+    list.sort_by_key(|(t, _)| *t);
+    list.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Leaves the running-in-the-person's-Chrome count however the run ends.
+struct ExtensionRun(bool);
+
+impl ExtensionRun {
+    fn start(driver: Driver) -> ExtensionRun {
+        let on = driver == Driver::Extension;
+        if on {
+            RUNNING_EXTENSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        ExtensionRun(on)
+    }
+}
+
+impl Drop for ExtensionRun {
+    fn drop(&mut self) {
+        if self.0 {
+            RUNNING_EXTENSION.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 }
 
@@ -168,11 +267,96 @@ fn fill_action(obs: &Value, node: i64) -> Option<Value> {
 
 /// One action from one page state. Pages are deterministic enough that taking
 /// the same action from the same state again only repeats a detour.
-fn cycle_key(obs: &Value, operation: &str, label: &str, text: Option<&str>) -> u64 {
+fn cycle_key(obs: &Value, operation: &str, action: &Value, text: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (fingerprint_unfocused(obs), operation, label, text).hash(&mut h);
+    let element = (action.get("id").and_then(Value::as_str), action.get("node").and_then(Value::as_i64), action.get("label").and_then(Value::as_str));
+    (fingerprint_unfocused(obs), operation, element, text).hash(&mut h);
     h.finish()
+}
+
+/// Hosted decisions see no personal data: page text, element labels and
+/// values, and what was typed, masked the same way.
+fn redact_view(view: &mut Value) {
+    if let Some(t) = view.get("text").and_then(Value::as_str).map(policy::redact_pii) {
+        view["text"] = Value::String(t);
+    }
+    if let Some(actions) = view.get_mut("actions").and_then(Value::as_array_mut) {
+        for a in actions {
+            for key in ["label", "value", "current_value"] {
+                if let Some(v) = a.get(key).and_then(Value::as_str).map(policy::redact_pii) {
+                    a[key] = Value::String(v);
+                }
+            }
+        }
+    }
+}
+
+fn redacted_history(history: &[HistoryItem]) -> Vec<HistoryItem> {
+    history
+        .iter()
+        .map(|h| HistoryItem {
+            action: policy::redact_pii(&h.action),
+            kind: h.kind.clone(),
+            text: h.text.as_deref().map(policy::redact_pii),
+            page_changed: h.page_changed,
+        })
+        .collect()
+}
+
+/// The design's backstop behind the word lists: the decision model may raise
+/// a click or an Enter to Approve, never lower anything. Asked once per page
+/// state and action; no decision model (or no answer) raises nothing.
+async fn model_raises_risk(ports: &Ports, state: &mut TaskState, route: &DecisionRoute, obs: &Value, operation: &str, action: &Value) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    if !matches!(operation, "CLICK" | "KEY_ENTER") {
+        return None;
+    }
+    let DecisionRoute::Model { backend, redact, .. } = route else { return None };
+    let label = action.get("label").and_then(Value::as_str).unwrap_or_default();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (fingerprint_unfocused(obs), operation, label).hash(&mut h);
+    let key = h.finish();
+    let raised = match state.risk_checked.get(&key) {
+        Some(r) => *r,
+        None => {
+            state.stats.decisions += 1;
+            let raised = risk_answer(ports, *backend, *redact, obs, label).await;
+            state.risk_checked.insert(key, raised);
+            raised
+        }
+    };
+    raised.then(|| format!("\"{label}\" may be irreversible (decision model)"))
+}
+
+/// The same raise-only check for one step chosen by hand (`browser_do`).
+pub async fn manual_step_raises_risk(ports: &Ports, settings: &BrowserSettings, driver: Driver, obs: &Value, operation: &str, action: &Value) -> Option<String> {
+    if !matches!(operation, "CLICK" | "KEY_ENTER") {
+        return None;
+    }
+    let url = obs.get("url").and_then(Value::as_str).unwrap_or_default();
+    let DecisionRoute::Model { backend, redact, .. } = policy::select_backend(settings, url, driver) else { return None };
+    let label = action.get("label").and_then(Value::as_str).unwrap_or_default();
+    risk_answer(ports, backend, redact, obs, label)
+        .await
+        .then(|| format!("\"{label}\" may be irreversible (decision model)"))
+}
+
+async fn risk_answer(ports: &Ports, backend: Backend, redact: bool, obs: &Value, label: &str) -> bool {
+    let text = text_of(obs, 1200);
+    let page = json!({
+        "page": { "url": obs.get("url"), "title": obs.get("title"), "text": if redact { policy::redact_pii(&text) } else { text } },
+        "action": if redact { policy::redact_pii(label) } else { label.to_string() },
+    });
+    let questions = Json::Object(vec![(
+        "risk".into(),
+        Json::Object(vec![("type".into(), Json::String("noul".into())), ("instructions".into(), Json::String(RISK.into()))]),
+    )]);
+    let request = AskRequest { backend: Some(backend), model: None, state: to_json(&page), questions };
+    match ports.decider.ask(&request).await {
+        Ok(a) => a.pointer("/risk/noul").and_then(Value::as_f64).is_some_and(|p| p >= 0.7),
+        Err(_) => false,
+    }
 }
 
 fn outcome(state: &TaskState, status: &str, message: impl Into<String>) -> TaskOutcome {
@@ -246,6 +430,10 @@ pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> 
         pending: None,
         tried: Vec::new(),
         type_into: None,
+        budget_base: (0, 0),
+        stale_streak: 0,
+        risk_checked: HashMap::new(),
+        parked_at: None,
     };
     drive(ports, state).await
 }
@@ -257,6 +445,8 @@ pub async fn resume(ports: &Ports, task_id: &str) -> Option<TaskOutcome> {
         APPROVALS.lock().ok()?.remove(&p.approval_id);
     }
     state.observation = Value::Null;
+    state.budget_base = (state.stats.steps, state.stats.decisions);
+    state.stale_streak = 0;
     Some(drive(ports, state).await)
 }
 
@@ -328,7 +518,16 @@ fn park(mut state: TaskState, status: &str, message: String, pending: Option<Pen
         }
     }
     state.pending = pending;
+    state.parked_at = Some(Instant::now());
     if let Ok(mut t) = TASKS.lock() {
+        while t.len() >= MAX_PARKED {
+            let Some(oldest) = t.iter().min_by_key(|(_, s)| s.parked_at).map(|(k, _)| k.clone()) else { break };
+            if let Some(gone) = t.remove(&oldest) {
+                if let (Some(p), Ok(mut a)) = (gone.pending, APPROVALS.lock()) {
+                    a.remove(&p.approval_id);
+                }
+            }
+        }
         t.insert(state.id.clone(), state);
     }
     out
@@ -381,6 +580,7 @@ async fn execute(
             });
             state.observation = next;
             state.text_cache = None;
+            state.stale_streak = 0;
             Ok(())
         }
         Err(e) => {
@@ -400,6 +600,10 @@ async fn execute(
             });
             if recoverable {
                 state.stats.stale += 1;
+                state.stale_streak += 1;
+                if state.stale_streak >= MAX_STALE_STREAK {
+                    return Err(park(state.clone(), "needs_user", format!("The page keeps changing under \"{label}\"; it needs a look"), None));
+                }
                 state.observation = ports::observe(ports.browser.as_ref(), &state.tab).await.unwrap_or(Value::Null);
                 return Ok(());
             }
@@ -538,10 +742,16 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
     let started = Instant::now();
     let max_steps = state.spec.max_steps.unwrap_or(state.settings.max_steps).clamp(1, 120);
     let base_elapsed = state.stats.elapsed_ms;
+    let _extension_run = ExtensionRun::start(state.spec.driver);
     loop {
         state.stats.elapsed_ms = base_elapsed + started.elapsed().as_millis() as u64;
-        if state.stats.steps >= max_steps || state.stats.decisions >= max_steps * 2 {
-            return park(state, "budget", format!("Stopped at the {max_steps}-step budget"), None);
+        let (steps_before_run, decisions_before_run) = state.budget_base;
+        if state.stats.steps - steps_before_run >= max_steps || state.stats.decisions - decisions_before_run >= max_steps * 2 {
+            return park(state, "budget", format!("Stopped at the {max_steps}-step budget; resume to go on"), None);
+        }
+        if started.elapsed() >= RUN_WALL_CLOCK {
+            let minutes = RUN_WALL_CLOCK.as_secs() / 60;
+            return park(state, "budget", format!("Stopped after {minutes} minutes; resume to go on"), None);
         }
         if state.observation.is_null() {
             match ports::observe(ports.browser.as_ref(), &state.tab).await {
@@ -555,6 +765,9 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         let obs = state.observation.clone();
         let observation_id = obs.get("observation_id").and_then(Value::as_u64).unwrap_or(0);
         let url = obs.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
+        if policy::is_own_api(&url) {
+            return park(state, "blocked", "The browser reached SenClaw's own API, which is off limits".into(), None);
+        }
 
         // Rule tier: a dialog blocks the page.
         if let Some(dialog) = obs.get("dialog").filter(|d| !d.is_null()) {
@@ -586,9 +799,12 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         // again, it would open it again.
         let focused = state.type_into.take().and_then(|node| fill_action(&obs, node));
 
-        // Decision tier.
+        // Decision tier. Every pass counts against the budget, whichever tier answers.
         let route = policy::select_backend(&state.settings, &url, state.spec.driver);
         let decision_started = Instant::now();
+        if focused.is_none() {
+            state.stats.decisions += 1;
+        }
         let mut model_step: Option<Step> = None;
         let mut guesses = Value::Null;
         let mut encoded_for_llm = None;
@@ -600,14 +816,11 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
             DecisionRoute::Model { profile, backend, model, redact } => {
                 let (mut view, _) = if *profile == Profile::LayaV3 { budget::prune(&obs, &state.spec.goal, state.option_chars) } else { (obs.clone(), 0) };
                 if *redact {
-                    let t = view.get("text").and_then(Value::as_str).map(policy::redact_pii);
-                    if let Some(t) = t {
-                        view["text"] = Value::String(t);
-                    }
+                    redact_view(&mut view);
                 }
                 let bands = if *backend == Backend::Online { state.settings.bands_hosted } else { state.settings.bands_local };
-                let encoded = encode(&view, &state.spec.goal, &state.history, *profile, model.clone(), Some(*backend));
-                state.stats.decisions += 1;
+                let history = if *redact { redacted_history(&state.history) } else { state.history.clone() };
+                let encoded = encode(&view, &state.spec.goal, &history, *profile, model.clone(), Some(*backend));
                 match ports.decider.ask(&encoded.request).await {
                     Ok(answers) => match resolve(&answers, &encoded, bands) {
                         Ok(step) => {
@@ -703,7 +916,7 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         }
 
         // Policy: code decides, no model can lower a tier.
-        let dialog_type = None;
+        let dialog_type = obs.pointer("/dialog/type").and_then(Value::as_str);
         let (tier, reason) = policy::risk_tier(&operation, &action, dialog_type);
         match tier {
             Tier::Human => {
@@ -723,7 +936,21 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                 };
                 return park(state, "needs_approval", format!("Needs the person's approval: {reason}"), Some(pending));
             }
-            Tier::Auto | Tier::Logged => {}
+            Tier::Auto | Tier::Logged => {
+                if let Some(reason) = model_raises_risk(ports, &mut state, &route, &obs, &operation, &action).await {
+                    let pending = Pending {
+                        approval_id: new_id("apv"),
+                        observation_id,
+                        action_id,
+                        operation,
+                        label: label.clone(),
+                        kind,
+                        text: None,
+                        reject_action: None,
+                    };
+                    return park(state, "needs_approval", format!("Needs the person's approval: {reason}"), Some(pending));
+                }
+            }
         }
 
         // Text for TYPE_TEXT: generated once per identical input.
@@ -754,7 +981,7 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         // led back here (Search → empty results → New search → Search …).
         // The LLM gets the step; if it picks the same action, stop — a page
         // change alone is not progress.
-        let key = cycle_key(&obs, &operation, &label, text.as_deref());
+        let key = cycle_key(&obs, &operation, &action, text.as_deref());
         if state.tried.contains(&key) {
             if by == "llm" {
                 return park(state, "blocked", format!("Going in circles: \"{label}\" was already tried from this same page"), None);
@@ -810,11 +1037,18 @@ pub(crate) mod tests {
         pub seq: AtomicU64,
         /// When false, clicking changes nothing (a dead button).
         pub responsive: bool,
+        /// The chat that opened tab t1, as the runtime records it.
+        pub owner: std::sync::Mutex<Option<String>>,
     }
 
     impl FakeBrowser {
         pub fn new(responsive: bool) -> Arc<FakeBrowser> {
-            Arc::new(FakeBrowser { clicked: std::sync::Mutex::new(false), seq: AtomicU64::new(0), responsive })
+            Arc::new(FakeBrowser {
+                clicked: std::sync::Mutex::new(false),
+                seq: AtomicU64::new(0),
+                responsive,
+                owner: std::sync::Mutex::new(None),
+            })
         }
 
         fn page(&self) -> Value {
@@ -834,11 +1068,17 @@ pub(crate) mod tests {
 
     #[async_trait]
     impl BrowserPort for FakeBrowser {
-        async fn call(&self, _method: &str, path: &str, _body: Option<Value>) -> Result<Value, PortError> {
+        async fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" && method == "GET" {
+                let owner = self.owner.lock().unwrap().clone();
+                let tabs: Vec<Value> = owner.into_iter().map(|o| json!({ "id": "t1", "owner": o, "closed": false })).collect();
+                return Ok(json!({ "sessions": [{ "id": "s1", "tabs": tabs }] }));
+            }
             if path == "/v1/sessions" {
                 return Ok(json!({ "id": "s1" }));
             }
             if path.ends_with("/tabs") {
+                *self.owner.lock().unwrap() = body.and_then(|b| b["owner"].as_str().map(str::to_string));
                 return Ok(json!({ "tab": { "id": "t1" }, "observation": self.page() }));
             }
             if path.ends_with("/act") {
@@ -1061,6 +1301,9 @@ pub(crate) mod tests {
     #[async_trait]
     impl Decider for OpenThenSearch {
         async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            if request.questions.get("risk").is_some() {
+                return Ok(json!({ "risk": { "type": "noul", "noul": 0.02, "confidence": 0.9 } }));
+            }
             let text = serde_json::to_string(&request.state).unwrap();
             if request.questions.get("c1").is_some() {
                 let ok = text.contains("Results for books");
@@ -1111,6 +1354,36 @@ pub(crate) mod tests {
         assert_eq!(missing_quote("Shows “economy CLASS”", page), None, "case-insensitive, curly quotes");
         assert_eq!(missing_quote("The page does not show \"Error\"", page), None, "negations go to the models");
         assert_eq!(missing_quote("Business class flights are shown", page), None, "nothing quoted");
+    }
+
+    /// The same decisions, but the model judges the click irreversible.
+    struct SeesRisk;
+
+    #[async_trait]
+    impl Decider for SeesRisk {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            if request.questions.get("risk").is_some() {
+                return Ok(json!({ "risk": { "type": "noul", "noul": 0.9, "confidence": 0.9 } }));
+            }
+            FakeDecider.ask(request).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_decision_model_can_add_a_pause_but_never_remove_one() {
+        let ports = Ports { browser: FakeBrowser::new(true), decider: Arc::new(SeesRisk), llm: Arc::new(NoLlm) };
+        let mut task = spec("Search for books");
+        task.owner = "risk-chat".into();
+        let out = start(&ports, BrowserSettings::default(), task).await;
+        assert_eq!(out.status, "needs_approval", "{}", out.message);
+        assert!(out.message.contains("decision model"), "{}", out.message);
+        let id = out.pending.as_ref().and_then(|p| p["approval_id"].as_str()).unwrap().to_string();
+        let listed = pending_approvals();
+        assert!(listed.iter().any(|a| a["approval_id"] == id.as_str() && a["action"] == "Search"), "{listed:?}");
+        // Declining ends the wait and leaves nothing pending.
+        let declined = approve(&ports, &id, false).await.expect("known approval");
+        assert_ne!(declined.status, "needs_approval");
+        assert!(!pending_approvals().iter().any(|a| a["approval_id"] == id.as_str()));
     }
 
     #[tokio::test]

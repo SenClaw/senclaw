@@ -13,7 +13,11 @@
 //!   the extension then keeps is stored here only as a SHA-256.
 //! - **Pipe.** `drv` frames are forwarded verbatim to the browser runtime's
 //!   `/v1/drivers/extension`, opened when a task needs the extension and
-//!   closed after ten idle minutes so the runtime can stop.
+//!   closed after ten minutes without traffic — never while a task runs or
+//!   waits for the person — so the runtime can stop. The runtime forgets every
+//!   tab of a closed pipe, so the extension is told (`pipe_closed`) and lets
+//!   go of them; tabs the person shared are kept here and offered again to
+//!   the next pipe.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,6 +35,7 @@ use crate::runtime::manager::RuntimeManager;
 
 const CODE_TTL: Duration = Duration::from_secs(600);
 const PIPE_IDLE: Duration = Duration::from_secs(600);
+const MAX_SHARED: usize = 32;
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 static RUNTIME: OnceLock<Arc<RuntimeManager>> = OnceLock::new();
@@ -69,13 +74,52 @@ struct Paired {
     paired_at: String,
 }
 
+/// One open pipe to the runtime. The generation scopes its teardown: the
+/// reader of a pipe that ended must never close the one that replaced it.
+struct Pipe {
+    generation: u64,
+    tx: mpsc::UnboundedSender<String>,
+}
+
 struct Conn {
     id: u64,
     ext_id: String,
     hello: Value,
     to_ext: mpsc::UnboundedSender<String>,
-    pipe: Option<mpsc::UnboundedSender<String>>,
+    pipe: Option<Pipe>,
     last_used: Instant,
+    /// Tabs the person shared from the side panel (`{tab, url, title}`).
+    shared: Vec<Value>,
+}
+
+impl Conn {
+    fn new(id: u64, ext_id: String, hello: Value, to_ext: mpsc::UnboundedSender<String>) -> Conn {
+        Conn { id, ext_id, hello, to_ext, pipe: None, last_used: Instant::now(), shared: Vec::new() }
+    }
+
+    /// Drop the pipe and tell the extension, which then lets go of every tab
+    /// the runtime was driving: the runtime has already forgotten them.
+    fn close_pipe(&mut self) {
+        if self.pipe.take().is_some() {
+            let _ = self.to_ext.send(json!({ "ch": "ctl", "t": "pipe_closed" }).to_string());
+        }
+    }
+
+    /// Keep the person's shares current from the frames the extension sends.
+    fn track_shares(&mut self, frame: &Value) {
+        let tab = frame.get("tab").and_then(Value::as_i64);
+        match frame.get("t").and_then(Value::as_str) {
+            Some("shared_tab") => {
+                self.shared.retain(|s| s.get("tab").and_then(Value::as_i64) != tab);
+                if self.shared.len() >= MAX_SHARED {
+                    self.shared.remove(0);
+                }
+                self.shared.push(json!({ "tab": tab, "url": frame.get("url"), "title": frame.get("title") }));
+            }
+            Some("tab_closed") | Some("detached") => self.shared.retain(|s| s.get("tab").and_then(Value::as_i64) != tab),
+            _ => {}
+        }
+    }
 }
 
 struct PendingPair {
@@ -96,6 +140,10 @@ pub struct Hub {
     store: PathBuf,
     state: Mutex<HubState>,
     next_conn: AtomicU64,
+    next_pipe: AtomicU64,
+    /// One pipe is opened at a time: two tasks starting together would each
+    /// dial the runtime, and its second relay replaces (and forgets) the first.
+    opening: tokio::sync::Mutex<()>,
 }
 
 static HUB: LazyLock<Hub> =
@@ -107,7 +155,13 @@ pub fn hub() -> &'static Hub {
 
 impl Hub {
     pub fn new(store: PathBuf) -> Hub {
-        Hub { store, state: Mutex::new(HubState::default()), next_conn: AtomicU64::new(1) }
+        Hub {
+            store,
+            state: Mutex::new(HubState::default()),
+            next_conn: AtomicU64::new(1),
+            next_pipe: AtomicU64::new(1),
+            opening: tokio::sync::Mutex::new(()),
+        }
     }
 
     fn paired(&self) -> Vec<Paired> {
@@ -137,6 +191,11 @@ impl Hub {
         self.state.lock().map(|s| s.conn.is_some()).unwrap_or(false)
     }
 
+    /// Tabs the person shared from the side panel, which a task can adopt.
+    pub fn shared_tabs(&self) -> Vec<Value> {
+        self.state.lock().ok().and_then(|s| s.conn.as_ref().map(|c| c.shared.clone())).unwrap_or_default()
+    }
+
     pub fn status(&self) -> Value {
         let state = self.state.lock().expect("hub lock");
         let pending: Vec<Value> = state
@@ -146,7 +205,7 @@ impl Hub {
             .map(|(code, p)| json!({ "code": code, "ext_id": p.ext_id, "age_secs": p.created.elapsed().as_secs() }))
             .collect();
         json!({
-            "connected": state.conn.as_ref().map(|c| json!({ "ext_id": c.ext_id, "version": c.hello.get("v"), "chrome": c.hello.get("chrome"), "piped": c.pipe.is_some() })),
+            "connected": state.conn.as_ref().map(|c| json!({ "ext_id": c.ext_id, "version": c.hello.get("v"), "chrome": c.hello.get("chrome"), "piped": c.pipe.is_some(), "shared_tabs": c.shared })),
             "pending": pending,
             "paired": self.paired().iter().map(|p| json!({ "ext_id": p.ext_id, "paired_at": p.paired_at })).collect::<Vec<_>>(),
         })
@@ -177,17 +236,20 @@ impl Hub {
     }
 
     /// A person approved `code`: mint the token, keep only its hash, hand it to
-    /// the waiting extension and make that connection the live one.
+    /// the waiting extension and make that connection the live one. All under
+    /// one lock, so a socket closing meanwhile either took its code with it or
+    /// finds its connection registered and removes it — never leaves a dead
+    /// connection in place of a live one.
     pub fn approve_code(&self, code: &str) -> Result<String, String> {
         let code = code.trim().to_ascii_uppercase();
-        let pending = {
-            let mut state = self.state.lock().map_err(|_| "hub lock poisoned")?;
-            let p = state.pending.remove(&code).ok_or_else(|| format!("no extension is waiting with code {code}"))?;
-            if p.created.elapsed() >= CODE_TTL {
-                return Err(format!("code {code} expired; open the side panel to get a new one"));
-            }
-            p
-        };
+        let mut state = self.state.lock().map_err(|_| "hub lock poisoned")?;
+        let pending = state.pending.remove(&code).ok_or_else(|| format!("no extension is waiting with code {code}"))?;
+        if pending.created.elapsed() >= CODE_TTL {
+            return Err(format!("code {code} expired; open the side panel to get a new one"));
+        }
+        if pending.to_ext.is_closed() {
+            return Err("that extension disconnected; open its side panel to get a new code".into());
+        }
         let token = {
             use rand::RngCore;
             let mut bytes = [0u8; 32];
@@ -198,15 +260,9 @@ impl Hub {
         paired.push(Paired { ext_id: pending.ext_id.clone(), token_sha256: sha256_hex(&token), paired_at: chrono::Utc::now().to_rfc3339() });
         self.save_paired(&paired)?;
         let _ = pending.to_ext.send(json!({ "ch": "ctl", "t": "paired", "token": token }).to_string());
-        self.register(Conn {
-            id: pending.conn_id,
-            ext_id: pending.ext_id.clone(),
-            hello: pending.hello,
-            to_ext: pending.to_ext,
-            pipe: None,
-            last_used: Instant::now(),
-        });
-        Ok(pending.ext_id)
+        let ext_id = pending.ext_id.clone();
+        Self::register_locked(&mut state, Conn::new(pending.conn_id, pending.ext_id, pending.hello, pending.to_ext));
+        Ok(ext_id)
     }
 
     pub fn revoke(&self, ext_id: &str) -> Result<bool, String> {
@@ -215,7 +271,8 @@ impl Hub {
         self.save_paired(&after)?;
         let mut state = self.state.lock().map_err(|_| "hub lock poisoned")?;
         if state.conn.as_ref().map(|c| c.ext_id == ext_id).unwrap_or(false) {
-            if let Some(c) = state.conn.take() {
+            if let Some(mut c) = state.conn.take() {
+                c.close_pipe();
                 let _ = c.to_ext.send(json!({ "ch": "ctl", "t": "revoked" }).to_string());
             }
         }
@@ -224,7 +281,12 @@ impl Hub {
 
     fn register(&self, conn: Conn) {
         let mut state = self.state.lock().expect("hub lock");
-        if let Some(old) = state.conn.replace(conn) {
+        Self::register_locked(&mut state, conn);
+    }
+
+    fn register_locked(state: &mut HubState, conn: Conn) {
+        if let Some(mut old) = state.conn.replace(conn) {
+            old.close_pipe();
             let _ = old.to_ext.send(json!({ "ch": "ctl", "t": "replaced" }).to_string());
         }
     }
@@ -237,34 +299,67 @@ impl Hub {
         }
     }
 
-    fn forward_to_runtime(&self, conn_id: u64, frame: String) {
-        let state = self.state.lock().expect("hub lock");
-        if let Some(conn) = state.conn.as_ref().filter(|c| c.id == conn_id) {
+    /// A frame from the live extension: counts as use, updates its shares and
+    /// goes on to the runtime when a pipe is open.
+    fn forward_to_runtime(&self, conn_id: u64, frame: String, parsed: &Value) {
+        let Ok(mut state) = self.state.lock() else { return };
+        if let Some(conn) = state.conn.as_mut().filter(|c| c.id == conn_id) {
+            conn.last_used = Instant::now();
+            conn.track_shares(parsed);
             if let Some(pipe) = &conn.pipe {
-                let _ = pipe.send(frame);
+                let _ = pipe.tx.send(frame);
             }
         }
     }
 
-    fn clear_pipe(&self, conn_id: u64) {
+    /// Runtime traffic toward the extension counts as use too.
+    fn touch(&self, conn_id: u64) {
         if let Ok(mut state) = self.state.lock() {
             if let Some(conn) = state.conn.as_mut().filter(|c| c.id == conn_id) {
-                conn.pipe = None;
+                conn.last_used = Instant::now();
+            }
+        }
+    }
+
+    /// The runtime closed pipe `generation`; a newer pipe stays open.
+    fn clear_pipe(&self, conn_id: u64, generation: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(conn) = state.conn.as_mut().filter(|c| c.id == conn_id) {
+                if conn.pipe.as_ref().is_some_and(|p| p.generation == generation) {
+                    conn.close_pipe();
+                }
+            }
+        }
+    }
+
+    /// Close an idle pipe so the runtime can stop — never while a task needs it.
+    fn sweep_idle(&self, busy: bool) {
+        if busy {
+            return;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(conn) = state.conn.as_mut() {
+                if conn.pipe.is_some() && conn.last_used.elapsed() > PIPE_IDLE {
+                    conn.close_pipe();
+                }
             }
         }
     }
 
     /// Make sure the runtime can reach the extension; called before a task
-    /// that runs in the person's Chrome.
+    /// that runs in the person's Chrome, and before one paused there resumes.
     pub async fn ensure_pipe(&'static self, manager: Arc<RuntimeManager>) -> Result<(), String> {
-        let (conn_id, hello, to_ext) = {
+        let _opening = self.opening.lock().await;
+        let (conn_id, hello, to_ext, shared) = {
             let mut state = self.state.lock().map_err(|_| "hub lock poisoned")?;
             let conn = state.conn.as_mut().ok_or("the SenClaw extension is not connected")?;
             conn.last_used = Instant::now();
-            if conn.pipe.as_ref().map(|p| !p.is_closed()).unwrap_or(false) {
+            if conn.pipe.as_ref().is_some_and(|p| !p.tx.is_closed()) {
                 return Ok(());
             }
-            (conn.id, conn.hello.clone(), conn.to_ext.clone())
+            // A pipe whose writer ended: its relay and tabs are gone in the runtime.
+            conn.close_pipe();
+            (conn.id, conn.hello.clone(), conn.to_ext.clone(), conn.shared.clone())
         };
         let dial = manager
             .ensure_slot_started(sen_runtime_sdk::manifest::Slot::Browser)
@@ -280,6 +375,7 @@ impl Hub {
         let (ws, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| format!("cannot open the runtime pipe: {e}"))?;
         let (mut sink, mut stream) = ws.split();
         let (pipe_tx, mut pipe_rx) = mpsc::unbounded_channel::<String>();
+        let generation = self.next_pipe.fetch_add(1, Ordering::SeqCst);
         manager.begin_request(&dial.process_key);
         tokio::spawn(async move {
             while let Some(frame) = pipe_rx.recv().await {
@@ -295,11 +391,12 @@ impl Hub {
             tokio::spawn(async move {
                 while let Some(Ok(msg)) = stream.next().await {
                     if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
+                        hub().touch(conn_id);
                         let _ = to_ext.send(text.to_string());
                     }
                 }
                 manager.end_request(&key);
-                hub().clear_pipe(conn_id);
+                hub().clear_pipe(conn_id, generation);
             });
         }
         let runtime_hello = json!({
@@ -307,10 +404,17 @@ impl Hub {
             "ext": hello.get("ext"), "v": hello.get("v"), "scripts": hello.get("scripts"), "chrome": hello.get("chrome"),
         });
         let _ = pipe_tx.send(runtime_hello.to_string());
+        // The runtime keeps shares per relay: offer the person's again.
+        for s in &shared {
+            let _ = pipe_tx.send(json!({ "ch": "drv", "t": "shared_tab", "tab": s.get("tab"), "url": s.get("url"), "title": s.get("title") }).to_string());
+        }
         {
             let mut state = self.state.lock().map_err(|_| "hub lock poisoned")?;
-            if let Some(conn) = state.conn.as_mut().filter(|c| c.id == conn_id) {
-                conn.pipe = Some(pipe_tx);
+            match state.conn.as_mut().filter(|c| c.id == conn_id) {
+                Some(conn) => conn.pipe = Some(Pipe { generation, tx: pipe_tx }),
+                // The extension reconnected while the runtime started; this pipe
+                // answers a socket that no longer exists (dropping it closes it).
+                None => return Err("the SenClaw extension reconnected meanwhile; try again".into()),
             }
         }
         // Give the runtime a moment to register the relay before the task opens a session.
@@ -328,13 +432,9 @@ fn spawn_idle_sweeper() {
     tokio::spawn(async {
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            if let Ok(mut state) = hub().state.lock() {
-                if let Some(conn) = state.conn.as_mut() {
-                    if conn.pipe.is_some() && conn.last_used.elapsed() > PIPE_IDLE {
-                        conn.pipe = None;
-                    }
-                }
-            }
+            // Read before taking the hub lock: the two locks are never held together.
+            let busy = super::run::extension_busy();
+            hub().sweep_idle(busy);
         }
     });
 }
@@ -373,7 +473,7 @@ pub async fn handle_socket(socket: axum::extract::ws::WebSocket, ext_id: String)
     }
     let token = hello.get("token").and_then(Value::as_str);
     if hub.verify_token(&ext_id, token) {
-        hub.register(Conn { id: conn_id, ext_id: ext_id.clone(), hello: hello.clone(), to_ext: to_ext.clone(), pipe: None, last_used: Instant::now() });
+        hub.register(Conn::new(conn_id, ext_id.clone(), hello.clone(), to_ext.clone()));
         let _ = to_ext.send(json!({ "ch": "ctl", "t": "welcome" }).to_string());
     } else {
         let code = hub.request_pairing(conn_id, &ext_id, hello.clone(), to_ext.clone());
@@ -389,7 +489,7 @@ pub async fn handle_socket(socket: axum::extract::ws::WebSocket, ext_id: String)
             Message::Text(text) => {
                 let Ok(frame) = serde_json::from_str::<Value>(&text) else { continue };
                 match frame.get("ch").and_then(Value::as_str) {
-                    Some("drv") => hub.forward_to_runtime(conn_id, text),
+                    Some("drv") => hub.forward_to_runtime(conn_id, text, &frame),
                     Some("ctl") if frame.get("t").and_then(Value::as_str) == Some("ping") => {
                         let _ = to_ext.send(json!({ "ch": "ctl", "t": "pong" }).to_string());
                     }
@@ -445,5 +545,79 @@ mod tests {
         assert!(hub.revoke(EXT).unwrap());
         assert!(!hub.verify_token(EXT, Some(&token)));
         assert!(!hub.is_connected());
+    }
+
+    #[test]
+    fn a_code_from_a_closed_socket_installs_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::new(dir.path().join("extensions.json"));
+        let (live_tx, mut live_rx) = mpsc::unbounded_channel();
+        hub.register(Conn::new(1, EXT.into(), json!({}), live_tx));
+        let (dead_tx, dead_rx) = mpsc::unbounded_channel::<String>();
+        let code = hub.request_pairing(2, EXT, json!({}), dead_tx);
+        drop(dead_rx);
+        assert!(hub.approve_code(&code).is_err());
+        assert_eq!(hub.state.lock().unwrap().conn.as_ref().unwrap().id, 1, "the live connection stays");
+        assert!(live_rx.try_recv().is_err(), "and is not told it was replaced");
+    }
+
+    #[test]
+    fn shares_survive_until_the_person_takes_the_tab_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::new(dir.path().join("extensions.json"));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        hub.register(Conn::new(1, EXT.into(), json!({}), tx));
+        let share = |tab: i64| json!({ "ch": "drv", "t": "shared_tab", "tab": tab, "url": format!("https://{tab}.test/"), "title": "t" });
+        for frame in [share(5), share(6), share(5)] {
+            hub.forward_to_runtime(1, frame.to_string(), &frame);
+        }
+        let tabs: Vec<i64> = hub.shared_tabs().iter().filter_map(|s| s["tab"].as_i64()).collect();
+        assert_eq!(tabs, vec![6, 5], "a share of the same tab replaces the old one");
+        let closed = json!({ "ch": "drv", "t": "tab_closed", "tab": 6 });
+        hub.forward_to_runtime(1, closed.to_string(), &closed);
+        let taken = json!({ "ch": "drv", "t": "detached", "tab": 5, "reason": "stopped_by_user" });
+        hub.forward_to_runtime(1, taken.to_string(), &taken);
+        assert!(hub.shared_tabs().is_empty());
+        // Frames from a connection that is not the live one change nothing.
+        hub.forward_to_runtime(9, share(7).to_string(), &share(7));
+        assert!(hub.shared_tabs().is_empty());
+    }
+
+    #[test]
+    fn only_the_pipe_that_ended_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::new(dir.path().join("extensions.json"));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        hub.register(Conn::new(1, EXT.into(), json!({}), tx));
+        let (pipe_tx, _pipe_rx) = mpsc::unbounded_channel();
+        hub.state.lock().unwrap().conn.as_mut().unwrap().pipe = Some(Pipe { generation: 2, tx: pipe_tx });
+
+        hub.clear_pipe(1, 1); // the reader of an older pipe ends late
+        assert!(hub.state.lock().unwrap().conn.as_ref().unwrap().pipe.is_some());
+        assert!(rx.try_recv().is_err());
+
+        hub.clear_pipe(1, 2);
+        assert!(hub.state.lock().unwrap().conn.as_ref().unwrap().pipe.is_none());
+        let told: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(told["t"], "pipe_closed", "the extension lets go of the runtime's tabs");
+    }
+
+    #[test]
+    fn an_idle_pipe_stays_open_while_a_task_needs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::new(dir.path().join("extensions.json"));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        hub.register(Conn::new(1, EXT.into(), json!({}), tx));
+        let (pipe_tx, _pipe_rx) = mpsc::unbounded_channel();
+        {
+            let mut state = hub.state.lock().unwrap();
+            let conn = state.conn.as_mut().unwrap();
+            conn.pipe = Some(Pipe { generation: 1, tx: pipe_tx });
+            conn.last_used = Instant::now() - PIPE_IDLE - Duration::from_secs(1);
+        }
+        hub.sweep_idle(true);
+        assert!(hub.state.lock().unwrap().conn.as_ref().unwrap().pipe.is_some());
+        hub.sweep_idle(false);
+        assert!(hub.state.lock().unwrap().conn.as_ref().unwrap().pipe.is_none());
     }
 }

@@ -40,6 +40,10 @@ struct TaskParams {
     /// person's Chrome with their sign-ins — only when they ask for it), or "auto".
     #[serde(default)]
     browser: Option<String>,
+    /// Work in a tab the person shared from the SenClaw side panel (its `tab`
+    /// from browser_tabs → extension.shared_tabs). Implies browser="extension".
+    #[serde(default)]
+    shared_tab: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -179,9 +183,10 @@ impl McpBrowserAgentServer {
         description = "Do a whole task on the web: SenClaw's browser loop observes the page, a decision model picks each click/typing/choice in ~0.2-1 s, an LLM writes field values, and DONE is only accepted after the page is checked. Prefer this over step-by-step tools. Returns status: done (with `answer` if you asked a `question`), needs_approval (show `pending.action` to the person and call browser_approve only after they agree), needs_user (sign-in, code or CAPTCHA: call browser_handover), needs_input (ask the person for the missing value), blocked, budget or unverified. Runs in SenClaw's own Chrome profile unless browser=\"extension\" (the person's Chrome — only when they ask for their own account)."
     )]
     async fn browser_task(&self, Parameters(p): Parameters<TaskParams>) -> String {
+        let browser = if p.shared_tab.is_some() { Some("extension".to_string()) } else { p.browser };
         let body = serde_json::to_value(&json!({
             "goal": p.goal, "url": p.url, "question": p.question, "done_criteria": p.done_criteria,
-            "max_steps": p.max_steps, "browser": p.browser,
+            "max_steps": p.max_steps, "browser": browser, "ext_tab": p.shared_tab,
         }))
         .unwrap_or_default();
         self.post("/api/browser-agent/tasks", body, TASK_TIMEOUT).await
