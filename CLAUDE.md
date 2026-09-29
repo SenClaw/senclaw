@@ -1099,6 +1099,12 @@ Rules for Claude:
   An early return on a loopback peer makes `always` indistinguishable from
   `auto` — and it looks like it works. `tests/daemon_auth_guard.rs` pins the
   order.
+- **Local trust needs a local name and no foreign page** (`local_request`):
+  `Host` loopback (or absent) and `Origin` absent or loopback
+  (`chrome-extension://` only on `/browser*`). Without it DNS rebinding and
+  aliases like `lvh.me` rode the exemption, and any web page — the agent's own
+  browser included — could open the WS gateway (no CORS for WebSockets) and
+  answer permission prompts. Native clients send no `Origin`.
 - **An unrecognised `SENCLAW_AUTH_MODE` falls back to `auto`, never `off`.**
 - **`/api/auth/mode` is gated.** It is the switch that turns the gate off;
   putting it in `OPEN_API_PATHS` hands it to anonymous remote clients.

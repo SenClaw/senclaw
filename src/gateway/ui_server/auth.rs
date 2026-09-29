@@ -287,6 +287,49 @@ pub fn origin_is_loopback(origin: &str) -> bool {
     is_loopback_host(host)
 }
 
+/// The host a request names (`Host`, else the URI authority), port removed.
+fn request_host(req: &Request) -> Option<String> {
+    let raw = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| req.uri().authority().map(|a| a.to_string()))?;
+    // `[::1]:18788` — the port separator is the last ':' *after* any ']'.
+    let host = match raw.rfind(']') {
+        Some(end) => raw[..=end].to_string(),
+        None => raw.split(':').next().unwrap_or("").to_string(),
+    };
+    Some(host)
+}
+
+/// Whether a request may ride the trust given to this machine (no token in
+/// `auto`): it names this machine the way local clients do, and no web page
+/// of another site sent it.
+///
+/// A browser on this machine reaching the daemon under another name — DNS
+/// rebinding, `lvh.me`, `localhost.` — sends that name as `Host`, and pages
+/// under it belong to another site. A page of another site calling
+/// `127.0.0.1` sends its own `Origin`, and nothing like CORS stands between a
+/// page and a WebSocket: without this, any page in any browser here — the
+/// agent's own included — could open the gateway and answer permission
+/// prompts. Native clients (the desktop app, CLI, MCP servers, Space Apps
+/// over reqwest/undici) send no `Origin`; a request with no `Host` is not
+/// from a browser.
+fn local_request(req: &Request) -> bool {
+    if request_host(req).is_some_and(|h| !is_loopback_host(&h)) {
+        return false;
+    }
+    let Some(origin) = req.headers().get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
+        return true;
+    };
+    if origin.starts_with("chrome-extension://") {
+        // Only the extension channels, which check the extension id and pair it.
+        return req.uri().path().starts_with("/browser");
+    }
+    origin_is_loopback(origin)
+}
+
 // ===== Token resolution =====
 
 /// Resolve the daemon API token: env override first, else the persisted
@@ -398,13 +441,17 @@ fn token_from_cookies(headers: &HeaderMap) -> Option<String> {
 /// socket) is treated as remote — fail closed.
 pub fn authorize(auth: &ApiAuth, peer: Option<SocketAddr>, req: &Request) -> bool {
     let mode = auth.effective_mode().0;
-    if !ApiAuth::mode_requires(mode, auth.bind_is_loopback) {
+    if mode == AuthMode::Off {
+        return true;
+    }
+    let local = local_request(req);
+    if !ApiAuth::mode_requires(mode, auth.bind_is_loopback) && local {
         return true;
     }
     // The peer address is only evidence while nothing rewrites it. A
     // TLS-terminating proxy on this host makes every Internet client arrive
     // from 127.0.0.1, which is precisely what `Always` exists to survive.
-    if mode != AuthMode::Always {
+    if mode != AuthMode::Always && local {
         if let Some(p) = peer {
             if p.ip().is_loopback() {
                 return true;
@@ -703,6 +750,44 @@ mod tests {
 
     fn local_peer() -> Option<SocketAddr> {
         Some("127.0.0.1:55555".parse().unwrap())
+    }
+
+    fn local_auto() -> ApiAuth {
+        ApiAuth { bind_is_loopback: true, ..auth_on("tok") }
+    }
+
+    fn built(uri: &str, headers: &[(&str, &str)]) -> Request {
+        let mut b = Request::builder().uri(uri);
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    /// The default posture trusts this machine, but only callers that name it
+    /// as local clients do: another name (DNS rebinding, an alias that
+    /// resolves to 127.0.0.1) or another site's page gets no free pass.
+    #[test]
+    fn local_trust_needs_a_local_host_and_no_foreign_page() {
+        let auth = local_auto();
+        let peer = local_peer();
+        let ok = |uri: &str, headers: &[(&str, &str)]| authorize(&auth, peer, &built(uri, headers));
+        assert!(ok("/api/config", &[("host", "127.0.0.1:18788")]));
+        assert!(ok("/api/config", &[("host", "localhost:18788"), ("origin", "http://localhost:18788")]));
+        assert!(ok("/api/config", &[("host", "[::1]:18788"), ("origin", "http://127.0.0.1:5173")]), "the dev server");
+        assert!(ok("/api/config", &[]), "no Host: not a browser");
+        for host in ["lvh.me:18788", "localhost.:18788", "[::ffff:127.0.0.1]:18788", "evil.test:18788"] {
+            assert!(!ok("/api/llm-config", &[("host", host)]), "{host} rode the local trust");
+            let with_token = [("host", host), ("authorization", "Bearer tok")];
+            assert!(ok("/api/llm-config", &with_token), "{host} with the token");
+        }
+        // Another site's page calling the loopback address (fetch or WebSocket).
+        assert!(!ok("/", &[("host", "127.0.0.1:18789"), ("origin", "https://evil.test")]));
+        assert!(!ok("/", &[("host", "127.0.0.1:18789"), ("origin", "null")]));
+        // Extensions only on the extension channels, which pair them.
+        assert!(ok("/browser/ext", &[("host", "127.0.0.1:18789"), ("origin", "chrome-extension://abcdefghijklmnopabcdefghijklmnop")]));
+        assert!(!ok("/", &[("host", "127.0.0.1:18789"), ("origin", "chrome-extension://abcdefghijklmnopabcdefghijklmnop")]));
+        assert!(!ok("/api/browser-agent/approvals/apv_1", &[("host", "127.0.0.1:18788"), ("origin", "chrome-extension://abcdefghijklmnopabcdefghijklmnop")]));
     }
 
     #[test]

@@ -33,6 +33,24 @@ soát** — nếu để mở thì một client ẩn danh từ xa có thể tự 
 > tiếp — đúng thiết kế. Desktop app trên cùng máy vẫn chạy tiếp (nó tự đọc
 > `~/.senclaw/api_token`); trình duyệt sẽ hiện TokenGate và cần nhập token.
 
+### Tin máy này, nhưng chỉ khi gọi đúng tên máy này
+
+Miễn token của `auto` (và của peer loopback) chỉ áp cho request **gọi daemon
+bằng tên loopback** (`Host` là `localhost`, `127.x.x.x` hoặc `[::1]`, hoặc không
+có `Host`) **và không do trang web của site khác gửi** (không có `Origin`, hoặc
+`Origin` là loopback; `chrome-extension://` chỉ được trên `/browser*` — các
+kênh extension tự kiểm id và ghép cặp). Còn lại phải có token.
+
+- Chặn **DNS rebinding** và tên bí danh trỏ về 127.0.0.1 (`lvh.me`,
+  `localhost.`, `[::ffff:127.0.0.1]`): trình duyệt gửi đúng tên đó trong
+  `Host`, và trang dưới tên đó thuộc site khác.
+- Chặn **cross-site WebSocket**: WebSocket không có CORS, nên trước đây bất kỳ
+  trang nào trong bất kỳ trình duyệt nào trên máy — kể cả Chrome của agent —
+  mở được `ws://127.0.0.1:18789`, đọc sự kiện và **trả lời prompt quyền**.
+- Client native (desktop app, CLI, MCP, Space App gọi bằng reqwest/undici)
+  không gửi `Origin` nên không bị ảnh hưởng. Ai trỏ một tên riêng trong
+  `/etc/hosts` về 127.0.0.1 thì dùng `localhost`, hoặc kèm token.
+
 ### Caller nội bộ
 
 Ở `always`, mọi thứ gọi ngược vào `/api/*` qua loopback cũng phải kèm token:
