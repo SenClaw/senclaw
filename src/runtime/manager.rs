@@ -164,7 +164,9 @@ impl RuntimeManager {
     pub fn logs(&self, id: &str, lines: usize, key: Option<&str>) -> anyhow::Result<(PathBuf, Vec<String>)> {
         let path = self.resolve_log_path(id, key);
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let all: Vec<String> = text.lines().map(str::to_string).collect();
+        // Runtimes built on the SDK before it checked for a terminal colour
+        // their log lines; the log viewers show text, not escape codes.
+        let all: Vec<String> = text.lines().map(strip_ansi).collect();
         let start = all.len().saturating_sub(lines);
         Ok((path, all[start..].to_vec()))
     }
@@ -511,9 +513,41 @@ impl RuntimeManager {
     }
 }
 
+/// A line without its ANSI escape sequences (`ESC [ … final-byte`, and
+/// two-byte `ESC x` forms).
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            chars.next();
+            // Parameters and intermediates, up to the final byte (0x40..=0x7E).
+            for n in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&n) {
+                    break;
+                }
+            }
+        } else {
+            chars.next();
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_lines_lose_their_colour_codes() {
+        let line = "\u{1b}[2m2026-09-29T01:28:02Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m sen-browser 0.1.0 listening";
+        assert_eq!(strip_ansi(line), "2026-09-29T01:28:02Z  INFO sen-browser 0.1.0 listening");
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
     use sen_runtime_sdk::manifest::MANIFEST_FILE;
 
     fn manager(tmp: &std::path::Path) -> Arc<RuntimeManager> {
