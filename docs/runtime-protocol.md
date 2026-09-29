@@ -351,6 +351,8 @@ Clients show that state with a link to Settings → Runtime.
 
 `/api/browser/*` → `browser` is **GET only** (status, tabs): acting on a page goes through the daemon's own
 `/api/browser-agent/*`, which applies the browser engine's risk tiers — a write pass-through would skip them.
+`sen-browser` serves only `/v1/*`, so this one namespace is stripped: `GET /api/browser/v1/sessions` reaches the
+runtime's `GET /v1/sessions`.
 
 ### 5.3 Local models — `/api/local-models`
 

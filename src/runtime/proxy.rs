@@ -62,14 +62,15 @@ pub(crate) fn error_response(err: RuntimeClientError, slot: Slot) -> Response {
 }
 
 /// Ensure the slot's runtime is running, then forward `req` to it verbatim
-/// (same method + path + query, streamed body both ways).
-async fn forward(manager: &Arc<RuntimeManager>, slot: Slot, req: Request) -> Response {
+/// (same method + path + query, streamed body both ways). `strip` removes the
+/// daemon's namespace for a runtime that serves only its own `/v1/*`.
+async fn forward(manager: &Arc<RuntimeManager>, slot: Slot, req: Request, strip: Option<&str>) -> Response {
     let dial = match manager.ensure_slot_started(slot).await {
         Ok(d) => d,
         Err(e) => return error_response(e, slot),
     };
     manager.begin_request(&dial.process_key);
-    match relay(&dial, req, Arc::clone(manager)).await {
+    match relay(&dial, req, Arc::clone(manager), strip).await {
         // `in_flight` stays elevated until the streamed body itself is
         // dropped — see `relay`'s `EndOnDrop` — so no `end_request`
         // here on success.
@@ -111,9 +112,10 @@ impl Drop for EndOnDrop {
 /// responsibility for the matching `end_request` moves to the returned
 /// response body (`EndOnDrop`, dropped when the body is); on `Err` no body was
 /// ever created, so the caller's own `end_request` is what covers it.
-async fn relay(dial: &Dial, req: Request, manager: Arc<RuntimeManager>) -> Result<Response, String> {
+async fn relay(dial: &Dial, req: Request, manager: Arc<RuntimeManager>, strip: Option<&str>) -> Result<Response, String> {
     let method = req.method().clone();
-    let path_and_query = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/").to_string();
+    let path_and_query = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let path_and_query = runtime_path(path_and_query, strip);
     let headers = req.headers().clone();
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, 512 * 1024 * 1024)
@@ -163,22 +165,34 @@ async fn relay(dial: &Dial, req: Request, manager: Arc<RuntimeManager>) -> Resul
     Ok(response)
 }
 
+/// The path the runtime serves: the caller's, minus the daemon's namespace
+/// when the runtime has none of its own (`/api/browser/v1/sessions` →
+/// `/v1/sessions`).
+fn runtime_path(path_and_query: &str, strip: Option<&str>) -> String {
+    match strip.and_then(|prefix| path_and_query.strip_prefix(prefix)) {
+        Some(rest) if rest.starts_with('/') => rest.to_string(),
+        Some(rest) => format!("/{rest}"),
+        None => path_and_query.to_string(),
+    }
+}
+
 macro_rules! slot_proxy_handler {
-    ($name:ident, $slot:expr) => {
+    ($name:ident, $slot:expr, $strip:expr) => {
         pub async fn $name(State(s): State<std::sync::Arc<crate::gateway::ui_server::core::UiState>>, req: Request) -> Response {
             let Some(manager) = s.runtime_manager.as_ref() else {
                 return error_response(RuntimeClientError::Internal("the runtime manager is not wired".into()), $slot);
             };
-            forward(manager, $slot, req).await
+            forward(manager, $slot, req, $strip).await
         }
     };
 }
 
-slot_proxy_handler!(proxy_ocr, Slot::Ocr);
-slot_proxy_handler!(proxy_tts, Slot::Tts);
-slot_proxy_handler!(proxy_whisper, Slot::Asr);
-slot_proxy_handler!(proxy_decision, Slot::Decision);
-slot_proxy_handler!(proxy_browser, Slot::Browser);
+slot_proxy_handler!(proxy_ocr, Slot::Ocr, None);
+slot_proxy_handler!(proxy_tts, Slot::Tts, None);
+slot_proxy_handler!(proxy_whisper, Slot::Asr, None);
+slot_proxy_handler!(proxy_decision, Slot::Decision, None);
+// sen-browser serves `/v1/*` only.
+slot_proxy_handler!(proxy_browser, Slot::Browser, Some("/api/browser"));
 
 // ===== Decision settings: merge daemon-owned gate/skills into the proxied body =====
 
@@ -320,7 +334,7 @@ pub(crate) async fn proxy_model(
         }
     };
     let rewritten = Request::from_parts(parts, body);
-    match relay(&dial, rewritten, Arc::clone(manager)).await {
+    match relay(&dial, rewritten, Arc::clone(manager), None).await {
         // `in_flight` stays elevated until the streamed body itself is
         // dropped — no `end_request` here on success.
         Ok(r) => r,
@@ -347,6 +361,13 @@ mod tests {
             RuntimeClientError::StartFailed { slot: "OCR".into(), detail: "x".into() }.code(),
             "runtime_start_failed"
         );
+    }
+
+    #[test]
+    fn the_browser_namespace_is_stripped_for_its_runtime() {
+        assert_eq!(runtime_path("/api/browser/v1/sessions?x=1", Some("/api/browser")), "/v1/sessions?x=1");
+        assert_eq!(runtime_path("/api/browser", Some("/api/browser")), "/");
+        assert_eq!(runtime_path("/api/ocr/models", None), "/api/ocr/models", "legacy runtimes keep their paths");
     }
 
     #[test]
@@ -411,7 +432,7 @@ mod tests {
         assert_eq!(proc.in_flight.load(std::sync::atomic::Ordering::Relaxed), 1);
 
         let req = Request::builder().method("GET").uri("/slow").body(Body::empty()).unwrap();
-        let resp = relay(&dial, req, Arc::clone(&manager)).await.expect("the upstream must answer");
+        let resp = relay(&dial, req, Arc::clone(&manager), None).await.expect("the upstream must answer");
 
         // Headers are back, but the guard travels with the body, not with
         // this return — the sweep must still see this process as in use.
