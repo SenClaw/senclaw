@@ -153,6 +153,17 @@
       ]
     },
     {
+      "id": "sen-browser",
+      "name": "SenClaw Browser Engine",
+      "type": "browser",
+      "description": "Chrome over CDP for the browser engine: page observation, guarded trusted input and handover, in SenClaw's own Chrome profile or the person's Chrome through the SenClaw extension. No GitHub release package yet: build it with `make package` in the sen-browser checkout, then use Install from a local path.",
+      "slots": ["browser"],
+      "capabilities": ["browser"],
+      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"],
+      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "releases": []
+    },
+    {
       "id": "sen-ocr",
       "name": "SenClaw OCR",
       "type": "ocr",

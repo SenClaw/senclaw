@@ -268,6 +268,17 @@ mod tests {
         assert!(metal.upstream.is_some());
     }
 
+    /// The browser engine's runtime is offered in the catalog (installable
+    /// from a local package until its first release is published).
+    #[test]
+    fn bundled_index_lists_the_browser_runtime() {
+        let index = RuntimeIndex::bundled();
+        let entry = index.entry("sen-browser").expect("sen-browser in the bundled index");
+        assert_eq!(entry.slots, vec![sen_runtime_sdk::manifest::Slot::Browser]);
+        assert!(entry.platforms.iter().any(|p| p == "darwin-arm64"));
+        assert!(entry.channel_version(Channel::Stable).is_some());
+    }
+
     #[test]
     fn published_runtimes_list_real_packages_for_their_stable_version() {
         // The stable channel must name a release that is actually listed, and
