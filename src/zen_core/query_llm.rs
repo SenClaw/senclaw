@@ -195,7 +195,7 @@ pub(crate) async fn post_authed(
             builder = builder.header(name, value);
         }
         let request = apply_auth(builder, profile, &token);
-        let response = request.send().await.context("LLM request failed")?;
+        let response = send_once_more_if_dropped(request, profile).await.context("LLM request failed")?;
 
         let unauthorized = matches!(response.status().as_u16(), 401 | 403);
         let can_retry = attempt == 0 && unauthorized && profile.is_oauth();
@@ -228,6 +228,29 @@ pub(crate) async fn post_authed(
     }
 
     unreachable!("loop returns on the final attempt")
+}
+
+/// Send, and once more after a moment when the connection failed or dropped
+/// before any answer: a blip on the network, and nothing was generated yet.
+/// A timeout is not retried — it already waited out the whole deadline.
+async fn send_once_more_if_dropped(
+    request: reqwest::RequestBuilder,
+    profile: &ModelProfile,
+) -> reqwest::Result<reqwest::Response> {
+    let Some(again) = request.try_clone() else {
+        return request.send().await;
+    };
+    match request.send().await {
+        Err(e) if !e.is_timeout() && (e.is_connect() || e.is_request()) => {
+            tracing::warn!(
+                "[llm] {} dropped the connection before answering; trying once more",
+                profile.provider
+            );
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            again.send().await
+        }
+        other => other,
+    }
 }
 
 // ============================================================================
@@ -1399,6 +1422,14 @@ impl LlmError {
     pub fn classify(err: &anyhow::Error) -> Self {
         let msg = err.to_string();
         let msg_lower = msg.to_lowercase();
+        // The outermost message names the step ("Antigravity request
+        // failed"); a transport failure's reason is further down the chain.
+        // Without it a dropped connection read as unknown and reset the
+        // whole session. The chain can carry the request URL — some
+        // providers put the API key there — so only the root cause, with
+        // any URL masked, is ever shown.
+        let chain_lower = format!("{err:#}").to_lowercase();
+        let cause = mask_urls(&err.root_cause().to_string());
 
         // Check for cancellation first — not an error to report
         if msg_lower.contains("cancelled") || msg_lower.contains("aborted") {
@@ -1465,10 +1496,10 @@ impl LlmError {
         // Network — bare `timeout` / `connection` / `fetch` match MCP tool JSON (timeout_ms,
         // "connection state", "Fetch …") when errors embed the full `tools` payload; classify
         // only clear transport / HTTP-client signals.
-        if looks_like_network_transport_failure(&msg_lower) {
+        if looks_like_network_transport_failure(&msg_lower) || looks_like_network_transport_failure(&chain_lower) {
             return Self {
                 code: "NETWORK_ERROR".into(),
-                message: "Network error — check connectivity".into(),
+                message: format!("Network error — check connectivity ({cause})"),
                 error_type: "api_error".into(),
                 is_context_length: false,
             };
@@ -1488,7 +1519,7 @@ impl LlmError {
         // Default
         Self {
             code: "UNKNOWN_ERROR".into(),
-            message: msg.clone(),
+            message: if cause == msg { msg.clone() } else { format!("{msg}: {cause}") },
             error_type: "api_error".into(),
             is_context_length: false,
         }
@@ -1593,6 +1624,62 @@ fn looks_like_response_parse_failure(msg_lower: &str) -> bool {
         "expected `:`",
     ];
     PHRASES.iter().any(|p| msg_lower.contains(p))
+}
+
+/// `s` with every URL replaced by `<url>`.
+fn mask_urls(s: &str) -> String {
+    s.split(' ')
+        .map(|w| if w.contains("://") { "<url>" } else { w })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod transport_error_tests {
+    use super::*;
+
+    fn wrapped(root: anyhow::Error) -> anyhow::Error {
+        root.context("error sending request for url (https://llm.test/v1?key=SECRET)")
+            .context("LLM request failed")
+            .context("Antigravity request failed")
+    }
+
+    #[test]
+    fn a_dropped_connection_keeps_the_session() {
+        let reset = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "Connection reset by peer (os error 54)");
+        let e = LlmError::classify(&wrapped(anyhow::Error::new(reset)));
+        assert_eq!(e.code, "NETWORK_ERROR", "{}", e.message);
+        assert!(e.message.contains("Connection reset by peer"), "{}", e.message);
+        assert!(!e.message.contains("SECRET"), "{}", e.message);
+    }
+
+    #[test]
+    fn an_unknown_failure_says_why_without_the_url() {
+        let e = LlmError::classify(&anyhow::anyhow!("see https://llm.test/?key=SECRET for details").context("Antigravity request failed"));
+        assert_eq!(e.code, "UNKNOWN_ERROR");
+        assert_eq!(e.message, "Antigravity request failed: see <url> for details");
+    }
+
+    /// The first connection is dropped before any answer; the second answers.
+    #[tokio::test]
+    async fn a_connection_dropped_before_answering_is_tried_once_more() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            drop(first);
+            let (mut second, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = second.read(&mut buf).await;
+            let _ = second.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok").await;
+        });
+        let client = Client::new();
+        let request = client.post(format!("http://{addr}/v1")).json(&serde_json::json!({ "x": 1 }));
+        let profile = ModelProfile::default();
+        let response = send_once_more_if_dropped(request, &profile).await.expect("answered on the second try");
+        assert_eq!(response.text().await.unwrap(), "ok");
+    }
 }
 
 fn extract_http_status(msg: &str) -> Option<u16> {
