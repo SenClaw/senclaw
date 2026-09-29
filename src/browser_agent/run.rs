@@ -1386,6 +1386,51 @@ pub(crate) mod tests {
         assert!(!pending_approvals().iter().any(|a| a["approval_id"] == id.as_str()));
     }
 
+    /// Every click lands on an overlay, and a live counter changes the text each time.
+    struct CoveredSite {
+        seq: AtomicU64,
+    }
+
+    impl CoveredSite {
+        fn page(&self) -> Value {
+            let id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+            json!({
+                "observation_id": id, "tab_id": "t1", "url": "https://shop.test/", "title": "Shop",
+                "text": format!("Find books · {id} people are looking at this"),
+                "actions": [{"id": "e1", "node": 1, "kind": "click", "role": "button", "label": "Search", "value": ""}],
+                "dialog": null, "viewport": {"scroll_y": 0}
+            })
+        }
+    }
+
+    #[async_trait]
+    impl BrowserPort for CoveredSite {
+        async fn call(&self, _method: &str, path: &str, _body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" {
+                return Ok(json!({ "id": "s1" }));
+            }
+            if path.ends_with("/tabs") {
+                return Ok(json!({ "tab": { "id": "t1" }, "observation": self.page() }));
+            }
+            if path.ends_with("/act") {
+                return Err(PortError::new(409, "target_covered", "something covers the target"));
+            }
+            Ok(self.page())
+        }
+    }
+
+    /// With no decision model the LLM picks every step; a page that refuses
+    /// every input must still end the task, with a bounded number of calls.
+    #[tokio::test]
+    async fn an_llm_only_loop_on_a_page_that_refuses_input_stops() {
+        let ports = Ports { browser: Arc::new(CoveredSite { seq: AtomicU64::new(0) }), decider: Arc::new(FakeDecider), llm: Arc::new(SameClickLlm) };
+        let settings = BrowserSettings { decision_backend: crate::browser_agent::settings::DecisionBackend::LlmOnly, ..BrowserSettings::default() };
+        let out = start(&ports, settings, spec("Search for books")).await;
+        assert_eq!(out.status, "needs_user", "{}", out.message);
+        assert!(out.stats.llm_calls <= 6, "bounded ({} LLM calls)", out.stats.llm_calls);
+        assert_eq!(out.stats.steps, 0, "nothing was executed");
+    }
+
     #[tokio::test]
     async fn loop_stops_without_progress() {
         let out = start(&ports(FakeBrowser::new(false)), BrowserSettings::default(), spec("Search for books")).await;
