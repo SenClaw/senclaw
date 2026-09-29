@@ -490,10 +490,24 @@ impl PermissionChecker for PermissionManager {
 
         // 4. MCP tools
         if Self::is_mcp_tool(name) {
+            // Before any skip flag: skipping means nobody is asked, and nobody
+            // asked is not the person's yes. Unattended runs (workflow steps,
+            // background tasks) set every skip flag, so a paused purchase would
+            // otherwise be released on the agent's word. It stays paused, for
+            // the person to answer where SenClaw lists it.
+            if Self::is_per_call_mcp_tool(name) {
+                if self.skip_mcp.load(Ordering::Relaxed) {
+                    anyhow::bail!(
+                        "{name} needs the person's own yes and this session asks nobody; the action stays paused \
+                         until they approve or decline it in SenClaw (Settings → Browser)"
+                    );
+                }
+                return self.request_permission(tool, input, None, cancel, agent_id).await;
+            }
             if self.skip_mcp.load(Ordering::Relaxed) {
                 return Ok(true);
             }
-            if self.is_allowed(name) && !Self::is_per_call_mcp_tool(name) {
+            if self.is_allowed(name) {
                 return Ok(true);
             }
             return self
@@ -744,6 +758,23 @@ mod tests {
         pm.add_allowed_tool("mcp__core__browser_look");
         let look = NamedMcpTool("mcp__core__browser_look");
         assert!(pm.check(&look, &serde_json::json!({}), &cancel, "main").await.unwrap());
+    }
+
+    /// Unattended sessions skip every prompt. For `browser_approve` that would
+    /// mean the agent approving its own paused purchase, so it is refused.
+    #[tokio::test]
+    async fn skipping_prompts_never_releases_a_browser_approval() {
+        let pm = PermissionManager::new(EventBus::new(), Arc::new(ResponseRegistry::new()));
+        pm.update_skip_flags(true, true, true, true);
+        let cancel = CancellationToken::new();
+        let input = serde_json::json!({"approval_id": "apv_1", "approve": true});
+        for name in ["mcp__core__browser_approve", "mcp__senclaw-browser__browser_approve"] {
+            pm.add_allowed_tool(name);
+            let refused = pm.check(&NamedMcpTool(name), &input, &cancel, "main").await;
+            assert!(refused.is_err(), "{name} was released with nobody asked");
+        }
+        let look = NamedMcpTool("mcp__core__browser_look");
+        assert!(pm.check(&look, &serde_json::json!({}), &cancel, "main").await.unwrap(), "other MCP tools still skip");
     }
 
     /// An alias is a display name. Renaming `Write` used to move it out of

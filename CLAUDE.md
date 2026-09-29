@@ -391,8 +391,11 @@ Rules for Claude:
 - **`browser_approve` is confirmed per call** (`PER_CALL_MCP_TOOLS` in
   `zen_core/permissions.rs`): no "never ask again", no saved grant honoured,
   and the prompt shows the pending action (`run::describe_approval`), not the
-  id the agent sent. Global accept-all / bypass modes still skip it — that is
-  the person's explicit choice.
+  id the agent sent. It is checked **before** the skip flags: a session that
+  asks nobody (workflow steps and background runs set every skip flag, and
+  so does the chat's own skip toggle) gets a refusal, and the action stays
+  paused for the person — `GET /api/browser-agent/approvals`, shown in
+  Settings → Browser on web and desktop.
 - **A step names an element of the observation the LLM was shown.**
   `rest::SHOWN` keeps it per tab; re-observing before mapping an index
   recreates the old stale-index bug. The runtime refuses a changed page with
