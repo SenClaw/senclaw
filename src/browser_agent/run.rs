@@ -19,7 +19,7 @@ use super::encoder::{encode, to_json, HistoryItem, Profile};
 use super::llm::{self as llm_role, TextValue};
 use super::policy::{self, DecisionRoute, Tier};
 use super::ports::{self, PortError, Ports};
-use super::prompts::{RISK, VERIFY};
+use super::prompts::{RISK, RISK_EFFECTS, VERIFY};
 use super::settings::{BrowserSettings, Driver};
 use crate::decision::json::Json;
 use crate::decision::types::{AskRequest, Backend};
@@ -348,13 +348,18 @@ async fn risk_answer(ports: &Ports, backend: Backend, redact: bool, obs: &Value,
         "page": { "url": obs.get("url"), "title": obs.get("title"), "text": if redact { policy::redact_pii(&text) } else { text } },
         "action": if redact { policy::redact_pii(label) } else { label.to_string() },
     });
+    let effects = RISK_EFFECTS.iter().map(|(id, what)| (id.to_string(), Json::String(what.to_string()))).collect();
     let questions = Json::Object(vec![(
-        "risk".into(),
-        Json::Object(vec![("type".into(), Json::String("noul".into())), ("instructions".into(), Json::String(RISK.into()))]),
+        "effect".into(),
+        Json::Object(vec![
+            ("type".into(), Json::String("choice".into())),
+            ("instructions".into(), Json::String(RISK.into())),
+            ("criteria".into(), Json::Object(effects)),
+        ]),
     )]);
     let request = AskRequest { backend: Some(backend), model: None, state: to_json(&page), questions };
     match ports.decider.ask(&request).await {
-        Ok(a) => a.pointer("/risk/noul").and_then(Value::as_f64).is_some_and(|p| p >= 0.7),
+        Ok(a) => a.pointer("/effect/probabilities/commit").and_then(Value::as_f64).is_some_and(|p| p >= 0.7),
         Err(_) => false,
     }
 }
@@ -1301,8 +1306,8 @@ pub(crate) mod tests {
     #[async_trait]
     impl Decider for OpenThenSearch {
         async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
-            if request.questions.get("risk").is_some() {
-                return Ok(json!({ "risk": { "type": "noul", "noul": 0.02, "confidence": 0.9 } }));
+            if request.questions.get("effect").is_some() {
+                return Ok(json!({ "effect": choice(&["view", "adjust", "commit"], "view", 0.96) }));
             }
             let text = serde_json::to_string(&request.state).unwrap();
             if request.questions.get("c1").is_some() {
@@ -1362,8 +1367,8 @@ pub(crate) mod tests {
     #[async_trait]
     impl Decider for SeesRisk {
         async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
-            if request.questions.get("risk").is_some() {
-                return Ok(json!({ "risk": { "type": "noul", "noul": 0.9, "confidence": 0.9 } }));
+            if request.questions.get("effect").is_some() {
+                return Ok(json!({ "effect": choice(&["view", "adjust", "commit"], "commit", 0.9) }));
             }
             FakeDecider.ask(request).await
         }
