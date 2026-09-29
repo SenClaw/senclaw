@@ -174,6 +174,16 @@ pub fn driver_of_task(task_id: &str) -> Option<Driver> {
     TASKS.lock().ok()?.get(task_id).map(|t| t.spec.driver)
 }
 
+/// The chat a paused task belongs to.
+pub fn owner_of_task(task_id: &str) -> Option<String> {
+    TASKS.lock().ok()?.get(task_id).map(|t| t.spec.owner.clone())
+}
+
+pub fn owner_of_approval(approval_id: &str) -> Option<String> {
+    let task = APPROVALS.lock().ok()?.get(approval_id)?.clone();
+    owner_of_task(&task)
+}
+
 /// How long a task paused in the person's Chrome keeps the extension pipe
 /// (and so its tabs) open while it waits for them.
 const PARKED_LEASE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
@@ -526,7 +536,14 @@ fn park(mut state: TaskState, status: &str, message: String, pending: Option<Pen
     state.parked_at = Some(Instant::now());
     if let Ok(mut t) = TASKS.lock() {
         while t.len() >= MAX_PARKED {
-            let Some(oldest) = t.iter().min_by_key(|(_, s)| s.parked_at).map(|(k, _)| k.clone()) else { break };
+            // A task waiting for the person goes last: evicting it drops their approval.
+            let oldest = t
+                .iter()
+                .filter(|(_, s)| s.pending.is_none())
+                .min_by_key(|(_, s)| s.parked_at)
+                .or_else(|| t.iter().min_by_key(|(_, s)| s.parked_at))
+                .map(|(k, _)| k.clone());
+            let Some(oldest) = oldest else { break };
             if let Some(gone) = t.remove(&oldest) {
                 if let (Some(p), Ok(mut a)) = (gone.pending, APPROVALS.lock()) {
                     a.remove(&p.approval_id);
@@ -776,7 +793,8 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
 
         // Rule tier: a dialog blocks the page.
         if let Some(dialog) = obs.get("dialog").filter(|d| !d.is_null()) {
-            let kind = dialog.get("type").and_then(Value::as_str).unwrap_or("alert").to_string();
+            // Only a known alert is accepted without the person.
+            let kind = dialog.get("type").and_then(Value::as_str).unwrap_or("unknown").to_string();
             let message = dialog.get("message").and_then(Value::as_str).unwrap_or_default().to_string();
             if kind == "alert" {
                 if let Err(done) = execute(ports, &mut state, "DIALOG_ACCEPT", "dialog_accept", &format!("Accept alert: {message}"), "dialog", None, observation_id, "rule", None, None, 0).await {
@@ -1362,7 +1380,7 @@ pub(crate) mod tests {
     }
 
     /// The same decisions, but the model judges the click irreversible.
-    struct SeesRisk;
+    pub struct SeesRisk;
 
     #[async_trait]
     impl Decider for SeesRisk {

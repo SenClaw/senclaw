@@ -96,12 +96,13 @@ pub fn risk_tier(operation: &str, action: &Value, dialog_type: Option<&str>) -> 
             if flag("multiline") {
                 return (Tier::Approve, format!("{label} may send what was typed"));
             }
-            match action.get("submit").and_then(Value::as_str) {
+            match action.get("submit").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) {
                 Some(submit) => match any_word(submit, RISKY) {
                     Some(word) => (Tier::Approve, format!("Enter presses \"{submit}\" ({word})")),
                     None => (Tier::Logged, format!("Enter presses \"{submit}\"")),
                 },
-                None => (Tier::Approve, format!("{label}: what Enter does outside a form is unknown")),
+                // No form, or a submit button with no words (an icon): unknown.
+                None => (Tier::Approve, format!("{label}: what Enter submits is unknown")),
             }
         }
         // Only an alert is harmless to accept; confirm, prompt and
@@ -151,10 +152,19 @@ pub fn is_own_api(url: &str) -> bool {
 
 fn is_local_port(url: &str, ports: &[u16]) -> bool {
     let Ok(u) = reqwest::Url::parse(url.trim()) else { return false };
-    let host = u.host_str().unwrap_or_default().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    // `localhost.` is `localhost`; `[::ffff:127.0.0.1]` is 127.0.0.1. (Names
+    // that merely resolve here, like `lvh.me`, are refused by the daemon's own
+    // Host check instead: they get no loopback trust.)
+    let host = u.host_str().unwrap_or_default().trim_start_matches('[').trim_end_matches(']').trim_end_matches('.').to_ascii_lowercase();
     let local = host == "localhost"
         || host.ends_with(".localhost")
-        || host.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback() || ip.is_unspecified()).unwrap_or(false);
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| {
+            let ip = match ip {
+                std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(ip),
+                v4 => v4,
+            };
+            ip.is_loopback() || ip.is_unspecified()
+        });
     local && u.port_or_known_default().is_some_and(|p| ports.contains(&p))
 }
 
@@ -301,6 +311,7 @@ mod tests {
         assert_eq!(enter(json!({"submit": "Place order"})), Tier::Approve);
         assert_eq!(enter(json!({"submit": "Sign in"})), Tier::Logged);
         assert_eq!(enter(json!({})), Tier::Approve, "outside a form Enter may do anything");
+        assert_eq!(enter(json!({"submit": ""})), Tier::Approve, "an icon-only submit button says nothing");
     }
 
     #[test]
@@ -341,7 +352,16 @@ mod tests {
         assert_eq!(host_of("https://evil.test\\@mail.google.com/"), "evil.test", "a backslash ends the host");
         assert_eq!(host_of("not a url"), "");
         let own = [18788, 18789];
-        for url in ["http://127.0.0.1:18788/api/llm-config", "http://localhost:18789/", "http://[::1]:18788/x", "http://0.0.0.0:18788/"] {
+        for url in [
+            "http://127.0.0.1:18788/api/llm-config",
+            "http://localhost:18789/",
+            "http://[::1]:18788/x",
+            "http://0.0.0.0:18788/",
+            "http://localhost.:18788/",
+            "http://[::ffff:127.0.0.1]:18788/",
+            "http://2130706433:18788/",
+            "http://0x7f.1:18788/",
+        ] {
             assert!(is_local_port(url, &own), "{url}");
         }
         for url in ["http://127.0.0.1:28795/", "https://example.com:18788/", "http://127.0.0.1/"] {

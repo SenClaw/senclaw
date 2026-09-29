@@ -304,7 +304,10 @@ impl Hub {
     fn forward_to_runtime(&self, conn_id: u64, frame: String, parsed: &Value) {
         let Ok(mut state) = self.state.lock() else { return };
         if let Some(conn) = state.conn.as_mut().filter(|c| c.id == conn_id) {
-            conn.last_used = Instant::now();
+            // Page events alone do not keep the pipe (and the debugger bar) alive.
+            if parsed.get("t").and_then(Value::as_str) != Some("event") {
+                conn.last_used = Instant::now();
+            }
             conn.track_shares(parsed);
             if let Some(pipe) = &conn.pipe {
                 let _ = pipe.tx.send(frame);
@@ -372,7 +375,11 @@ impl Hub {
             "Authorization",
             format!("Bearer {}", dial.token).parse().map_err(|_| "bad runtime token")?,
         );
-        let (ws, _) = tokio_tungstenite::connect_async(request).await.map_err(|e| format!("cannot open the runtime pipe: {e}"))?;
+        // Bounded: every other task waiting for the extension queues behind this lock.
+        let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(request))
+            .await
+            .map_err(|_| "the browser runtime did not answer the pipe in 15 s".to_string())?
+            .map_err(|e| format!("cannot open the runtime pipe: {e}"))?;
         let (mut sink, mut stream) = ws.split();
         let (pipe_tx, mut pipe_rx) = mpsc::unbounded_channel::<String>();
         let generation = self.next_pipe.fetch_add(1, Ordering::SeqCst);

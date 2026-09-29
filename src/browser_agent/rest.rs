@@ -62,6 +62,16 @@ fn refuse_own_api(url: &str) -> Result<(), (StatusCode, Json<Value>)> {
     }
     Ok(())
 }
+
+/// Where a step landed: a redirect or a link can reach SenClaw's own API even
+/// though opening it is refused, and then its page is not handed out either.
+fn refuse_landing(tab: &str, obs: &Value) -> Result<(), (StatusCode, Json<Value>)> {
+    let landed = refuse_own_api(obs.get("url").and_then(Value::as_str).unwrap_or_default());
+    if landed.is_err() {
+        forget_shown(tab);
+    }
+    landed
+}
 type ApiResult = Result<Json<Value>, (StatusCode, Json<Value>)>;
 
 fn err(status: StatusCode, code: &str, message: impl Into<String>) -> (StatusCode, Json<Value>) {
@@ -226,7 +236,18 @@ async fn task(State(s): State<AppState>, Json(req): Json<TaskReq>) -> ApiResult 
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 
-async fn task_resume(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult {
+#[derive(Deserialize, Default)]
+struct ResumeReq {
+    chat_jid: Option<String>,
+}
+
+async fn task_resume(State(s): State<AppState>, Path(id): Path<String>, body: Option<Json<ResumeReq>>) -> ApiResult {
+    // An agent resumes only its own chat's tasks.
+    if let Some(chat) = body.as_ref().and_then(|b| b.chat_jid.as_deref()) {
+        if run::owner_of_task(&id).as_deref() != Some(owner(Some(chat)).as_str()) {
+            return Err(err(StatusCode::NOT_FOUND, "no_task", format!("no paused task {id}")));
+        }
+    }
     // A task paused in the person's Chrome needs the extension pipe again.
     if run::driver_of_task(&id) == Some(Driver::Extension) {
         s.driver(Some(Driver::Extension), None).await?;
@@ -241,6 +262,9 @@ async fn task_resume(State(s): State<AppState>, Path(id): Path<String>) -> ApiRe
 #[derive(Deserialize)]
 struct ApprovalReq {
     approve: bool,
+    /// Sent by the agent's tool: a chat answers only its own tasks. The
+    /// settings screens send none and answer for the person.
+    chat_jid: Option<String>,
 }
 
 /// Actions waiting for the person — for the settings screens, which approve
@@ -250,8 +274,17 @@ async fn approvals_list() -> Json<Value> {
 }
 
 async fn approval(State(s): State<AppState>, Path(id): Path<String>, Json(req): Json<ApprovalReq>) -> ApiResult {
+    if let Some(chat) = req.chat_jid.as_deref() {
+        if run::owner_of_approval(&id).as_deref() != Some(owner(Some(chat)).as_str()) {
+            return Err(err(StatusCode::NOT_FOUND, "no_approval", format!("no pending approval {id}")));
+        }
+    }
     if run::driver_of_approval(&id) == Some(Driver::Extension) {
-        s.driver(Some(Driver::Extension), None).await?;
+        // Acting needs the person's Chrome; a decline goes through without it.
+        let pipe = s.driver(Some(Driver::Extension), None).await;
+        if req.approve {
+            pipe?;
+        }
     }
     let ports = s.ports()?;
     match run::approve(&ports, &id, req.approve).await {
@@ -367,6 +400,7 @@ async fn do_step(State(s): State<AppState>, Json(req): Json<DoReq>) -> ApiResult
     let out = ports::act(ports.browser.as_ref(), &tab, req.observation_id, id, req.text.as_deref()).await.map_err(port_err)?;
     let next = out.get("observation").cloned().unwrap_or(Value::Null);
     if !next.is_null() {
+        refuse_landing(&tab, &next)?;
         remember_shown(&tab, &next);
     }
     Ok(Json(json!({ "executed": operation, "label": action.get("label"), "page": if next.is_null() { Value::Null } else { table(&next) } })))
@@ -388,6 +422,7 @@ async fn open(State(s): State<AppState>, Json(req): Json<OpenReq>) -> ApiResult 
     let who = owner(req.tab.chat_jid.as_deref());
     let (tab, obs) = ports::open_tab(ports.browser.as_ref(), &session, Some(&req.url), &who, None).await.map_err(port_err)?;
     run::remember_chat_tab(&who, driver, &tab);
+    refuse_landing(&tab, &obs)?;
     remember_shown(&tab, &obs);
     Ok(Json(json!({ "tab_id": tab, "driver": driver, "page": table(&obs) })))
 }
@@ -495,8 +530,90 @@ async fn extension_revoke(Path(ext_id): Path<String>) -> ApiResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser_agent::run::tests::{ports as fake_ports, FakeBrowser};
+    use crate::browser_agent::ports::{BrowserPort, PortError};
+    use crate::browser_agent::run::tests::{ports as fake_ports, FakeBrowser, FakeDecider, NoLlm};
     use tower::ServiceExt;
+
+    /// Every page it opens redirects to SenClaw's own API.
+    struct RedirectsHome;
+
+    #[async_trait::async_trait]
+    impl BrowserPort for RedirectsHome {
+        async fn call(&self, _method: &str, path: &str, _body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" {
+                return Ok(json!({ "id": "s1" }));
+            }
+            if path.ends_with("/tabs") {
+                let page = json!({ "observation_id": 1, "tab_id": "t9", "url": "http://127.0.0.1:18788/api/llm-config",
+                                   "title": "", "text": "{\"apiKey\":\"sk-not-for-the-agent\"}", "actions": [] });
+                return Ok(json!({ "tab": { "id": "t9" }, "observation": page }));
+            }
+            Ok(json!({}))
+        }
+    }
+
+    async fn post_json(app: &axum::Router, path: &str, body: Value) -> (StatusCode, Value) {
+        let r = app
+            .clone()
+            .oneshot(
+                axum::http::Request::post(path)
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    /// Opening is refused for SenClaw's own address, and a page that only
+    /// gets there by redirect is not handed out either.
+    #[tokio::test]
+    async fn a_redirect_to_senclaw_itself_is_not_handed_out() {
+        crate::browser_agent::policy::set_own_ports(&[18788, 18789]);
+        let dir = tempfile::tempdir().unwrap();
+        let ports = crate::browser_agent::ports::Ports {
+            browser: Arc::new(RedirectsHome),
+            decider: Arc::new(FakeDecider),
+            llm: Arc::new(NoLlm),
+        };
+        let state = Arc::new(AgentState { config_path: dir.path().join("config.json"), manager: None, ports_override: Some(ports) });
+        let app: axum::Router = router(state);
+        let (status, body) = post_json(&app, "/api/browser-agent/open", json!({ "url": "https://redirect.test/", "chat_jid": "c1" })).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert!(!body.to_string().contains("sk-not-for-the-agent"));
+    }
+
+    /// An agent answers only its own chat's approvals; the settings screens
+    /// (no chat) answer for the person.
+    #[tokio::test]
+    async fn a_chat_cannot_answer_another_chats_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AgentState {
+            config_path: dir.path().join("config.json"),
+            manager: None,
+            ports_override: Some(fake_ports(FakeBrowser::new(true))),
+        });
+        let app: axum::Router = router(state);
+        let ports = crate::browser_agent::ports::Ports {
+            browser: FakeBrowser::new(true),
+            decider: Arc::new(crate::browser_agent::run::tests::SeesRisk),
+            llm: Arc::new(NoLlm),
+        };
+        let mut spec = crate::browser_agent::run::tests::spec("Search for books");
+        spec.owner = "owner-chat".into();
+        let out = run::start(&ports, settings::BrowserSettings::default(), spec).await;
+        let id = out.pending.as_ref().and_then(|p| p["approval_id"].as_str()).unwrap().to_string();
+        let path = format!("/api/browser-agent/approvals/{id}");
+        let (status, _) = post_json(&app, &path, json!({ "approve": true, "chat_jid": "other-chat" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(run::pending_approvals().iter().any(|a| a["approval_id"] == id.as_str()), "still waiting for the person");
+        let (status, body) = post_json(&app, &path, json!({ "approve": false })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!run::pending_approvals().iter().any(|a| a["approval_id"] == id.as_str()));
+    }
 
     #[tokio::test]
     async fn settings_endpoint_merges_and_validates() {
