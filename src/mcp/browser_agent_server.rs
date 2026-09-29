@@ -257,15 +257,99 @@ impl McpBrowserAgentServer {
         self.post("/api/browser-agent/handover", json!({ "action": p.action, "browser": p.browser }), STEP_TIMEOUT).await
     }
 
-    #[rmcp::tool(description = "Search the web (DuckDuckGo) in SenClaw's own browser and return the results page's text and links.")]
+    #[rmcp::tool(
+        description = "Search the web in SenClaw's own browser (DuckDuckGo, then Bing if DuckDuckGo shows a bot check) and return the results page's text and links, with `engine` naming the one that answered."
+    )]
     async fn browser_search(&self, Parameters(p): Parameters<SearchParams>) -> String {
-        let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding(&p.query));
-        let opened = self.post("/api/browser-agent/open", json!({ "url": url, "browser": "managed" }), STEP_TIMEOUT).await;
-        if opened.contains("\"error\"") {
-            return opened;
+        let mut walls = Vec::new();
+        for (engine, base) in SEARCH_ENGINES {
+            let url = format!("{base}{}", urlencoding(&p.query));
+            let opened = self.post("/api/browser-agent/open", json!({ "url": url, "browser": "managed" }), STEP_TIMEOUT).await;
+            if opened.contains("\"error\"") {
+                return opened;
+            }
+            let read = self.post("/api/browser-agent/read", json!({ "max_chars": 8000, "browser": "managed" }), STEP_TIMEOUT).await;
+            let Ok(mut page) = serde_json::from_str::<Value>(&read) else { return read };
+            if page.get("error").is_some() {
+                return read;
+            }
+            if !is_bot_wall(page.get("text").and_then(Value::as_str).unwrap_or_default()) {
+                page["engine"] = json!(engine);
+                // The results themselves, instead of every link on the page.
+                page["results"] = json!(result_links(page.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()));
+                if let Some(o) = page.as_object_mut() {
+                    o.remove("links");
+                }
+                return page.to_string();
+            }
+            walls.push(*engine);
         }
-        self.post("/api/browser-agent/read", json!({ "max_chars": 8000, "browser": "managed" }), STEP_TIMEOUT).await
+        json!({
+            "error": format!("{} answered with a bot check instead of results. Search in the person's own Chrome (browser_open with browser \"extension\"), or hand the tab over (browser_handover).", walls.join(" and ")),
+            "code": "blocked",
+        })
+        .to_string()
     }
+}
+
+/// Tried in order; the first that answers with results wins.
+const SEARCH_ENGINES: &[(&str, &str)] = &[
+    ("DuckDuckGo", "https://html.duckduckgo.com/html/?q="),
+    ("Bing", "https://www.bing.com/search?q="),
+];
+
+/// The page a search engine shows a browser it takes for a bot, instead of
+/// results. Only the top of the page is read: that is where the wall says so,
+/// while results further down may quote the same words.
+fn is_bot_wall(text: &str) -> bool {
+    let top: String = text.chars().take(1500).collect::<String>().to_lowercase();
+    [
+        "bots use duckduckgo",
+        "please complete the following challenge",
+        "detected unusual traffic",
+        "verify you are human",
+        "checking if the site connection is secure",
+    ]
+    .iter()
+    .any(|w| top.contains(w))
+}
+
+/// `{title, url}` for each result, in page order: the engines' redirect links
+/// unwrapped to the site they lead to (DuckDuckGo `/l/?uddg=`, Bing
+/// `/ck/a?…&u=a1<base64>`), ads and the engine's own pages dropped.
+fn result_links(links: &[Value]) -> Vec<Value> {
+    use base64::Engine;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for link in links {
+        let Some(href) = link.get("href").and_then(Value::as_str) else { continue };
+        let Ok(url) = reqwest::Url::parse(href) else { continue };
+        let host = url.host_str().unwrap_or_default().trim_start_matches("www.").to_string();
+        let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+        let target = match host.as_str() {
+            "duckduckgo.com" | "html.duckduckgo.com" => param("uddg"),
+            "bing.com" if url.path().starts_with("/ck/") => param("u").and_then(|u| {
+                let b64 = u.strip_prefix("a1")?;
+                let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(b64.trim_end_matches('=')).ok()?;
+                String::from_utf8(bytes).ok()
+            }),
+            "bing.com" | "go.microsoft.com" => None,
+            _ => Some(href.to_string()),
+        };
+        let Some(target) = target.filter(|t| t.starts_with("http")) else { continue };
+        let Ok(t) = reqwest::Url::parse(&target) else { continue };
+        // Ads come back through the engine itself (`duckduckgo.com/y.js?ad_domain=…`).
+        let t_host = t.host_str().unwrap_or_default().trim_start_matches("www.");
+        if matches!(t_host, "duckduckgo.com" | "bing.com") {
+            continue;
+        }
+        let title = link.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+        if seen.insert(target.clone()) {
+            out.push(json!({ "title": title, "url": target }));
+        }
+    }
+    out.truncate(20);
+    out
 }
 
 fn urlencoding(s: &str) -> String {
@@ -283,6 +367,32 @@ fn urlencoding(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn results_lead_to_the_sites_not_the_engine() {
+        let links = vec![
+            json!({ "text": "All Regions", "href": "https://html.duckduckgo.com/html/?kl=wt-wt" }),
+            json!({ "text": "Klook", "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fy.js%3Fad_domain%3Dklook.com" }),
+            json!({ "text": "Hanoi Weather | AccuWeather", "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.accuweather.com%2Fen%2Fvn%2Fhanoi&rut=x" }),
+            json!({ "text": "www.accuweather.com/en/vn/hanoi", "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.accuweather.com%2Fen%2Fvn%2Fhanoi&rut=x" }),
+            // Bing: `u=a1` + base64url("https://www.bbc.com/weather/1581130")
+            json!({ "text": "Hanoi - BBC Weather", "href": "https://www.bing.com/ck/a?!&&p=1&u=a1aHR0cHM6Ly93d3cuYmJjLmNvbS93ZWF0aGVyLzE1ODExMzA&ntb=1" }),
+            json!({ "text": "Privacy", "href": "https://go.microsoft.com/fwlink/?LinkId=521839" }),
+        ];
+        let results = result_links(&links);
+        let urls: Vec<&str> = results.iter().filter_map(|r| r["url"].as_str()).collect();
+        assert_eq!(urls, vec!["https://www.accuweather.com/en/vn/hanoi", "https://www.bbc.com/weather/1581130"]);
+        assert_eq!(results[0]["title"], "Hanoi Weather | AccuWeather", "the first link to a site names it");
+    }
+
+    #[test]
+    fn a_bot_check_is_not_taken_for_results() {
+        assert!(is_bot_wall("DuckDuckGo\n\nUnfortunately, bots use DuckDuckGo too. Please complete the following challenge"));
+        assert!(is_bot_wall("Our systems have detected unusual traffic from your computer network."));
+        assert!(!is_bot_wall("giá vàng hôm nay at DuckDuckGo\nGiá vàng SJC hôm nay 29/9 ..."));
+        let deep = format!("{}how bots use DuckDuckGo", "result ".repeat(400));
+        assert!(!is_bot_wall(&deep), "results that merely quote the words further down");
+    }
 
     #[test]
     fn tools_are_registered() {
