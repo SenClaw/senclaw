@@ -151,6 +151,14 @@ pub fn runtime_installed(senclaw_home: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the decision runtime has the checkpoint `id` on disk: it keeps its
+/// models under `<local models>/laya/<id>/`, and writes `senclaw-laya.json`
+/// there last, once the install is complete.
+pub fn decision_model_installed(local_models_dir: &Path, id: &str) -> bool {
+    let safe = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')) && !id.starts_with('.');
+    safe && local_models_dir.join("laya").join(id).join("senclaw-laya.json").is_file()
+}
+
 /// The engine the agent's browser tools use, with `auto` resolved.
 pub fn resolved_engine(config_path: &Path, senclaw_home: &Path) -> Engine {
     match load(config_path).engine {
@@ -203,5 +211,18 @@ mod tests {
         std::fs::create_dir_all(&pkg).unwrap();
         std::fs::write(pkg.join("senclaw-runtime.json"), "{}").unwrap();
         assert_eq!(resolved_engine(&path, dir.path()), Engine::V2);
+    }
+
+    #[test]
+    fn a_decision_checkpoint_counts_once_its_install_is_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("laya/laya-browser");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("laya.onnx"), "weights").unwrap();
+        assert!(!decision_model_installed(dir.path(), "laya-browser"), "a half-copied folder is not an install");
+        std::fs::write(model.join("senclaw-laya.json"), "{}").unwrap();
+        assert!(decision_model_installed(dir.path(), "laya-browser"));
+        assert!(!decision_model_installed(dir.path(), "multilingual"));
+        assert!(!decision_model_installed(dir.path(), "../laya/laya-browser"), "an id is a name, never a path");
     }
 }

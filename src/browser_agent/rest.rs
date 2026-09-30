@@ -83,6 +83,13 @@ impl AgentState {
         settings::load(&self.config_path)
     }
 
+    /// Where local checkpoints live: the registered root for this config, or
+    /// `local-models` beside it.
+    fn local_models_dir(&self) -> PathBuf {
+        crate::local_models::root_for(&self.config_path)
+            .unwrap_or_else(|| self.config_path.parent().unwrap_or(std::path::Path::new(".")).join("local-models"))
+    }
+
     fn ports(&self) -> Result<Ports, (StatusCode, Json<Value>)> {
         if let Some(p) = &self.ports_override {
             return Ok(p.clone());
@@ -153,7 +160,17 @@ fn settings_view(s: &AgentState, settings: &BrowserSettings) -> Value {
             _ => "legacy",
         },
         "runtimeInstalled": settings::runtime_installed(home),
+        "decisionModel": decision_model(s, settings),
     })
+}
+
+/// Whether the loop's local decision checkpoint is on disk. Without it every
+/// step falls to the LLM — seconds per step instead of a fraction of one —
+/// and nothing else says why the browser got slow.
+fn decision_model(s: &AgentState, settings: &BrowserSettings) -> Value {
+    let uses_local = settings.decision_backend != settings::DecisionBackend::LlmOnly;
+    let installed = settings::decision_model_installed(&s.local_models_dir(), &settings.local_model);
+    json!({ "id": settings.local_model, "needed": uses_local, "installed": installed })
 }
 
 async fn settings_get(State(s): State<AppState>) -> ApiResult {
@@ -183,7 +200,9 @@ async fn status(State(s): State<AppState>) -> ApiResult {
         Ok(p) => p.browser.call("GET", "/v1/status", None).await.unwrap_or_else(|e| json!({ "error": e.to_string(), "code": e.code })),
         Err((_, Json(v))) => v,
     };
-    Ok(Json(json!({ "settings": s.settings(), "runtime": runtime, "extension": extension::hub().status() })))
+    let settings = s.settings();
+    let decision = decision_model(&s, &settings);
+    Ok(Json(json!({ "settings": settings, "runtime": runtime, "extension": extension::hub().status(), "decisionModel": decision })))
 }
 
 #[derive(Deserialize)]
@@ -413,17 +432,23 @@ struct OpenReq {
     tab: TabReq,
 }
 
-async fn open(State(s): State<AppState>, Json(req): Json<OpenReq>) -> ApiResult {
-    refuse_own_api(&req.url)?;
-    let driver = s.driver(parse_driver(req.tab.browser.as_deref())?, Some(&req.url)).await?;
+/// Open `url` in the chat's tab: the tab, its driver, and the page once it is ready.
+async fn open_page(s: &AgentState, url: &str, req: &TabReq) -> Result<(String, Driver, Value), (StatusCode, Json<Value>)> {
+    refuse_own_api(url)?;
+    let driver = s.driver(parse_driver(req.browser.as_deref())?, Some(url)).await?;
     let ports = s.ports()?;
     let settings = s.settings();
     let session = ports::open_session(ports.browser.as_ref(), driver.as_str(), &settings.profile, settings.headless).await.map_err(port_err)?;
-    let who = owner(req.tab.chat_jid.as_deref());
-    let (tab, obs) = ports::open_tab(ports.browser.as_ref(), &session, Some(&req.url), &who, None).await.map_err(port_err)?;
+    let who = owner(req.chat_jid.as_deref());
+    let (tab, obs) = ports::open_tab(ports.browser.as_ref(), &session, Some(url), &who, None).await.map_err(port_err)?;
     run::remember_chat_tab(&who, driver, &tab);
     refuse_landing(&tab, &obs)?;
     remember_shown(&tab, &obs);
+    Ok((tab, driver, obs))
+}
+
+async fn open(State(s): State<AppState>, Json(req): Json<OpenReq>) -> ApiResult {
+    let (tab, driver, obs) = open_page(&s, &req.url, &req.tab).await?;
     Ok(Json(json!({ "tab_id": tab, "driver": driver, "page": table(&obs) })))
 }
 
@@ -431,12 +456,17 @@ async fn open(State(s): State<AppState>, Json(req): Json<OpenReq>) -> ApiResult 
 struct ReadReq {
     #[serde(flatten)]
     tab: TabReq,
+    /// Open this page first: reading a URL is then one call, not two.
+    url: Option<String>,
     question: Option<String>,
     max_chars: Option<u64>,
 }
 
 async fn read(State(s): State<AppState>, Json(req): Json<ReadReq>) -> ApiResult {
-    let (tab, _) = current_tab(&s, &req.tab).await?;
+    let tab = match req.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        Some(url) => open_page(&s, url, &req.tab).await?.0,
+        None => current_tab(&s, &req.tab).await?.0,
+    };
     let ports = s.ports()?;
     let page = ports::read(ports.browser.as_ref(), &tab, req.max_chars.unwrap_or(20_000)).await.map_err(port_err)?;
     refuse_own_api(page["url"].as_str().unwrap_or_default())?;
@@ -613,6 +643,51 @@ mod tests {
         let (status, body) = post_json(&app, &path, json!({ "approve": false })).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(!run::pending_approvals().iter().any(|a| a["approval_id"] == id.as_str()));
+    }
+
+    /// Reading a URL is one call: the page is opened, then read.
+    #[tokio::test]
+    async fn read_opens_the_page_it_is_given() {
+        crate::browser_agent::policy::set_own_ports(&[18788, 18789]);
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AgentState {
+            config_path: dir.path().join("config.json"),
+            manager: None,
+            ports_override: Some(fake_ports(FakeBrowser::new(true))),
+        });
+        let app: axum::Router = router(state);
+        let (status, body) = post_json(&app, "/api/browser-agent/read", json!({ "chat_jid": "reader" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "no page was opened yet: {body}");
+        let (status, body) = post_json(&app, "/api/browser-agent/read", json!({ "chat_jid": "reader", "url": "https://shop.test/" })).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["text"], "Results for books: 3 found");
+        // The page stays open for what comes next.
+        let (status, _) = post_json(&app, "/api/browser-agent/look", json!({ "chat_jid": "reader" })).await;
+        assert_eq!(status, StatusCode::OK);
+        // SenClaw's own API is no more readable than it is openable.
+        let own = json!({ "chat_jid": "reader", "url": "http://127.0.0.1:18788/api/llm-config" });
+        assert_eq!(post_json(&app, "/api/browser-agent/read", own).await.0, StatusCode::FORBIDDEN);
+    }
+
+    /// The settings screens learn whether the loop's decision checkpoint is
+    /// there: without it the browser is slow and nothing else says why.
+    #[tokio::test]
+    async fn settings_say_whether_the_decision_model_is_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(AgentState { config_path: dir.path().join("config.json"), manager: None, ports_override: None });
+        let get = || {
+            let app: axum::Router = router(state.clone());
+            async move {
+                let r = app.oneshot(axum::http::Request::get("/api/browser-agent/settings").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+                let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+                serde_json::from_slice::<Value>(&bytes).unwrap()
+            }
+        };
+        assert_eq!(get().await["decisionModel"], json!({ "id": "laya-browser", "needed": true, "installed": false }));
+        let model = dir.path().join("local-models/laya/laya-browser");
+        std::fs::create_dir_all(&model).unwrap();
+        std::fs::write(model.join("senclaw-laya.json"), "{}").unwrap();
+        assert_eq!(get().await["decisionModel"]["installed"], true);
     }
 
     #[tokio::test]

@@ -30,7 +30,8 @@ struct TaskParams {
     /// A question to answer from the final page (the answer comes back in `answer`).
     #[serde(default)]
     question: Option<String>,
-    /// Visible conditions that prove the goal is reached; checked before DONE is accepted.
+    /// What the page visibly shows once the goal is reached ("The page shows \"Order placed\"");
+    /// checked before DONE is accepted. Give them: otherwise an LLM has to write them first.
     #[serde(default)]
     done_criteria: Vec<String>,
     /// Step budget (default 40).
@@ -93,6 +94,10 @@ struct OpenParams {
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ReadParams {
+    /// Open this http(s) URL first, then read it — one call instead of browser_open + browser_read.
+    /// Omit to read this chat's current page.
+    #[serde(default)]
+    url: Option<String>,
     /// Ask a question about the page; omit to get its text and links.
     #[serde(default)]
     question: Option<String>,
@@ -180,7 +185,7 @@ impl McpBrowserAgentServer {
 #[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpBrowserAgentServer {
     #[rmcp::tool(
-        description = "Do a whole task on the web: SenClaw's browser loop observes the page, a decision model picks each click/typing/choice in ~0.2-1 s, an LLM writes field values, and DONE is only accepted after the page is checked. Prefer this over step-by-step tools. Returns status: done (with `answer` if you asked a `question`), needs_approval (show `pending.action` to the person and call browser_approve only after they agree), needs_user (sign-in, code or CAPTCHA: call browser_handover), needs_input (ask the person for the missing value), blocked, budget or unverified. Runs in SenClaw's own Chrome profile unless browser=\"extension\" (the person's Chrome — only when they ask for their own account)."
+        description = "Do a whole task on the web in ONE call — open a page, click, type, choose, scroll — instead of one call per step: SenClaw's browser loop observes the page, a decision model picks each step in a fraction of a second, an LLM writes field values, and DONE is only accepted after the page is checked. Use it for anything beyond reading a page, and pass `done_criteria`. Returns status: done (with `answer` if you asked a `question`), needs_approval (show `pending.action` to the person and call browser_approve only after they agree), needs_user (sign-in, code or CAPTCHA: call browser_handover), needs_input (ask the person for the missing value), blocked, budget or unverified; `notes`, when present, says what made the run slow. Runs in SenClaw's own Chrome profile unless browser=\"extension\" (the person's Chrome — only when they ask for their own account)."
     )]
     async fn browser_task(&self, Parameters(p): Parameters<TaskParams>) -> String {
         let browser = if p.shared_tab.is_some() { Some("extension".to_string()) } else { p.browser };
@@ -207,7 +212,7 @@ impl McpBrowserAgentServer {
     }
 
     #[rmcp::tool(
-        description = "Show this chat's current page as an indexed table: elements (index, role, label, value, supported operations), offered operations, visible text and observation_id. Use it to act step by step with browser_do when browser_task cannot."
+        description = "Show this chat's current page as an indexed table: elements (index, role, label, value, supported operations), offered operations, visible text and observation_id. For acting by hand with browser_do when browser_task cannot do it — every step then costs a turn of yours. browser_open and browser_do already return this table: look again only when the page changed by itself."
     )]
     async fn browser_look(&self, Parameters(p): Parameters<BrowserParam>) -> String {
         self.post("/api/browser-agent/look", json!({ "browser": p.browser }), STEP_TIMEOUT).await
@@ -221,16 +226,18 @@ impl McpBrowserAgentServer {
         self.post("/api/browser-agent/do", body, STEP_TIMEOUT).await
     }
 
-    #[rmcp::tool(description = "Open a URL in this chat's browser tab and return the page table (same shape as browser_look).")]
+    #[rmcp::tool(
+        description = "Open a URL in this chat's browser tab and return the page table once the page has loaded (same shape as browser_look — no need to look again). To read a page, call browser_read with `url` instead; to do something on it, browser_task with `url`."
+    )]
     async fn browser_open(&self, Parameters(p): Parameters<OpenParams>) -> String {
         self.post("/api/browser-agent/open", json!({ "url": p.url, "browser": p.browser }), STEP_TIMEOUT).await
     }
 
     #[rmcp::tool(
-        description = "Read this chat's current page: its full text and links, or — with `question` — an answer grounded in the page (figures quoted from it)."
+        description = "Read a page: its full text and links, or — with `question` — an answer grounded in the page (figures quoted from it). With `url` it opens that page first, in the same call; without, it reads this chat's current page."
     )]
     async fn browser_read(&self, Parameters(p): Parameters<ReadParams>) -> String {
-        let body = json!({ "question": p.question, "max_chars": p.max_chars, "browser": p.browser });
+        let body = json!({ "url": p.url, "question": p.question, "max_chars": p.max_chars, "browser": p.browser });
         self.post("/api/browser-agent/read", body, STEP_TIMEOUT).await
     }
 
