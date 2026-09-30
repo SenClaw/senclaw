@@ -440,6 +440,10 @@ Rules for Claude:
   after the other, because the decision runtime can fail a checkpoint when two
   load at the same moment. An unsure DONE is checked against the page before an
   LLM is asked; the check is what accepts a DONE whoever proposes it.
+- **A click on something that is already on is preceded by that same check**
+  (`already_on` in `run::drive`). Asked to like a clip that is already liked,
+  `laya-browser` clicks the like anyway — which takes it back. The snapshot
+  reports a toggle's `aria-pressed` as `checked`, the way a checkbox's is.
 
 ## Space Apps that serve models (`llm` manifest block)
 
