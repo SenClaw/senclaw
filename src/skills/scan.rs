@@ -191,6 +191,48 @@ pub fn scan_source(def: &SourceDef) -> Vec<SkillEntry> {
     entries
 }
 
+/// The variants of a skill's text this install reads instead of `SKILL.md`.
+///
+/// A skill that teaches tools is only right for the tools that are there, and
+/// the browser tools are a different set on each browser engine: the text
+/// written for one names tools the other does not have, and the model then
+/// spends its turns looking for them. `SKILL.browser-v2.md` beside `SKILL.md`
+/// is the text for engine v2 — resolved the way the tool set itself is.
+fn active_variants(config: &Config) -> Vec<&'static str> {
+    use crate::browser_agent::settings::{engine_at, Engine};
+    match engine_at(&config.paths.global_config_path) {
+        Engine::V2 => vec!["browser-v2"],
+        _ => Vec::new(),
+    }
+}
+
+/// Swap in the first active variant file the skill's directory carries. The
+/// name stays the skill's own: a variant is another text, not another skill.
+fn with_variant(mut entry: SkillEntry, variants: &[&str]) -> SkillEntry {
+    for variant in variants {
+        let path = entry.dir.join(format!("SKILL.{variant}.md"));
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let mut meta = parse_skill_metadata(&content, &entry.name, &entry.description);
+        meta.name = entry.name.clone();
+        entry.description = meta.description.clone();
+        entry.version = meta.version.clone();
+        entry.ineligible_reason = meta.ineligible_reason();
+        entry.eligible = entry.ineligible_reason.is_none();
+        entry.file_path = path;
+        entry.metadata = meta;
+        break;
+    }
+    entry
+}
+
+/// Deduplicated entries → the variant each should be read in → gated, sorted.
+fn finish(map: HashMap<String, SkillEntry>, config: &Config) -> Vec<SkillEntry> {
+    let variants = active_variants(config);
+    let mut entries: Vec<SkillEntry> = map.into_values().map(|e| with_variant(e, &variants)).filter(gate).collect();
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
 /// Scan all sources, deduplicate by name (later sources override earlier ones),
 /// and return sorted results.
 pub fn load_all_local_skills(config: &Config) -> Vec<SkillEntry> {
@@ -201,9 +243,7 @@ pub fn load_all_local_skills(config: &Config) -> Vec<SkillEntry> {
             map.insert(entry.name.clone(), entry);
         }
     }
-    let mut entries: Vec<SkillEntry> = map.into_values().filter(gate).collect();
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    entries
+    finish(map, config)
 }
 
 /// Load-time gate (OpenClaw-style): drop skills that fail their `os` /
@@ -233,9 +273,7 @@ pub fn load_all_skills_with_marketplace(
             map.insert(entry.name.clone(), entry);
         }
     }
-    let mut entries: Vec<SkillEntry> = map.into_values().filter(gate).collect();
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    entries
+    finish(map, config)
 }
 
 #[cfg(test)]
@@ -262,6 +300,35 @@ mod tests {
         // Missing required binary → ineligible.
         assert!(!entries[0].eligible);
         assert!(entries[0].ineligible_reason.is_some());
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// A skill teaches the tools that are there: on browser engine v2 its
+    /// `SKILL.browser-v2.md` is read instead of `SKILL.md`, under the same name.
+    #[test]
+    fn a_skill_is_read_in_the_variant_the_install_needs() {
+        let tmp = std::env::temp_dir().join(format!("test-skills-variant-{}", uuid::Uuid::new_v4()));
+        let dir = tmp.join("web");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "---\nname: web\ndescription: legacy tools\ntriggers: [open]\n---\n\nCall browser_navigate.\n").unwrap();
+        fs::write(dir.join("SKILL.browser-v2.md"), "---\nname: renamed\ndescription: v2 tools\ntriggers: [open, task]\n---\n\nCall browser_task.\n").unwrap();
+        let scan = || scan_source(&SourceDef { dir: tmp.clone(), source: "test".to_string() }).remove(0);
+
+        let legacy = with_variant(scan(), &[]);
+        assert!(legacy.file_path.ends_with("SKILL.md"));
+        assert_eq!(legacy.description, "legacy tools");
+
+        let v2 = with_variant(scan(), &["browser-v2"]);
+        assert!(v2.file_path.ends_with("SKILL.browser-v2.md"));
+        assert_eq!((v2.name.as_str(), v2.metadata.name.as_str()), ("web", "web"), "a variant is another text, not another skill");
+        assert_eq!(v2.description, "v2 tools");
+        assert_eq!(v2.metadata.triggers, vec!["open", "task"]);
+        let registry = crate::skills::SkillRegistry::from_entries(&[v2]);
+        assert_eq!(registry.find("web").unwrap().content.trim(), "Call browser_task.");
+
+        // A skill without that variant is read as it is.
+        fs::remove_file(dir.join("SKILL.browser-v2.md")).unwrap();
+        assert!(with_variant(scan(), &["browser-v2"]).file_path.ends_with("SKILL.md"));
         fs::remove_dir_all(&tmp).ok();
     }
 

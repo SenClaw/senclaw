@@ -401,6 +401,27 @@ mod tests {
         assert!(!is_bot_wall(&deep), "results that merely quote the words further down");
     }
 
+    /// The skills written for this engine name only tools this engine has. A
+    /// skill that names the other engine's tools sends the model looking for
+    /// them: a turn spent on ToolSearch, then a page driven one step per turn.
+    #[test]
+    fn the_engines_skills_name_only_its_tools() {
+        let tools: Vec<String> = McpBrowserAgentServer::tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
+        let named = regex::Regex::new(r"browser_[a-z]+(?:_[a-z]+)*").unwrap();
+        let skills = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills");
+        for skill in ["agent-browser", "web-research"] {
+            let text = std::fs::read_to_string(skills.join(skill).join("SKILL.browser-v2.md")).unwrap_or_else(|e| panic!("{skill}: {e}"));
+            let mentioned: std::collections::BTreeSet<&str> = named.find_iter(&text).map(|m| m.as_str()).collect();
+            for tool in &mentioned {
+                assert!(tools.iter().any(|t| t == tool), "{skill} names `{tool}`, which engine v2 does not have ({tools:?})");
+            }
+            for needed in ["browser_search", "browser_read", "browser_task"] {
+                assert!(mentioned.contains(needed), "{skill} never mentions {needed}");
+            }
+            assert!(!text.contains("ToolSearch {"), "{skill} must not send the model to ToolSearch for tools it already has");
+        }
+    }
+
     #[test]
     fn tools_are_registered() {
         let names: Vec<String> = McpBrowserAgentServer::tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
