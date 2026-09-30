@@ -408,6 +408,38 @@ Rules for Claude:
 - **Never parse the decision request into `serde_json::Value`** (same rule as
   the decision client): `encoder` builds `Json` so option markers keep their
   order. `encoder` tests pin jev-full and laya-v3 against the upstream Python.
+- **One job, one tool call.** A step of the loop costs ~0.35 s (decision
+  ~270 ms, risk check ~45 ms, action ~50 ms); a tool call costs the chat model
+  a whole turn — 6–11 s measured on a real install (a 100k-character system
+  prompt, 49 tools, no prompt cache). Driving a page with `browser_open` →
+  `browser_do` → `browser_read` is that turn four times; `browser_task` and
+  `browser_read {url}` are one. The tool descriptions and the v2 skill text
+  say so — keep them saying so.
+- **A skill that teaches the browser tools has a text per engine.**
+  `SKILL.browser-v2.md` beside `SKILL.md` is what engine v2 reads
+  (`skills::scan::with_variant`, resolved the way the tool set is). The legacy
+  text names tools engine v2 does not have, which cost every browser chat a
+  `ToolSearch` turn and then a page driven one step per turn.
+  `the_engines_skills_name_only_its_tools` fails a v2 text that names a tool
+  the v2 server does not register.
+- **When a page is ready is the runtime's call** (`wait_ready` in
+  `sen-browser`): the load event is late on pages that stream or track, and
+  early on app shells. Never add a sleep or a second observe in the daemon to
+  wait for a page — an action that starts a navigation already comes back with
+  the page it brings.
+- **The loop says where its time went and why it was slow.**
+  `stats.timing` splits a task into open / decide / llm / risk / text / act /
+  page / verify / answer; `notes` names a decision model that could not answer
+  (every step is then an LLM call). The checkpoint being absent is also on
+  `GET /api/browser-agent/settings` (`decisionModel.installed`) and shown in
+  Settings → Browser — a missing `laya-browser` once made every step take
+  seconds with nothing saying why.
+- **Model calls a task will need start before it needs them**: completion
+  criteria are written while the task runs (`write_criteria`), and the local
+  checkpoints load while the first page opens (`warm_decision_models`) — one
+  after the other, because the decision runtime can fail a checkpoint when two
+  load at the same moment. An unsure DONE is checked against the page before an
+  LLM is asked; the check is what accepts a DONE whoever proposes it.
 
 ## Space Apps that serve models (`llm` manifest block)
 
