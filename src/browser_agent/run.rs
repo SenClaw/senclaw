@@ -49,9 +49,28 @@ pub struct StepLog {
     pub confidence: Option<f64>,
     pub band: Option<Band>,
     pub decision_ms: u64,
+    /// The round trip to the browser: freshness check, input, settle, observe.
+    pub act_ms: u64,
     pub text: Option<String>,
     pub outcome: String,
     pub page_changed: Option<bool>,
+}
+
+/// Where a task's wall-clock time went, in milliseconds. `decide` is the
+/// decision model choosing steps, `llm` the fallback tier choosing instead,
+/// `act` the round trips to the browser and `page` the part of those the
+/// browser itself reported (input, settle, snapshot).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Timing {
+    pub open: u64,
+    pub decide: u64,
+    pub llm: u64,
+    pub risk: u64,
+    pub text: u64,
+    pub act: u64,
+    pub page: u64,
+    pub verify: u64,
+    pub answer: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -62,6 +81,18 @@ pub struct Stats {
     pub fallbacks: u32,
     pub stale: u32,
     pub elapsed_ms: u64,
+    pub timing: Timing,
+}
+
+fn ms_since(started: Instant) -> u64 {
+    started.elapsed().as_millis() as u64
+}
+
+/// What the browser reported spending on one action: input, settle and the
+/// snapshot that followed.
+fn page_ms(act: &Value) -> u64 {
+    let part = |pointer: &str| act.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    part("/executed_ms") + part("/settle_ms") + part("/observation/timing_ms/snapshot")
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +109,10 @@ pub struct TaskOutcome {
     pub answer: Option<String>,
     pub evidence: Vec<Value>,
     pub pending: Option<Value>,
+    /// What the person should know about how the task ran (a missing
+    /// decision model made it slow, …).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     pub steps: Vec<StepLog>,
     pub stats: Stats,
 }
@@ -107,6 +142,11 @@ struct TaskState {
     observation: Value,
     text_cache: Option<(Value, String)>,
     criteria: Option<Vec<String>>,
+    /// The criteria an LLM is writing while the task runs (none were given).
+    criteria_job: Option<CriteriaJob>,
+    /// The last check of the criteria, with the observation it was made on.
+    checked: Option<(u64, bool, Vec<Value>)>,
+    notes: Vec<String>,
     done_rejections: u32,
     llm_next: bool,
     option_chars: usize,
@@ -123,6 +163,39 @@ struct TaskState {
     /// Answers of the raise-only risk check, by page and action.
     risk_checked: HashMap<u64, bool>,
     parked_at: Option<Instant>,
+    /// When this run of the loop began, and the time earlier runs had used.
+    clock: (Instant, u64),
+}
+
+/// Load the local decision checkpoints while the page opens: the one that
+/// picks the steps, then the default one that checks risk and completion.
+/// One after the other — the decision runtime can fail a checkpoint when two
+/// are loading at the same moment.
+fn warm_decision_models(ports: &Ports, settings: &BrowserSettings, spec: &TaskSpec) {
+    let start = spec.url.as_deref().unwrap_or(&settings.start_url);
+    let DecisionRoute::Model { backend: Backend::Local, model, .. } = policy::select_backend(settings, start, spec.driver) else { return };
+    let decider = ports.decider.clone();
+    tokio::spawn(async move {
+        decider.warm(model.as_deref()).await;
+        decider.warm(None).await;
+    });
+}
+
+/// Completion criteria on their way from an LLM.
+type CriteriaJob = futures::future::Shared<futures::future::BoxFuture<'static, Vec<String>>>;
+
+/// Have an LLM write the completion criteria now, while the task runs: by the
+/// time the page looks done they are usually there, instead of being one more
+/// model call between the last step and the answer.
+fn write_criteria(ports: &Ports, settings: &BrowserSettings, goal: &str) -> CriteriaJob {
+    use futures::FutureExt;
+    let (llm, model, goal) = (ports.llm.clone(), settings.fallback_model.clone(), goal.to_string());
+    let writing = tokio::spawn(async move { llm_role::criteria(llm.as_ref(), model.as_deref(), &goal).await });
+    async move { writing.await.unwrap_or_default() }.boxed().shared()
+}
+
+fn elapsed_ms(state: &TaskState) -> u64 {
+    state.clock.1 + ms_since(state.clock.0)
 }
 
 /// Paused tasks by task id, and approvals → task id.
@@ -331,7 +404,9 @@ async fn model_raises_risk(ports: &Ports, state: &mut TaskState, route: &Decisio
         Some(r) => *r,
         None => {
             state.stats.decisions += 1;
+            let asked = Instant::now();
             let raised = risk_answer(ports, *backend, *redact, obs, label).await;
+            state.stats.timing.risk += ms_since(asked);
             state.risk_checked.insert(key, raised);
             raised
         }
@@ -386,8 +461,9 @@ fn outcome(state: &TaskState, status: &str, message: impl Into<String>) -> TaskO
         answer: None,
         evidence: Vec::new(),
         pending: None,
+        notes: state.notes.clone(),
         steps: state.steps.clone(),
-        stats: state.stats.clone(),
+        stats: Stats { elapsed_ms: elapsed_ms(state), ..state.stats.clone() },
     }
 }
 
@@ -403,6 +479,7 @@ fn port_failure(spec: &TaskSpec, e: &PortError) -> TaskOutcome {
         answer: None,
         evidence: Vec::new(),
         pending: None,
+        notes: Vec::new(),
         steps: Vec::new(),
         stats: Stats::default(),
     }
@@ -411,6 +488,9 @@ fn port_failure(spec: &TaskSpec, e: &PortError) -> TaskOutcome {
 /// Start a task: open (or reuse) the owner's tab and run the loop.
 pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> TaskOutcome {
     let browser = ports.browser.as_ref();
+    let opening = Instant::now();
+    let criteria_job = spec.done_criteria.is_empty().then(|| write_criteria(ports, &settings, &spec.goal));
+    warm_decision_models(ports, &settings, &spec);
     let session = match ports::open_session(browser, spec.driver.as_str(), &settings.profile, settings.headless).await {
         Ok(s) => s,
         Err(e) => return port_failure(&spec, &e),
@@ -436,10 +516,17 @@ pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> 
         tab,
         history: Vec::new(),
         steps: Vec::new(),
-        stats: Stats::default(),
+        stats: Stats {
+            llm_calls: criteria_job.is_some() as u32,
+            timing: Timing { open: ms_since(opening), ..Timing::default() },
+            ..Stats::default()
+        },
         observation,
         text_cache: None,
         criteria: None,
+        criteria_job,
+        checked: None,
+        notes: Vec::new(),
         done_rejections: 0,
         llm_next: false,
         pending: None,
@@ -449,6 +536,7 @@ pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> 
         stale_streak: 0,
         risk_checked: HashMap::new(),
         parked_at: None,
+        clock: (Instant::now(), 0),
     };
     drive(ports, state).await
 }
@@ -462,6 +550,7 @@ pub async fn resume(ports: &Ports, task_id: &str) -> Option<TaskOutcome> {
     state.observation = Value::Null;
     state.budget_base = (state.stats.steps, state.stats.decisions);
     state.stale_streak = 0;
+    state.clock = (Instant::now(), state.stats.elapsed_ms);
     Some(drive(ports, state).await)
 }
 
@@ -488,6 +577,7 @@ pub async fn approve(ports: &Ports, approval_id: &str, approved: bool) -> Option
     let task_id = APPROVALS.lock().ok()?.remove(approval_id)?;
     let mut state = TASKS.lock().ok()?.remove(&task_id)?;
     let pending = state.pending.take()?;
+    state.clock = (Instant::now(), state.stats.elapsed_ms);
     if !approved {
         match &pending.reject_action {
             Some(dismiss) => {
@@ -520,6 +610,7 @@ pub async fn approve(ports: &Ports, approval_id: &str, approved: bool) -> Option
 }
 
 fn park(mut state: TaskState, status: &str, message: String, pending: Option<Pending>) -> TaskOutcome {
+    state.stats.elapsed_ms = elapsed_ms(&state);
     let mut out = outcome(&state, status, message);
     if let Some(p) = &pending {
         out.pending = Some(json!({
@@ -573,8 +664,13 @@ async fn execute(
 ) -> Result<(), TaskOutcome> {
     let before = fingerprint(&state.observation);
     let target = None;
-    match ports::act(ports.browser.as_ref(), &state.tab, observation_id, action_id, text).await {
+    let acting = Instant::now();
+    let acted = ports::act(ports.browser.as_ref(), &state.tab, observation_id, action_id, text).await;
+    let act_ms = ms_since(acting);
+    state.stats.timing.act += act_ms;
+    match acted {
         Ok(out) => {
+            state.stats.timing.page += page_ms(&out);
             let mut next = out.get("observation").cloned().unwrap_or(Value::Null);
             if next.is_null() {
                 next = ports::observe(ports.browser.as_ref(), &state.tab).await.unwrap_or(Value::Null);
@@ -596,6 +692,7 @@ async fn execute(
                 confidence,
                 band,
                 decision_ms,
+                act_ms,
                 text: text.map(str::to_string),
                 outcome: "executed".into(),
                 page_changed: Some(changed),
@@ -616,6 +713,7 @@ async fn execute(
                 confidence,
                 band,
                 decision_ms,
+                act_ms,
                 text: None,
                 outcome: e.code.clone(),
                 page_changed: None,
@@ -666,12 +764,34 @@ fn missing_quote(criterion: &str, page_text: &str) -> Option<String> {
 
 /// Ask the decision model whether the page proves each criterion.
 async fn verify_done(ports: &Ports, state: &mut TaskState, route: &DecisionRoute) -> (bool, Vec<Value>) {
+    // The same page gives the same answer: asked twice (the decision model
+    // unsure, then the LLM agreeing), it is checked once.
+    let observation = state.observation.get("observation_id").and_then(Value::as_u64).unwrap_or(0);
+    if let Some((on, verified, evidence)) = &state.checked {
+        if *on == observation {
+            return (*verified, evidence.clone());
+        }
+    }
+    let checking = Instant::now();
+    let (verified, evidence) = check_done(ports, state, route).await;
+    state.stats.timing.verify += ms_since(checking);
+    state.checked = Some((observation, verified, evidence.clone()));
+    (verified, evidence)
+}
+
+async fn check_done(ports: &Ports, state: &mut TaskState, route: &DecisionRoute) -> (bool, Vec<Value>) {
     if state.criteria.is_none() {
         state.criteria = Some(if !state.spec.done_criteria.is_empty() {
             state.spec.done_criteria.clone()
         } else {
-            state.stats.llm_calls += 1;
-            llm_role::criteria(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &state.spec.goal).await
+            let written = match state.criteria_job.take() {
+                Some(job) => job.await,
+                None => {
+                    state.stats.llm_calls += 1;
+                    llm_role::criteria(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &state.spec.goal).await
+                }
+            };
+            if written.is_empty() { vec![state.spec.goal.clone()] } else { written }
         });
     }
     let criteria = state.criteria.clone().unwrap_or_default();
@@ -724,16 +844,14 @@ async fn verify_done(ports: &Ports, state: &mut TaskState, route: &DecisionRoute
     }
     // No decision model (or it could not answer): the LLM checks, and can only
     // confirm what the page shows.
-    let mut all = true;
-    let mut evidence = Vec::new();
-    for c in &criteria {
-        state.stats.llm_calls += 1;
-        let verdict = llm_role::verify(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), c, &page).await;
-        let ok = verdict.as_ref().map(|v| *v).unwrap_or(false);
-        all &= ok;
-        evidence.push(json!({ "criterion": c, "verdict": ok, "by": "llm", "error": verdict.err() }));
+    state.stats.llm_calls += 1;
+    match llm_role::verify(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &criteria, &page).await {
+        Ok(verdicts) => {
+            let evidence = criteria.iter().zip(&verdicts).map(|(c, ok)| json!({ "criterion": c, "verdict": ok, "by": "llm" })).collect();
+            (verdicts.iter().all(|ok| *ok), evidence)
+        }
+        Err(e) => (false, criteria.iter().map(|c| json!({ "criterion": c, "verdict": false, "by": "llm", "error": e })).collect()),
     }
-    (all, evidence)
 }
 
 fn record_trace(owner: &str, step: &Step, latency_ms: u64) {
@@ -759,19 +877,26 @@ fn record_trace(owner: &str, step: &Step, latency_ms: u64) {
     );
 }
 
+/// Why a task was slow, in words for the person: without the decision model
+/// every step is an LLM call — seconds where the model takes a fraction of one.
+fn unavailable_note(model: Option<&str>, error: &str) -> String {
+    let what = match model {
+        Some(m) if error.contains("not installed") => format!("The decision model `{m}` is not installed (Settings → Decision)"),
+        _ => format!("The decision model could not answer ({})", error.chars().take(160).collect::<String>()),
+    };
+    format!("{what}: an LLM chose every step instead, which takes seconds per step rather than a fraction of one.")
+}
+
 /// The loop proper.
 async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
-    let started = Instant::now();
     let max_steps = state.spec.max_steps.unwrap_or(state.settings.max_steps).clamp(1, 120);
-    let base_elapsed = state.stats.elapsed_ms;
     let _extension_run = ExtensionRun::start(state.spec.driver);
     loop {
-        state.stats.elapsed_ms = base_elapsed + started.elapsed().as_millis() as u64;
         let (steps_before_run, decisions_before_run) = state.budget_base;
         if state.stats.steps - steps_before_run >= max_steps || state.stats.decisions - decisions_before_run >= max_steps * 2 {
             return park(state, "budget", format!("Stopped at the {max_steps}-step budget; resume to go on"), None);
         }
-        if started.elapsed() >= RUN_WALL_CLOCK {
+        if state.clock.0.elapsed() >= RUN_WALL_CLOCK {
             let minutes = RUN_WALL_CLOCK.as_secs() / 60;
             return park(state, "budget", format!("Stopped after {minutes} minutes; resume to go on"), None);
         }
@@ -844,7 +969,10 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                 let bands = if *backend == Backend::Online { state.settings.bands_hosted } else { state.settings.bands_local };
                 let history = if *redact { redacted_history(&state.history) } else { state.history.clone() };
                 let encoded = encode(&view, &state.spec.goal, &history, *profile, model.clone(), Some(*backend));
-                match ports.decider.ask(&encoded.request).await {
+                let asked = Instant::now();
+                let answered = ports.decider.ask(&encoded.request).await;
+                state.stats.timing.decide += ms_since(asked);
+                match answered {
                     Ok(answers) => match resolve(&answers, &encoded, bands) {
                         Ok(step) => {
                             guesses = json!({ "operations": step.top_operations, "targets": step.top_targets });
@@ -857,16 +985,27 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                         state.option_chars /= 2;
                         continue;
                     }
-                    Err(e) => tracing::warn!("[browser] decision runtime unavailable: {e}"),
+                    Err(e) => {
+                        tracing::warn!("[browser] decision runtime unavailable: {e}");
+                        if state.notes.is_empty() {
+                            state.notes.push(unavailable_note(model.as_deref(), &e));
+                        }
+                    }
                 }
                 encoded_for_llm = Some(encode(&obs, &state.spec.goal, &state.history, Profile::JevFull, None, None));
             }
         }
 
+        // An unsure DONE is checked against the page before an LLM is asked:
+        // the check is what accepts a DONE whoever proposes it, and it takes a
+        // fraction of the time.
+        let unsure_done = model_step.as_ref().is_some_and(|s| s.operation == "DONE" && s.band != Band::Act) && !state.llm_next;
+        let proven = unsure_done && verify_done(ports, &mut state, &route).await.0;
+
         // LLM tier when the model is unsure, said BLOCKED, or progress stalled.
         let needs_llm = match &model_step {
             None => true,
-            Some(s) => s.band != Band::Act || s.operation == "BLOCKED" || state.llm_next,
+            Some(s) => !proven && (s.band != Band::Act || s.operation == "BLOCKED" || state.llm_next),
         };
         let (operation, target, action, by, confidence, band) = if let Some(field) = focused {
             ("TYPE_TEXT".to_string(), None, field, "rule", None, None)
@@ -875,8 +1014,11 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
             state.llm_next = false;
             state.stats.llm_calls += 1;
             state.stats.fallbacks += 1;
-            match llm_role::fallback(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &encoded_for_llm, &obs, &state.spec.goal, &state.history, &guesses).await {
-                Ok((op, target, _reason)) => {
+            let asked = Instant::now();
+            let picked = llm_role::fallback(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &encoded_for_llm, &obs, &state.spec.goal, &state.history, &guesses).await;
+            state.stats.timing.llm += ms_since(asked);
+            match picked {
+                Ok((op, target)) => {
                     let action = match &target {
                         Some(t) => encoded_for_llm.space.target(&op, t).map(|x| x.action.clone()).unwrap_or(Value::Null),
                         None => encoded_for_llm.space.control(&op).cloned().unwrap_or(Value::Null),
@@ -909,9 +1051,11 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                 if let Some(q) = state.spec.question.clone() {
                     if let Ok(read) = ports::read(ports.browser.as_ref(), &state.tab, 20_000).await {
                         state.stats.llm_calls += 1;
+                        let asked = Instant::now();
                         out.answer = llm_role::answer(ports.llm.as_ref(), state.settings.fallback_model.as_deref(), &q, &read).await.ok();
+                        state.stats.timing.answer += ms_since(asked);
                     }
-                    out.stats = state.stats.clone();
+                    out.stats = Stats { elapsed_ms: elapsed_ms(&state), ..state.stats.clone() };
                 }
                 return out;
             }
@@ -985,7 +1129,10 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                 Some(t) => t,
                 None => {
                     state.stats.llm_calls += 1;
-                    match llm_role::text_value(ports.llm.as_ref(), state.settings.text_model.as_deref(), &context).await {
+                    let asked = Instant::now();
+                    let written = llm_role::text_value(ports.llm.as_ref(), state.settings.text_model.as_deref(), &context).await;
+                    state.stats.timing.text += ms_since(asked);
+                    match written {
                         Ok(TextValue::Text(t)) => {
                             state.text_cache = Some((context, t.clone()));
                             t
@@ -1452,6 +1599,198 @@ pub(crate) mod tests {
         assert_eq!(out.status, "needs_user", "{}", out.message);
         assert!(out.stats.llm_calls <= 6, "bounded ({} LLM calls)", out.stats.llm_calls);
         assert_eq!(out.stats.steps, 0, "nothing was executed");
+    }
+
+    /// An LLM that does each of its jobs the obvious way and notes which it was asked for.
+    struct Scripted {
+        asked: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Scripted {
+        fn new() -> (Arc<Scripted>, Arc<std::sync::Mutex<Vec<String>>>) {
+            let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+            (Arc::new(Scripted { asked: asked.clone() }), asked)
+        }
+    }
+
+    #[async_trait]
+    impl Llm for Scripted {
+        async fn complete(&self, _m: Option<&str>, system: &str, user: &str, _t: u32) -> Result<String, String> {
+            let (job, answer) = if system.starts_with("List the concrete") {
+                ("criteria", r#"{"criteria":["Search results are shown"]}"#.to_string())
+            } else if system.contains("\"satisfied\"") {
+                let asked: Value = serde_json::from_str(user).unwrap();
+                let verdicts = vec![user.contains("Results"); asked["criteria"].as_array().unwrap().len()];
+                ("verify", json!({ "satisfied": verdicts }).to_string())
+            } else if user.contains("Results for books") {
+                ("step", r#"{"operation":"DONE","target":null}"#.to_string())
+            } else {
+                ("step", r#"{"operation":"CLICK","target":"1"}"#.to_string())
+            };
+            self.asked.lock().unwrap().push(job.to_string());
+            Ok(answer)
+        }
+    }
+
+    /// The fake shop behind a real wait on every call — so what was started
+    /// alongside the task gets its turn — noting each click.
+    struct Waiting {
+        shop: Arc<FakeBrowser>,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl BrowserPort for Waiting {
+        async fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, PortError> {
+            tokio::task::yield_now().await;
+            if path.ends_with("/act") {
+                self.log.lock().unwrap().push("click".to_string());
+            }
+            self.shop.call(method, path, body).await
+        }
+    }
+
+    /// With no criteria given an LLM writes them — while the browser works,
+    /// not as one more call between the last step and the answer.
+    #[tokio::test]
+    async fn criteria_are_written_while_the_task_runs() {
+        let (llm, log) = Scripted::new();
+        let ports = Ports { browser: Arc::new(Waiting { shop: FakeBrowser::new(true), log: log.clone() }), decider: Arc::new(FakeDecider), llm };
+        let mut task = spec("Search for books");
+        task.done_criteria.clear();
+        let out = start(&ports, BrowserSettings::default(), task).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        assert_eq!(*log.lock().unwrap(), ["criteria", "click"], "the criteria were asked for before the first click");
+        assert_eq!(out.stats.llm_calls, 1);
+        assert_eq!(out.evidence[0]["criterion"], "Search results are shown");
+    }
+
+    /// Decides like the fake, and notes which checkpoints it was asked to have ready.
+    struct Warmed {
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Decider for Warmed {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            FakeDecider.ask(request).await
+        }
+
+        async fn warm(&self, model: Option<&str>) {
+            self.log.lock().unwrap().push(format!("warm {}", model.unwrap_or("default")));
+        }
+    }
+
+    /// A checkpoint unloaded while idle takes a second or more to come back:
+    /// that happens while the page opens, not on the first step after it.
+    #[tokio::test]
+    async fn decision_checkpoints_load_while_the_page_opens() {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ports = |log: &Arc<std::sync::Mutex<Vec<String>>>| Ports {
+            browser: Arc::new(Waiting { shop: FakeBrowser::new(true), log: log.clone() }),
+            decider: Arc::new(Warmed { log: log.clone() }),
+            llm: Arc::new(NoLlm),
+        };
+        let out = start(&ports(&log), BrowserSettings::default(), spec("Search for books")).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        let seen = log.lock().unwrap().clone();
+        let click = seen.iter().position(|e| e == "click").expect("the task clicked");
+        assert_eq!(seen[..click], ["warm laya-browser", "warm default"], "asked for before the first step, one at a time: {seen:?}");
+        assert_eq!(out.stats.decisions, 4, "warming is not a decision");
+
+        // With the LLM picking every step there is no checkpoint to load.
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let settings = BrowserSettings { decision_backend: crate::browser_agent::settings::DecisionBackend::LlmOnly, ..BrowserSettings::default() };
+        start(&ports(&log), settings, spec("Search for books")).await;
+        assert!(!log.lock().unwrap().iter().any(|e| e.starts_with("warm")), "{:?}", log.lock().unwrap());
+    }
+
+    /// Says DONE on every page, never sure of it; counts the checks it is asked for.
+    struct UnsureDone {
+        checks: AtomicU64,
+    }
+
+    #[async_trait]
+    impl Decider for UnsureDone {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            if request.questions.get("c1").is_some() {
+                self.checks.fetch_add(1, Ordering::SeqCst);
+                return FakeDecider.ask(request).await;
+            }
+            let ops: Vec<String> = request.questions.get("operation").and_then(|q| q.get("criteria")).and_then(|c| c.as_object())
+                .map(|o| o.iter().map(|(k, _)| k.clone()).collect()).unwrap_or_default();
+            let ops: Vec<&str> = ops.iter().map(String::as_str).collect();
+            Ok(json!({ "operation": choice(&ops, "DONE", 0.4), "click_target": choice(&["1"], "1", 1.0) }))
+        }
+    }
+
+    /// The check is what accepts a DONE, whoever proposes it: when the page
+    /// already proves the goal, an unsure decision model needs no LLM to agree.
+    #[tokio::test]
+    async fn an_unsure_done_is_checked_before_an_llm_is_asked() {
+        // A page that already shows the results.
+        let shop = FakeBrowser::new(true);
+        *shop.clicked.lock().unwrap() = true;
+        let (llm, asked) = Scripted::new();
+        let ports = Ports { browser: shop, decider: Arc::new(UnsureDone { checks: AtomicU64::new(0) }), llm };
+        let out = start(&ports, BrowserSettings::default(), spec("Search for books")).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        assert!(asked.lock().unwrap().is_empty(), "no LLM call: {:?}", asked.lock().unwrap());
+        assert_eq!(out.stats.fallbacks, 0);
+
+        // A page that does not: the LLM is asked, and the page is checked once, not per opinion.
+        let decider = Arc::new(UnsureDone { checks: AtomicU64::new(0) });
+        let (llm, asked) = Scripted::new();
+        let ports = Ports { browser: FakeBrowser::new(false), decider: decider.clone(), llm };
+        let mut task = spec("Search for books");
+        task.max_steps = Some(1);
+        let out = start(&ports, BrowserSettings::default(), task).await;
+        assert_ne!(out.status, "done", "{}", out.message);
+        assert!(asked.lock().unwrap().iter().any(|job| job == "step"), "the LLM got the step");
+        assert_eq!(decider.checks.load(Ordering::SeqCst), 1, "one page, one check");
+    }
+
+    /// A decision runtime whose checkpoint was never installed.
+    struct NotInstalled;
+
+    #[async_trait]
+    impl Decider for NotInstalled {
+        async fn ask(&self, _request: &AskRequest) -> Result<Value, String> {
+            Err("the decision runtime answered 404 Not Found: {\"error\":\"model `laya-browser` is not installed\"}".into())
+        }
+    }
+
+    /// Without its decision model the loop still works — every step an LLM
+    /// call — and says so, instead of just being slow.
+    #[tokio::test]
+    async fn a_missing_decision_model_is_named_in_the_outcome() {
+        let (llm, asked) = Scripted::new();
+        let without_model = Ports { browser: FakeBrowser::new(true), decider: Arc::new(NotInstalled), llm };
+        let mut task = spec("Search for books");
+        task.done_criteria = vec!["Search results are shown".into(), "The count of results is shown".into()];
+        let out = start(&without_model, BrowserSettings::default(), task).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        assert!(out.steps.iter().all(|s| s.by == "llm"), "{:?}", out.steps);
+        assert_eq!(out.notes.len(), 1, "said once: {:?}", out.notes);
+        assert!(out.notes[0].contains("`laya-browser` is not installed") && out.notes[0].contains("Settings"), "{}", out.notes[0]);
+        // Both criteria went to the LLM in one call.
+        assert_eq!(asked.lock().unwrap().iter().filter(|job| *job == "verify").count(), 1);
+        assert_eq!(out.evidence.len(), 2);
+        assert!(serde_json::to_value(&out).unwrap()["notes"].is_array());
+        // A task that ran on its decision model has nothing to say.
+        let out = start(&ports(FakeBrowser::new(true)), BrowserSettings::default(), spec("Search for books")).await;
+        assert!(serde_json::to_value(&out).unwrap().get("notes").is_none());
+    }
+
+    /// The outcome says where the time went.
+    #[tokio::test]
+    async fn the_outcome_accounts_for_its_time() {
+        let out = start(&ports(FakeBrowser::new(true)), BrowserSettings::default(), spec("Search for books")).await;
+        let json = serde_json::to_value(&out).unwrap();
+        for part in ["open", "decide", "llm", "risk", "text", "act", "page", "verify", "answer"] {
+            assert!(json["stats"]["timing"][part].is_u64(), "{part} missing from {}", json["stats"]["timing"]);
+        }
+        assert!(json["steps"][0]["act_ms"].is_u64());
     }
 
     #[tokio::test]

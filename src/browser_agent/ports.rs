@@ -42,6 +42,12 @@ pub trait BrowserPort: Send + Sync {
 #[async_trait]
 pub trait Decider: Send + Sync {
     async fn ask(&self, request: &AskRequest) -> Result<Value, String>;
+
+    /// Have the local checkpoint `model` (`None`: the default one) in memory
+    /// by the time it is first asked. A checkpoint is unloaded after a while
+    /// idle, and loading it takes a second or more — time a task otherwise
+    /// spends on its first step, after the page is already there.
+    async fn warm(&self, _model: Option<&str>) {}
 }
 
 /// One-shot completions (no tools). `model` is an LLM config id; `None` is the active one.
@@ -105,6 +111,25 @@ impl Decider for RuntimeDecider {
     async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
         let response = crate::decision::client::ask(&self.manager, request).await.map_err(|e| e.to_string())?;
         serde_json::to_value(&response.answers).map_err(|e| e.to_string())
+    }
+
+    /// The smallest question there is: answering it loads the checkpoint (when
+    /// loading on demand is on), and costs next to nothing once it is loaded.
+    async fn warm(&self, model: Option<&str>) {
+        use crate::decision::json::Json;
+        let question = Json::Object(vec![
+            ("type".into(), Json::String("noul".into())),
+            ("instructions".into(), Json::String("Is this a web page?".into())),
+        ]);
+        let request = AskRequest {
+            backend: Some(crate::decision::types::Backend::Local),
+            model: model.map(str::to_string),
+            state: Json::String("A web page.".into()),
+            questions: Json::Object(vec![("ready".into(), question)]),
+        };
+        if let Err(e) = crate::decision::client::ask(&self.manager, &request).await {
+            tracing::debug!("[browser] decision model {model:?} not warmed: {e}");
+        }
     }
 }
 

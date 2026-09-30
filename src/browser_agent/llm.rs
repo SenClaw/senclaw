@@ -103,7 +103,7 @@ pub async fn fallback(
     goal: &str,
     history: &[HistoryItem],
     model_guesses: &Value,
-) -> Result<(String, Option<String>, String), String> {
+) -> Result<(String, Option<String>), String> {
     let text: String = observation.get("text").and_then(Value::as_str).unwrap_or_default().chars().take(4000).collect();
     let elements = serde_json::to_value(&encoded.space.elements).unwrap_or(Value::Null);
     let input = json!({
@@ -114,19 +114,18 @@ pub async fn fallback(
         "recent_actions": history.iter().rev().take(10).rev().collect::<Vec<_>>(),
         "decision_model_guesses": model_guesses,
     });
-    complete_twice(llm, model, FALLBACK, &input.to_string(), 300, |raw| parse_fallback(raw, encoded)).await
+    complete_twice(llm, model, FALLBACK, &input.to_string(), 200, |raw| parse_fallback(raw, encoded)).await
 }
 
-pub fn parse_fallback(raw: &str, encoded: &Encoded) -> Result<(String, Option<String>, String), String> {
+pub fn parse_fallback(raw: &str, encoded: &Encoded) -> Result<(String, Option<String>), String> {
     let obj = json_object(raw).ok_or("the fallback model did not answer with JSON")?;
     let operation = obj.get("operation").and_then(Value::as_str).unwrap_or_default().to_string();
     if !encoded.operations.contains(&operation) {
         return Err(format!("the fallback model chose an operation that was not offered: {operation:?}"));
     }
-    let reason = obj.get("reason").and_then(Value::as_str).unwrap_or_default().to_string();
     let needs_target = encoded.space.operations_with_targets().any(|op| op == operation);
     if !needs_target {
-        return Ok((operation, None, reason));
+        return Ok((operation, None));
     }
     let target = match obj.get("target") {
         Some(Value::String(t)) => t.trim_start_matches('[').trim_end_matches(']').to_string(),
@@ -136,16 +135,28 @@ pub fn parse_fallback(raw: &str, encoded: &Encoded) -> Result<(String, Option<St
     if encoded.space.target(&operation, &target).is_none() {
         return Err(format!("the fallback model chose a target that was not offered: {target:?}"));
     }
-    Ok((operation, Some(target), reason))
+    Ok((operation, Some(target)))
 }
 
-/// An LLM check of one criterion, used when no decision model is available.
-pub async fn verify(llm: &dyn Llm, model: Option<&str>, criterion: &str, page: &Value) -> Result<bool, String> {
-    let input = json!({ "criterion": criterion, "page": page });
-    let system = format!("{VERIFY}\nReturn only JSON: {{\"satisfied\": true|false}}.");
-    let raw = llm.complete(model, &system, &input.to_string(), 50).await?;
-    let obj = json_object(&raw).ok_or("the verifier did not answer with JSON")?;
-    obj.get("satisfied").and_then(Value::as_bool).ok_or_else(|| "the verifier gave no verdict".to_string())
+/// An LLM check of the criteria, used when no decision model is available:
+/// one verdict per criterion, in order, from a single call.
+pub async fn verify(llm: &dyn Llm, model: Option<&str>, criteria: &[String], page: &Value) -> Result<Vec<bool>, String> {
+    let input = json!({ "criteria": criteria, "page": page });
+    let system = format!(
+        "{VERIFY}\nReturn only JSON: {{\"satisfied\": [true|false, ...]}} — one verdict per criterion, in the order given."
+    );
+    let max_tokens = 40 + 8 * criteria.len() as u32;
+    complete_twice(llm, model, &system, &input.to_string(), max_tokens, |raw| parse_verdicts(raw, criteria.len())).await
+}
+
+/// Exactly one boolean per criterion; anything else is no verdict at all.
+pub fn parse_verdicts(raw: &str, expected: usize) -> Result<Vec<bool>, String> {
+    let obj = json_object(raw).ok_or("the verifier did not answer with JSON")?;
+    let verdicts: Option<Vec<bool>> = obj.get("satisfied").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_bool).collect());
+    match verdicts {
+        Some(v) if v.len() == expected => Ok(v),
+        _ => Err("the verifier gave no verdict for every criterion".to_string()),
+    }
 }
 
 pub async fn answer(llm: &dyn Llm, model: Option<&str>, question: &str, read: &Value) -> Result<String, String> {
@@ -222,12 +233,22 @@ mod tests {
             ]
         });
         let encoded = encode(&page, "g", &[], Profile::JevFull, None, None);
-        assert_eq!(parse_fallback(r#"{"operation":"CLICK","target":"2","reason":"go"}"#, &encoded).unwrap().1.as_deref(), Some("2"));
+        assert_eq!(parse_fallback(r#"{"operation":"CLICK","target":"2"}"#, &encoded).unwrap().1.as_deref(), Some("2"));
+        assert_eq!(parse_fallback(r#"{"operation":"CLICK","target":"2","reason":"go"}"#, &encoded).unwrap().1.as_deref(), Some("2"), "an explanation is tolerated");
         assert_eq!(parse_fallback(r#"{"operation":"CLICK","target":2}"#, &encoded).unwrap().1.as_deref(), Some("2"));
         assert_eq!(parse_fallback(r#"{"operation":"WAIT","target":null}"#, &encoded).unwrap().0, "WAIT");
         assert!(parse_fallback(r#"{"operation":"CLICK","target":"9"}"#, &encoded).is_err());
         assert!(parse_fallback(r#"{"operation":"EVAL_JS","target":null}"#, &encoded).is_err());
         assert!(parse_fallback(r#"{"operation":"TYPE_TEXT","target":"2"}"#, &encoded).is_err(), "2 cannot be typed into");
         assert!(parse_fallback("click the button", &encoded).is_err());
+    }
+
+    #[test]
+    fn a_verdict_is_needed_for_every_criterion() {
+        assert_eq!(parse_verdicts(r#"{"satisfied":[true,false]}"#, 2).unwrap(), vec![true, false]);
+        assert_eq!(parse_verdicts("```json\n{\"satisfied\": [true]}\n```", 1).unwrap(), vec![true]);
+        for bad in [r#"{"satisfied":[true]}"#, r#"{"satisfied":true}"#, r#"{"satisfied":[true,"yes"]}"#, "both hold"] {
+            assert!(parse_verdicts(bad, 2).is_err(), "{bad} must not count as two verdicts");
+        }
     }
 }
