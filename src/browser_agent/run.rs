@@ -1040,6 +1040,12 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         };
         let decision_ms = decision_started.elapsed().as_millis() as u64;
 
+        // Clicking something that is already on turns it off (a like, a
+        // checkbox). When the page already proves the goal, that click would
+        // undo it: the task is done, whatever the model wanted next.
+        let already_on = operation == "CLICK" && action.get("checked").and_then(Value::as_str) == Some("true");
+        let operation = if already_on && verify_done(ports, &mut state, &route).await.0 { "DONE".to_string() } else { operation };
+
         if operation == "BLOCKED" {
             return park(state, "blocked", "No offered operation can make progress on this page".into(), None);
         }
@@ -1663,6 +1669,84 @@ pub(crate) mod tests {
         assert_eq!(*log.lock().unwrap(), ["criteria", "click"], "the criteria were asked for before the first click");
         assert_eq!(out.stats.llm_calls, 1);
         assert_eq!(out.evidence[0]["criterion"], "Search results are shown");
+    }
+
+    /// A post whose like is already on; clicking it turns it off again.
+    struct LikedPost {
+        liked: std::sync::Mutex<bool>,
+        seq: AtomicU64,
+    }
+
+    impl LikedPost {
+        fn page(&self) -> Value {
+            let id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+            let liked = *self.liked.lock().unwrap();
+            json!({
+                "observation_id": id, "tab_id": "t1", "url": "https://clips.test/", "title": "Clips",
+                "text": if liked { "Morning market\nYou liked this clip" } else { "Morning market" },
+                "actions": [{"id": "e1", "node": 1, "kind": "click", "role": "button", "label": "Like clip", "value": "", "checked": liked.to_string()}],
+                "dialog": null, "viewport": {"scroll_y": 0}
+            })
+        }
+    }
+
+    #[async_trait]
+    impl BrowserPort for LikedPost {
+        async fn call(&self, _method: &str, path: &str, _body: Option<Value>) -> Result<Value, PortError> {
+            if path == "/v1/sessions" {
+                return Ok(json!({ "id": "s1" }));
+            }
+            if path.ends_with("/tabs") {
+                return Ok(json!({ "tab": { "id": "t1" }, "observation": self.page() }));
+            }
+            if path.ends_with("/act") {
+                let mut liked = self.liked.lock().unwrap();
+                *liked = !*liked;
+                drop(liked);
+                return Ok(json!({ "executed": "e1", "observation": self.page() }));
+            }
+            Ok(self.page())
+        }
+    }
+
+    /// Clicks the like on every page; says the goal is met when the page says so.
+    struct AlwaysLikes;
+
+    #[async_trait]
+    impl Decider for AlwaysLikes {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            let text = serde_json::to_string(&request.state).unwrap();
+            if request.questions.get("effect").is_some() {
+                return Ok(json!({ "effect": choice(&["view", "adjust", "commit"], "adjust", 0.9) }));
+            }
+            if request.questions.get("c1").is_some() {
+                let liked = text.contains("You liked this clip");
+                return Ok(json!({ "c1": { "type": "noul", "noul": if liked { 0.95 } else { 0.05 }, "confidence": 0.9 } }));
+            }
+            ClickDecider.ask(request).await
+        }
+    }
+
+    /// A model asked to like a clip clicks its like button — also when the
+    /// like is already on, which would take it back. The page already proves
+    /// the goal then, and the click is not made.
+    #[tokio::test]
+    async fn a_toggle_that_already_satisfies_the_goal_is_not_clicked_off() {
+        let site = Arc::new(LikedPost { liked: std::sync::Mutex::new(true), seq: AtomicU64::new(0) });
+        let ports = Ports { browser: site.clone(), decider: Arc::new(AlwaysLikes), llm: Arc::new(NoLlm) };
+        let mut task = spec("Like the clip");
+        task.done_criteria = vec!["The clip is liked".into()];
+        let out = start(&ports, BrowserSettings::default(), task.clone()).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        assert_eq!(out.stats.steps, 0, "nothing was clicked: {:?}", out.steps);
+        assert!(*site.liked.lock().unwrap(), "the like is still on");
+
+        // Not liked yet: the click is the step to take, then the task is done.
+        let site = Arc::new(LikedPost { liked: std::sync::Mutex::new(false), seq: AtomicU64::new(0) });
+        let ports = Ports { browser: site.clone(), decider: Arc::new(AlwaysLikes), llm: Arc::new(NoLlm) };
+        let out = start(&ports, BrowserSettings::default(), task).await;
+        assert_eq!((out.status.as_str(), out.stats.steps), ("done", 1), "{}: {:?}", out.message, out.steps);
+        assert!(*site.liked.lock().unwrap());
     }
 
     /// Decides like the fake, and notes which checkpoints it was asked to have ready.
