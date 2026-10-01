@@ -20,7 +20,7 @@ info:
 
     A few templates overlap (`/api/oauth/{provider}/start` and `/api/oauth/accounts/{id}`, for example). That is not a conflict at runtime: axum matches a literal segment before a capture, so `/api/oauth/accounts/1` reaches the accounts handler. A client generated from this document should prefer the more literal template for the same reason.
   title: SenClaw daemon API
-  version: 0.1.2
+  version: 0.1.3
 openapi: 3.1.0
 paths:
   /api/admin-permissions:
