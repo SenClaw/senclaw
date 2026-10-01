@@ -233,10 +233,12 @@ pub enum DecisionRoute {
     LlmOnly,
 }
 
-pub fn select_backend(settings: &BrowserSettings, url: &str, driver: Driver) -> DecisionRoute {
+/// `local_profile` is the request format of the local checkpoint
+/// (`Decider::local_profile`).
+pub fn select_backend(settings: &BrowserSettings, url: &str, driver: Driver, local_profile: Profile) -> DecisionRoute {
     let host = host_of(url);
     let local = DecisionRoute::Model {
-        profile: Profile::LayaV3,
+        profile: local_profile,
         backend: Backend::Local,
         model: Some(settings.local_model.clone()),
         redact: false,
@@ -341,13 +343,13 @@ mod tests {
 
         // Backend: local unless the domain is allow-listed for hosted and not sensitive.
         let mut s = BrowserSettings::default();
-        assert!(matches!(select_backend(&s, "https://example.com/", Driver::Managed), DecisionRoute::Model { backend: Backend::Local, .. }));
+        assert!(matches!(select_backend(&s, "https://example.com/", Driver::Managed, Profile::LayaV5), DecisionRoute::Model { backend: Backend::Local, profile: Profile::LayaV5, .. }), "the local checkpoint's own format");
         s.hosted_domains = vec!["example.com".into(), "vietcombank.com.vn".into()];
-        assert!(matches!(select_backend(&s, "https://www.example.com/a", Driver::Managed), DecisionRoute::Model { backend: Backend::Online, redact: true, .. }));
-        assert!(matches!(select_backend(&s, "https://www.example.com/a", Driver::Extension), DecisionRoute::Model { backend: Backend::Local, .. }), "the person's Chrome stays local");
-        assert!(matches!(select_backend(&s, "https://vietcombank.com.vn/", Driver::Managed), DecisionRoute::Model { backend: Backend::Local, .. }), "sensitive stays local");
+        assert!(matches!(select_backend(&s, "https://www.example.com/a", Driver::Managed, Profile::LayaV5), DecisionRoute::Model { backend: Backend::Online, profile: Profile::JevFull, redact: true, .. }));
+        assert!(matches!(select_backend(&s, "https://www.example.com/a", Driver::Extension, Profile::LayaV3), DecisionRoute::Model { backend: Backend::Local, .. }), "the person's Chrome stays local");
+        assert!(matches!(select_backend(&s, "https://vietcombank.com.vn/", Driver::Managed, Profile::LayaV3), DecisionRoute::Model { backend: Backend::Local, .. }), "sensitive stays local");
         s.decision_backend = DecisionBackend::LlmOnly;
-        assert_eq!(select_backend(&s, "https://example.com/", Driver::Managed), DecisionRoute::LlmOnly);
+        assert_eq!(select_backend(&s, "https://example.com/", Driver::Managed, Profile::LayaV3), DecisionRoute::LlmOnly);
         assert_eq!(host_of("https://user@Sub.Example.com:8443/path?q=1"), "sub.example.com");
         assert_eq!(host_of("https://evil.test\\@mail.google.com/"), "evil.test", "a backslash ends the host");
         assert_eq!(host_of("not a url"), "");

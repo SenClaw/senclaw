@@ -9,6 +9,7 @@ use reqwest::Method;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::encoder::Profile;
 use crate::decision::types::AskRequest;
 use crate::runtime::manager::{RuntimeClientError, RuntimeManager};
 
@@ -48,6 +49,11 @@ pub trait Decider: Send + Sync {
     /// idle, and loading it takes a second or more — time a task otherwise
     /// spends on its first step, after the page is already there.
     async fn warm(&self, _model: Option<&str>) {}
+
+    /// The request format the local checkpoint `model` was fine-tuned on.
+    fn local_profile(&self, _model: &str) -> Profile {
+        Profile::LayaV3
+    }
 }
 
 /// One-shot completions (no tools). `model` is an LLM config id; `None` is the active one.
@@ -104,6 +110,8 @@ impl BrowserPort for RuntimeBrowser {
 
 pub struct RuntimeDecider {
     pub manager: Arc<RuntimeManager>,
+    /// Where the decision runtime's checkpoints live (`<local-models>`).
+    pub local_models_dir: PathBuf,
 }
 
 #[async_trait]
@@ -111,6 +119,10 @@ impl Decider for RuntimeDecider {
     async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
         let response = crate::decision::client::ask(&self.manager, request).await.map_err(|e| e.to_string())?;
         serde_json::to_value(&response.answers).map_err(|e| e.to_string())
+    }
+
+    fn local_profile(&self, model: &str) -> Profile {
+        Profile::for_laya_format(super::settings::checkpoint_format(&self.local_models_dir, model).as_deref())
     }
 
     /// The smallest question there is: answering it loads the checkpoint (when

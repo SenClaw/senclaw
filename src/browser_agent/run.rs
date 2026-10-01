@@ -14,7 +14,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::budget::{self, DEFAULT_OPTION_CHARS};
-use super::decide::{resolve, Band, Step};
+use super::decide::{self, resolve, Band, Step};
 use super::encoder::{encode, to_json, HistoryItem, Profile};
 use super::llm::{self as llm_role, TextValue};
 use super::policy::{self, DecisionRoute, Tier};
@@ -165,6 +165,8 @@ struct TaskState {
     parked_at: Option<Instant>,
     /// When this run of the loop began, and the time earlier runs had used.
     clock: (Instant, u64),
+    /// The request format of the local decision checkpoint.
+    local_profile: Profile,
 }
 
 /// Load the local decision checkpoints while the page opens: the one that
@@ -173,7 +175,8 @@ struct TaskState {
 /// are loading at the same moment.
 fn warm_decision_models(ports: &Ports, settings: &BrowserSettings, spec: &TaskSpec) {
     let start = spec.url.as_deref().unwrap_or(&settings.start_url);
-    let DecisionRoute::Model { backend: Backend::Local, model, .. } = policy::select_backend(settings, start, spec.driver) else { return };
+    let local = ports.decider.local_profile(&settings.local_model);
+    let DecisionRoute::Model { backend: Backend::Local, model, .. } = policy::select_backend(settings, start, spec.driver, local) else { return };
     let decider = ports.decider.clone();
     tokio::spawn(async move {
         decider.warm(model.as_deref()).await;
@@ -420,7 +423,8 @@ pub async fn manual_step_raises_risk(ports: &Ports, settings: &BrowserSettings, 
         return None;
     }
     let url = obs.get("url").and_then(Value::as_str).unwrap_or_default();
-    let DecisionRoute::Model { backend, redact, .. } = policy::select_backend(settings, url, driver) else { return None };
+    let local = ports.decider.local_profile(&settings.local_model);
+    let DecisionRoute::Model { backend, redact, .. } = policy::select_backend(settings, url, driver, local) else { return None };
     let label = action.get("label").and_then(Value::as_str).unwrap_or_default();
     risk_answer(ports, backend, redact, obs, label)
         .await
@@ -508,10 +512,13 @@ pub async fn start(ports: &Ports, settings: BrowserSettings, spec: TaskSpec) -> 
         };
     }
     remember_chat_tab(&spec.owner, spec.driver, &tab);
+    let local_profile = ports.decider.local_profile(&settings.local_model);
+    tracing::info!("[browser] local steps by `{}`, asked in request format {local_profile:?}", settings.local_model);
     let state = TaskState {
         id: new_id("brw"),
         spec,
         option_chars: DEFAULT_OPTION_CHARS,
+        local_profile,
         settings,
         tab,
         history: Vec::new(),
@@ -948,7 +955,7 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         let focused = state.type_into.take().and_then(|node| fill_action(&obs, node));
 
         // Decision tier. Every pass counts against the budget, whichever tier answers.
-        let route = policy::select_backend(&state.settings, &url, state.spec.driver);
+        let route = policy::select_backend(&state.settings, &url, state.spec.driver, state.local_profile);
         let decision_started = Instant::now();
         if focused.is_none() {
             state.stats.decisions += 1;
@@ -970,7 +977,11 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
                 let history = if *redact { redacted_history(&state.history) } else { state.history.clone() };
                 let encoded = encode(&view, &state.spec.goal, &history, *profile, model.clone(), Some(*backend));
                 let asked = Instant::now();
-                let answered = ports.decider.ask(&encoded.request).await;
+                let answered = if *profile == Profile::LayaV5 {
+                    decide::ask_chunked(ports.decider.as_ref(), &encoded.request, decide::MAX_OPTIONS_V5).await
+                } else {
+                    ports.decider.ask(&encoded.request).await
+                };
                 state.stats.timing.decide += ms_since(asked);
                 match answered {
                     Ok(answers) => match resolve(&answers, &encoded, bands) {
@@ -1787,6 +1798,43 @@ pub(crate) mod tests {
         let settings = BrowserSettings { decision_backend: crate::browser_agent::settings::DecisionBackend::LlmOnly, ..BrowserSettings::default() };
         start(&ports(&log), settings, spec("Search for books")).await;
         assert!(!log.lock().unwrap().iter().any(|e| e.starts_with("warm")), "{:?}", log.lock().unwrap());
+    }
+
+    /// Decides like the fake for a checkpoint fine-tuned on format v5, and
+    /// keeps the state of every step request it is sent.
+    struct FormatV5 {
+        states: Arc<std::sync::Mutex<Vec<Json>>>,
+    }
+
+    #[async_trait]
+    impl Decider for FormatV5 {
+        async fn ask(&self, request: &AskRequest) -> Result<Value, String> {
+            if request.questions.get("operation").is_some() {
+                self.states.lock().unwrap().push(request.state.clone());
+            }
+            FakeDecider.ask(request).await
+        }
+
+        fn local_profile(&self, model: &str) -> Profile {
+            assert_eq!(model, "laya-browser");
+            Profile::LayaV5
+        }
+    }
+
+    /// A step is asked in the format the local checkpoint was fine-tuned on:
+    /// v5 puts the form's fields first in the state.
+    #[tokio::test]
+    async fn steps_are_asked_in_the_format_the_checkpoint_was_trained_on() {
+        let states = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ports = Ports { browser: FakeBrowser::new(true), decider: Arc::new(FormatV5 { states: states.clone() }), llm: Arc::new(NoLlm) };
+        let out = start(&ports, BrowserSettings::default(), spec("Search for books")).await;
+        assert_eq!(out.status, "done", "{}", out.message);
+        let states = states.lock().unwrap().clone();
+        assert!(!states.is_empty(), "the checkpoint chose the steps");
+        for state in states {
+            let keys: Vec<&str> = state.as_object().unwrap().iter().map(|(k, _)| k.as_str()).collect();
+            assert_eq!(keys, ["fields", "page", "recent_actions"]);
+        }
     }
 
     /// Says DONE on every page, never sure of it; counts the checks it is asked for.

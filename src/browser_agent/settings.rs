@@ -155,8 +155,22 @@ pub fn runtime_installed(senclaw_home: &Path) -> bool {
 /// models under `<local models>/laya/<id>/`, and writes `senclaw-laya.json`
 /// there last, once the install is complete.
 pub fn decision_model_installed(local_models_dir: &Path, id: &str) -> bool {
+    checkpoint_dir(local_models_dir, id).is_some_and(|dir| dir.join("senclaw-laya.json").is_file())
+}
+
+/// `laya_fmt` from a local checkpoint's `rl_agent_config.json`: the request
+/// format it was fine-tuned on (`v5` for laya-browser v19s). Absent in older
+/// checkpoints and in ones that are not browser fine-tunes.
+pub fn checkpoint_format(local_models_dir: &Path, id: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(checkpoint_dir(local_models_dir, id)?.join("rl_agent_config.json")).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    config.get("laya_fmt")?.as_str().map(str::to_string)
+}
+
+/// `<local-models>/laya/<id>`, for an id that is one safe path component.
+fn checkpoint_dir(local_models_dir: &Path, id: &str) -> Option<std::path::PathBuf> {
     let safe = !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')) && !id.starts_with('.');
-    safe && local_models_dir.join("laya").join(id).join("senclaw-laya.json").is_file()
+    safe.then(|| local_models_dir.join("laya").join(id))
 }
 
 /// The engine the agent's browser tools use, with `auto` resolved.
@@ -224,5 +238,18 @@ mod tests {
         assert!(decision_model_installed(dir.path(), "laya-browser"));
         assert!(!decision_model_installed(dir.path(), "multilingual"));
         assert!(!decision_model_installed(dir.path(), "../laya/laya-browser"), "an id is a name, never a path");
+    }
+
+    #[test]
+    fn a_checkpoint_names_the_request_format_it_was_trained_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("laya/laya-browser");
+        std::fs::create_dir_all(&model).unwrap();
+        assert_eq!(checkpoint_format(dir.path(), "laya-browser"), None, "no config yet");
+        std::fs::write(model.join("rl_agent_config.json"), r#"{"max_len": 1024, "laya_fmt": "v5"}"#).unwrap();
+        assert_eq!(checkpoint_format(dir.path(), "laya-browser").as_deref(), Some("v5"));
+        std::fs::write(model.join("rl_agent_config.json"), r#"{"max_len": 1024}"#).unwrap();
+        assert_eq!(checkpoint_format(dir.path(), "laya-browser"), None, "checkpoints from before the field");
+        assert_eq!(checkpoint_format(dir.path(), "../laya/laya-browser"), None);
     }
 }

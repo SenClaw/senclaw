@@ -100,7 +100,7 @@ impl AgentState {
             .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "runtime_manager_unset", "the runtime manager is not wired"))?;
         Ok(Ports {
             browser: Arc::new(RuntimeBrowser { manager: manager.clone() }),
-            decider: Arc::new(RuntimeDecider { manager }),
+            decider: Arc::new(RuntimeDecider { manager, local_models_dir: self.local_models_dir() }),
             llm: Arc::new(ConfigLlm { config_path: self.config_path.clone() }),
         })
     }
