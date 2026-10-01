@@ -527,7 +527,7 @@ pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
     tools
         .iter()
         .map(|t| {
-            let mut schema = t.input_schema();
+            let mut schema = object_parameters(t.input_schema());
             sanitize_schema_node(&mut schema);
             serde_json::json!({
                 "type": "function",
@@ -539,6 +539,31 @@ pub(crate) fn build_openai_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// A tool's parameter schema as the object schema every provider requires at
+/// the top level. An MCP server may declare `{}`, `{"properties": …}` with no
+/// `type`, or nothing at all; OpenAI-compatible servers answer that with 400
+/// `invalid_tool_schema` ("tool parameters must be an object schema") and
+/// Anthropic with a 400 on `input_schema.type`, failing the whole turn for
+/// one tool's sloppy declaration.
+pub(crate) fn object_parameters(schema: Value) -> Value {
+    match schema {
+        Value::Object(mut obj) => {
+            match obj.get("type") {
+                Some(Value::String(t)) if t == "object" => {}
+                // Anything but an object can't be a parameter list: offer no
+                // parameters rather than a schema the provider refuses.
+                Some(_) => return serde_json::json!({ "type": "object", "properties": {} }),
+                None => {
+                    obj.insert("type".into(), Value::String("object".into()));
+                }
+            }
+            obj.entry("properties").or_insert_with(|| serde_json::json!({}));
+            Value::Object(obj)
+        }
+        _ => serde_json::json!({ "type": "object", "properties": {} }),
+    }
 }
 
 /// Replace boolean JSON Schemas (`true`/`false`) with `{"type": "object"}` in
@@ -1054,11 +1079,46 @@ async fn query_openai(
         bail!("OpenAI API error ({status}): {body}");
     }
 
-    if stream {
-        parse_openai_stream(response, cancel, on_delta).await
-    } else {
-        let json: Value = response.json().await.context("OpenAI JSON parse")?;
-        parse_openai_non_stream(&json)
+    // A server that answers a stream request with plain JSON is reporting an
+    // error under a 200 (LM Studio does this for an unknown path:
+    // `{"error":"Unexpected endpoint or method. (POST /chat/completions)"}`)
+    // or ignoring `stream`. Read as SSE, either comes back as an empty answer:
+    // the turn is retried and finally reported as EMPTY_COMPLETION with a
+    // hint about tool counts, while the server's own message is never shown.
+    let is_event_stream = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+    if stream && is_event_stream {
+        return parse_openai_stream(response, cancel, on_delta).await;
+    }
+    let json: Value = response.json().await.context("OpenAI JSON parse")?;
+    if let Some(err) = openai_body_error(&json) {
+        bail!("OpenAI API error (200 OK): {err}{}", base_url_hint(&profile.base_url));
+    }
+    parse_openai_non_stream(&json)
+}
+
+/// The error a 200 response body carries, in either shape servers use:
+/// `{"error": "text"}` (LM Studio) or `{"error": {"message": …}}` (OpenAI).
+fn openai_body_error(json: &Value) -> Option<String> {
+    match json.get("error")? {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => None,
+        other => Some(other.get("message").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| other.to_string())),
+    }
+}
+
+/// A hint for the commonest misconfiguration behind an "unknown endpoint":
+/// a base URL with no path, when the server serves its OpenAI API under `/v1`
+/// (LM Studio, Ollama, vLLM, llama.cpp all do).
+fn base_url_hint(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    let path = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest).split_once('/').map(|(_, p)| p);
+    match path {
+        None | Some("") => format!(" — the base URL has no path; OpenAI-compatible servers usually serve under /v1, try {trimmed}/v1"),
+        Some(_) => String::new(),
     }
 }
 
@@ -1219,7 +1279,7 @@ fn anthropic_tools_for_api(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
     tools
         .iter()
         .map(|t| {
-            let schema = t.input_schema();
+            let schema = object_parameters(t.input_schema());
             serde_json::json!({
                 "name": t.name(),
                 "description": t.description(),
@@ -2383,6 +2443,41 @@ mod tests {
 
     /// Boolean subschemas (schemars output for `serde_json::Value`) must be
     /// rewritten to object schemas — Gemini-backed OpenAI proxies 400 on them.
+    #[test]
+    fn an_error_under_a_200_is_read_in_both_shapes() {
+        use serde_json::json;
+        assert_eq!(
+            openai_body_error(&json!({"error": "Unexpected endpoint or method. (POST /chat/completions)"})).as_deref(),
+            Some("Unexpected endpoint or method. (POST /chat/completions)")
+        );
+        assert_eq!(openai_body_error(&json!({"error": {"message": "bad model"}})).as_deref(), Some("bad model"));
+        assert_eq!(openai_body_error(&json!({"error": null, "choices": []})), None);
+        assert_eq!(openai_body_error(&json!({"choices": []})), None);
+    }
+
+    #[test]
+    fn a_base_url_without_a_path_gets_the_v1_hint() {
+        assert!(base_url_hint("http://192.168.0.93:1234").contains("try http://192.168.0.93:1234/v1"));
+        assert!(base_url_hint("http://192.168.0.93:1234/").contains("/v1"));
+        assert_eq!(base_url_hint("http://192.168.0.93:1234/v1"), "");
+        assert_eq!(base_url_hint("https://openrouter.ai/api/v1"), "");
+    }
+
+    #[test]
+    fn every_tool_schema_reaches_the_provider_as_an_object() {
+        use serde_json::json;
+        assert_eq!(object_parameters(json!({})), json!({"type": "object", "properties": {}}));
+        assert_eq!(object_parameters(Value::Null), json!({"type": "object", "properties": {}}));
+        assert_eq!(object_parameters(json!(true)), json!({"type": "object", "properties": {}}));
+        assert_eq!(
+            object_parameters(json!({"properties": {"q": {"type": "string"}}, "required": ["q"]})),
+            json!({"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]})
+        );
+        assert_eq!(object_parameters(json!({"type": "string"})), json!({"type": "object", "properties": {}}));
+        let ok = json!({"type": "object", "properties": {"a": {"type": "integer"}}});
+        assert_eq!(object_parameters(ok.clone()), ok);
+    }
+
     #[test]
     fn sanitize_schema_replaces_boolean_subschemas() {
         let mut schema = serde_json::json!({

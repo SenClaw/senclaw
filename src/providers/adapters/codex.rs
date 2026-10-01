@@ -181,7 +181,7 @@ pub(crate) fn responses_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
                 "type": "function",
                 "name": t.name(),
                 "description": t.description(),
-                "parameters": t.input_schema(),
+                "parameters": crate::zen_core::query_llm::object_parameters(t.input_schema()),
             })
         })
         .collect()
