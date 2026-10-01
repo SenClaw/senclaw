@@ -121,3 +121,12 @@ Báo cáo đầy đủ, số đo và đánh đổi: [reports/research-260930-205
 - Đo lại: `e2e/runtime-latency.py` (runtime, có `--sites`), `e2e/latency.sh` (loop), `e2e/feed.sh` (E4). Fixture feed: `e2e/fixtures/clips.html`, `clip.html`; `e2e/serve.py` thay `http.server` (có `?delay=`).
 - Đã fast-forward `main` cả 5 repo (chưa push); runtime 0.1.2 cài cạnh bản cũ trong `~/.senclaw`; `dist/chrome-mv3` build 0.2.1.
 - Còn của người dùng: reload extension; import `laya-browser`; khởi động lại daemon (binary `main` đã build 23:14). Việc tách: sen-sysone nạp 2 checkpoint cùng lúc có thể hỏng một cái (đã có chip task).
+
+### laya-browser v19s: nút Tải, format v5, CUDA (01/10/2026)
+
+Báo cáo: [reports/impl-261001-1820-laya-browser-v19s-download.md](reports/impl-261001-1820-laya-browser-v19s-download.md) · CUDA: [reports/research-261001-1730-sen-sysone-cuda.md](reports/research-261001-1730-sen-sysone-cuda.md).
+
+- v19s (`cklxx/laya-browser@645cf366`) xuất ONNX ở `Laya-jev/models/laya-browser-v19s`: parity \|Δp\| ≤ 1e-4 trên 26 câu trả lời, kèm `manifest.json` + model card; chờ upload lên HF của người dùng rồi mới thành mục `laya-browser` trong catalog `sen-sysone`.
+- senclaw 8dc6867: format v5 theo `laya_fmt` của checkpoint (fields, option gọn, `PRESS_ENTER`, chia choice > 60); 5aabdbc: bước bị runtime từ chối không còn tính là đã thử. web fd48d87, desktop e23b18d: nút Tải ở cảnh báo thiếu decision model.
+- Acceptance với v19s: 59/59. Site thật: Wikipedia tìm "Hanoi" xong 2 bước (v10s hết 8 bước). Còn mở: runtime coi trang Wikipedia là stale gần như mỗi lần (marker đầy đủ cho Enter).
+- `e2e/real-sites.sh`: chạy 3 task trên site thật với checkpoint chỉ định (`LAYA_BROWSER_SRC`).
