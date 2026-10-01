@@ -167,12 +167,19 @@
       "id": "sen-browser",
       "name": "SenClaw Browser Engine",
       "type": "browser",
-      "description": "Chrome over CDP for the browser engine: page observation, guarded trusted input and handover, in SenClaw's own Chrome profile or the person's Chrome through the SenClaw extension. No release package yet: build it with `make package` in the sen-browser checkout and install that archive from its local path.",
+      "description": "Chrome over CDP for the browser engine: page observation, guarded trusted input and handover, in SenClaw's own Chrome profile or the person's Chrome through the SenClaw extension.",
       "slots": ["browser"],
       "capabilities": ["browser"],
-      "platforms": ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
-      "releases": []
+      "platforms": ["darwin-arm64", "linux-x64", "windows-x64"],
+      "channels": { "stable": "0.1.2", "beta": "0.1.2" },
+      "releases": [
+        { "version": "0.1.2", "notesUrl": "https://github.com/SenClaw/sen-browser/releases/tag/v0.1.2",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-browser/releases/download/v0.1.2/sen-browser-0.1.2-darwin-arm64.tar.gz", "sha256": "572e6901598cf44405d715fc9d258a7c68fc291e1e8789cbd643314b18cd1998", "size": 1817081},
+            {"platform": "linux-x64", "url": "https://github.com/SenClaw/sen-browser/releases/download/v0.1.2/sen-browser-0.1.2-linux-x64.tar.gz", "sha256": "2d61420f2086077c5a9072c6891a286249d3aea68cc6b96b6f2c963e2adb0901", "size": 2009343},
+            {"platform": "windows-x64", "url": "https://github.com/SenClaw/sen-browser/releases/download/v0.1.2/sen-browser-0.1.2-windows-x64.tar.gz", "sha256": "a06df0e9ced03e72341bd769202303f27322c1915c3e888718d927a4f72ea31e", "size": 1693460}
+          ] }
+      ]
     },
     {
       "id": "sen-ocr",
