@@ -212,13 +212,19 @@
       "id": "sen-whisper",
       "name": "SenClaw Whisper",
       "type": "asr",
-      "description": "Whisper speech-to-text on MLX.",
+      "description": "Whisper speech-to-text — MLX on Apple Silicon, Candle on the CPU on Linux and Windows.",
       "slots": ["asr"],
       "capabilities": ["asr"],
       "accelerator": "metal",
-      "platforms": ["darwin-arm64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "platforms": ["darwin-arm64", "linux-x64", "windows-x64"],
+      "channels": { "stable": "0.1.1", "beta": "0.1.1" },
       "releases": [
+        { "version": "0.1.1", "notesUrl": "https://github.com/SenClaw/sen-whisper/releases/tag/v0.1.1",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-whisper/releases/download/v0.1.1/sen-whisper-0.1.1-darwin-arm64.tar.gz", "sha256": "f18968d6fac46d2d0687787ab3e05a2f68616c42fc2a675e04339f0ad0b97796", "size": 33424740},
+            {"platform": "linux-x64", "url": "https://github.com/SenClaw/sen-whisper/releases/download/v0.1.1/sen-whisper-0.1.1-linux-x64.tar.gz", "sha256": "d0585653223e8b944a283a630c8c9b0a18e8d0bd42e01c41c0708996d8492be4", "size": 5965136},
+            {"platform": "windows-x64", "url": "https://github.com/SenClaw/sen-whisper/releases/download/v0.1.1/sen-whisper-0.1.1-windows-x64.tar.gz", "sha256": "74521ac3ef9ab3319815922bd90f1d0729f71103fb929004de27ca414f63dc3a", "size": 4763687}
+          ] },
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-whisper/releases/tag/v0.1.0",
           "packages": [
             {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-whisper/releases/download/v0.1.0/sen-whisper-0.1.0-darwin-arm64.tar.gz", "sha256": "d3cbeb2549f79242d60b669ed007aa33fbf8393d8918585a386a28a3632a074b", "size": 33426557}

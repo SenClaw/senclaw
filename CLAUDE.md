@@ -1164,9 +1164,9 @@ documented: the healthcheck must hit `/api/auth/status` — every other route
 **must** be a volume or the token regenerates each restart and every saved
 login breaks; never set `SENCLAW_BIND_HOST=0.0.0.0` in the image (that is the
 Space-App knob — apps have no auth); publish both 18788 and 18789 because the
-web UI dials the WS gateway at the same hostname. A Linux container compiles
-**no** MLX/Metal, so it has no local models, no Whisper ASR and unaccelerated
-OCR — same as the Linux CI target.
+web UI dials the WS gateway at the same hostname. A Linux container has
+**no** MLX/Metal, so no MLX models; Whisper ASR (`sen-whisper` linux-x64) and OCR
+run unaccelerated on the CPU.
 
 Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).
 
