@@ -49,7 +49,7 @@ use axum::{
     http::StatusCode,
     response::{
         IntoResponse, Response,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
 };
@@ -103,7 +103,12 @@ fn default_true() -> bool {
 }
 
 impl ModelCard {
-    pub fn new(id: impl Into<String>, context_length: u32, max_output_tokens: u32, vision: bool) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        context_length: u32,
+        max_output_tokens: u32,
+        vision: bool,
+    ) -> Self {
         Self {
             id: id.into(),
             display_name: None,
@@ -376,7 +381,15 @@ async fn chat_completions<P: LlmProvider>(
         yield Ok(Event::default().data("[DONE]"));
     };
 
-    Sse::new(sse).into_response()
+    // A local prefill can sit silent for well over a minute (a 37k-token Gemma
+    // prompt measured 113s before the first token). The daemon's OpenAI client
+    // treats 120s without a byte as a dead stream (`STREAM_STALL_TIMEOUT`) and
+    // resets the session. An SSE comment is not a `data:` line, so that client
+    // skips it, but the byte still resets the stall timer. 15s is the axum
+    // default and stays far inside the 120s budget.
+    Sse::new(sse)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response()
 }
 
 fn accumulate(
@@ -619,13 +632,20 @@ mod tests {
         let calls = vec![json!({ "id": "c1" })];
         let body = non_stream_body("m", "", "", &calls, None);
         assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
-        assert_eq!(non_stream_body("m", "hi", "", &[], None)["choices"][0]["finish_reason"], "stop");
+        assert_eq!(
+            non_stream_body("m", "hi", "", &[], None)["choices"][0]["finish_reason"],
+            "stop"
+        );
     }
 
     #[test]
     fn reasoning_is_omitted_when_empty_rather_than_sent_blank() {
         let body = non_stream_body("m", "hi", "", &[], None);
-        assert!(body["choices"][0]["message"].get("reasoning_content").is_none());
+        assert!(
+            body["choices"][0]["message"]
+                .get("reasoning_content")
+                .is_none()
+        );
         let body = non_stream_body("m", "hi", "why", &[], None);
         assert_eq!(body["choices"][0]["message"]["reasoning_content"], "why");
     }
@@ -684,7 +704,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
@@ -718,14 +740,21 @@ mod tests {
 
         let calls: Vec<Value> = sse_payloads(&raw)
             .into_iter()
-            .filter_map(|p| p["choices"][0]["delta"]["tool_calls"][0].as_object().cloned())
+            .filter_map(|p| {
+                p["choices"][0]["delta"]["tool_calls"][0]
+                    .as_object()
+                    .cloned()
+            })
             .map(Value::Object)
             .collect();
 
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["index"], 0);
         assert_eq!(calls[0]["function"]["name"], "get_weather");
-        assert_eq!(calls[1]["index"], 1, "a reused index welds the two calls together");
+        assert_eq!(
+            calls[1]["index"], 1,
+            "a reused index welds the two calls together"
+        );
         assert_eq!(calls[1]["function"]["name"], "get_time");
     }
 
@@ -815,7 +844,9 @@ mod tests {
             )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let m = &body["data"][0];
         assert_eq!(m["id"], "m");
