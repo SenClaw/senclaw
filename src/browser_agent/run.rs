@@ -1190,6 +1190,12 @@ async fn drive(ports: &Ports, mut state: TaskState) -> TaskOutcome {
         }
         if let Some(last) = state.steps.last_mut() {
             last.target = target;
+            // Refused because the page moved on (suggestions opened under a
+            // search field, a feed grew): nothing was sent, so choosing it
+            // again on the page as it is now is not going in circles.
+            if last.outcome != "executed" && state.tried.last() == Some(&key) {
+                state.tried.pop();
+            }
         }
         if operation == "CLICK" && fingerprint_unfocused(&obs) == fingerprint_unfocused(&state.observation) {
             state.type_into = action.get("node").and_then(Value::as_i64).filter(|node| fill_action(&obs, *node).is_some());
@@ -1798,6 +1804,35 @@ pub(crate) mod tests {
         let settings = BrowserSettings { decision_backend: crate::browser_agent::settings::DecisionBackend::LlmOnly, ..BrowserSettings::default() };
         start(&ports(&log), settings, spec("Search for books")).await;
         assert!(!log.lock().unwrap().iter().any(|e| e.starts_with("warm")), "{:?}", log.lock().unwrap());
+    }
+
+    /// The shop, except that its first action is refused: the page moved on
+    /// before it was sent (the runtime's 409 `stale_page`).
+    struct StaleOnce {
+        shop: Arc<FakeBrowser>,
+        refused: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl BrowserPort for StaleOnce {
+        async fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, PortError> {
+            if path.ends_with("/act") && !self.refused.swap(true, Ordering::SeqCst) {
+                return Err(PortError::new(409, "stale_page", "the page changed since it was observed"));
+            }
+            self.shop.call(method, path, body).await
+        }
+    }
+
+    /// A step the runtime refused never ran: chosen again on the page as it
+    /// is now, it is the step to take, not a circle.
+    #[tokio::test]
+    async fn a_refused_step_is_not_counted_as_tried() {
+        let browser = Arc::new(StaleOnce { shop: FakeBrowser::new(true), refused: std::sync::atomic::AtomicBool::new(false) });
+        let ports = Ports { browser, decider: Arc::new(FakeDecider), llm: Arc::new(NoLlm) };
+        let out = start(&ports, BrowserSettings::default(), spec("Search for books")).await;
+        assert_eq!(out.status, "done", "{}: {:?}", out.message, out.steps);
+        let outcomes: Vec<&str> = out.steps.iter().map(|s| s.outcome.as_str()).collect();
+        assert_eq!(outcomes, ["stale_page", "executed"]);
     }
 
     /// Decides like the fake for a checkpoint fine-tuned on format v5, and

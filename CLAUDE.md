@@ -459,6 +459,12 @@ Rules for Claude:
   `testdata/gen-laya-v5-fixture.py`, and the encoder must match it byte for
   byte — Python's `repr` escapes a no-break space, which prices on
   Vietnamese sites are full of.
+- **A step the runtime refused (`stale_page`, `target_covered`, …) was
+  never sent, so it is not "already tried"**: the cycle check (`tried` in
+  `run::drive`) forgets it. Otherwise the same step chosen again on the page
+  as it now is reads as going in circles — typing into a search field opens
+  suggestions that make the next Enter stale, and every such search stopped
+  as blocked.
 
 ## Space Apps that serve models (`llm` manifest block)
 
