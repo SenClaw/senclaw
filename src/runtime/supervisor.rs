@@ -153,10 +153,15 @@ impl Supervisor {
     /// `in_flight`) from another module's tests without spawning a real OS
     /// process. Returns the tracked `Arc` so the caller can assert on it.
     pub(crate) fn track_fake_for_test(&self, key: &str) -> Arc<RunningProcess> {
+        self.track_fake_for_test_as(key, "test", "0.0.0")
+    }
+
+    /// [`Self::track_fake_for_test`] for a given runtime id and version.
+    pub(crate) fn track_fake_for_test_as(&self, key: &str, runtime_id: &str, version: &str) -> Arc<RunningProcess> {
         let proc = Arc::new(RunningProcess {
             key: key.to_string(),
-            runtime_id: "test".into(),
-            version: "0.0.0".into(),
+            runtime_id: runtime_id.into(),
+            version: version.into(),
             port: 0,
             token: String::new(),
             package_dir: PathBuf::new(),
@@ -279,7 +284,7 @@ impl Supervisor {
     /// caller actually spawns anything (§3.2 step 9).
     pub async fn ensure_started(&self, key: &str, spec: LaunchSpec) -> Result<Arc<RunningProcess>, StartError> {
         if let Some(p) = self.get(key) {
-            if p.is_ready() && !self.evict_if_exited(key, &p) {
+            if p.is_ready() && !self.evict_if_exited(key, &p) && !Self::outdated(&p, &spec) {
                 p.touch();
                 return Ok(p);
             }
@@ -288,13 +293,37 @@ impl Supervisor {
         let _guard = lock.lock().await;
         if let Some(p) = self.get(key) {
             if p.is_ready() && !self.evict_if_exited(key, &p) {
-                p.touch();
-                return Ok(p);
+                if !Self::outdated(&p, &spec) {
+                    p.touch();
+                    return Ok(p);
+                }
+                // The key names the runtime, not its version, so an update
+                // that installed and selected a newer version would otherwise
+                // keep being served by the old process for as long as anything
+                // keeps calling it — a polled settings page means forever.
+                // Swap only when idle; a request still running keeps the old
+                // one, and the next call after it tries again.
+                if p.in_flight.load(Ordering::SeqCst) > 0 {
+                    p.touch();
+                    return Ok(p);
+                }
+                tracing::info!(
+                    "[runtime] {key}: {} {} replaces the running {}",
+                    spec.manifest.id,
+                    spec.manifest.version,
+                    p.version
+                );
+                self.stop(key).await;
             }
         }
         let proc = self.spawn(key, spec).await?;
         proc.touch();
         Ok(proc)
+    }
+
+    /// Is `p` a different version of the package `spec` would launch?
+    fn outdated(p: &RunningProcess, spec: &LaunchSpec) -> bool {
+        p.version != spec.manifest.version
     }
 
     /// §3.2 step 9: a process that crashed *after* becoming healthy is
@@ -858,6 +887,49 @@ mod tests {
             child: Mutex::new(Some(child)),
             pid: 0,
         }
+    }
+
+    fn spec_at(version: &str, dir: &Path) -> LaunchSpec {
+        let manifest = serde_json::from_str(&format!(
+            r#"{{"schemaVersion":1,"id":"test","name":"T","version":"{version}","type":"ocr",
+              "slots":["ocr"],"capabilities":["ocr"],"platforms":["darwin-arm64"],"mode":"service",
+              "entry":{{"command":"bin/missing","args":[]}} }}"#
+        ))
+        .unwrap();
+        LaunchSpec {
+            manifest,
+            package_dir: dir.to_path_buf(),
+            data_dir: dir.join("data"),
+            models_dir: dir.join("models"),
+            config_path: dir.join("config.json"),
+            home: dir.to_path_buf(),
+            log_path: dir.join("test.log"),
+            model: None,
+            idle_timeout_secs: None,
+        }
+    }
+
+    /// An update installs and selects a newer version, but the process key
+    /// names only the runtime: the old process must give way once idle, or a
+    /// page that keeps polling it keeps the update from ever taking effect.
+    #[tokio::test]
+    async fn a_running_older_version_is_replaced_once_it_is_idle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sup = Supervisor::new(tmp.path().to_path_buf());
+        let old = sup.track_fake_for_test("service:test"); // version 0.0.0
+
+        let Ok(same) = sup.ensure_started("service:test", spec_at("0.0.0", tmp.path())).await else { panic!("start") };
+        assert!(Arc::ptr_eq(&same, &old), "the selected version is already running");
+
+        old.in_flight.store(1, Ordering::SeqCst);
+        let Ok(busy) = sup.ensure_started("service:test", spec_at("0.0.1", tmp.path())).await else { panic!("start") };
+        assert!(Arc::ptr_eq(&busy, &old), "a request in flight keeps the old process");
+
+        old.in_flight.store(0, Ordering::SeqCst);
+        // The new package has no binary here, so the respawn fails — what
+        // matters is that the old process was not handed back.
+        assert!(sup.ensure_started("service:test", spec_at("0.0.1", tmp.path())).await.is_err());
+        assert!(sup.get("service:test").is_none_or(|p| !Arc::ptr_eq(&p, &old)));
     }
 
     /// A model-mode runtime answers 503 while its weights load; the gate must

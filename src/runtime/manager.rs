@@ -470,8 +470,17 @@ impl RuntimeManager {
             if cmp_versions(&newest.manifest.version, &pinned) != std::cmp::Ordering::Greater {
                 continue;
             }
-            let old_still_running = self.supervisor.list().iter().any(|p| p.runtime_id == sel.id && p.version == pinned);
-            if old_still_running {
+            // "In use" is a request in flight, not a live process: a decision
+            // page polls its runtime every few seconds, so waiting for the old
+            // process to exit never ended and the update never took effect.
+            // Once the selection moves, the next call swaps the idle old
+            // process for the new version (`Supervisor::ensure_started`).
+            let old_busy = self
+                .supervisor
+                .list()
+                .iter()
+                .any(|p| p.runtime_id == sel.id && p.version == pinned && p.in_flight.load(std::sync::atomic::Ordering::SeqCst) > 0);
+            if old_busy {
                 continue; // defer to the next sweep
             }
             tracing::info!(
@@ -684,6 +693,28 @@ mod tests {
 
         let sel = mgr.settings().selected(Slot::Ocr).unwrap().clone();
         assert_eq!(sel.version.as_deref(), Some("0.2.0"));
+    }
+
+    /// A running but idle old process does not hold the slot back — a page
+    /// polling it would otherwise keep the update from ever taking effect.
+    /// One answering a request does, until the next sweep.
+    #[test]
+    fn a_pinned_slot_moves_past_a_running_idle_process_but_not_a_busy_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager(tmp.path());
+        let platform = sen_runtime_sdk::platform::current();
+        write_manifest(&mgr.paths().runtimes_dir.join("sen-ocr").join("0.1.0"), "sen-ocr", "0.1.0", platform);
+        mgr.select(Slot::Ocr, Some("sen-ocr".into()), Some("0.1.0".into())).unwrap();
+        write_manifest(&mgr.paths().runtimes_dir.join("sen-ocr").join("0.2.0"), "sen-ocr", "0.2.0", platform);
+        let old = mgr.supervisor.track_fake_for_test_as("service:sen-ocr", "sen-ocr", "0.1.0");
+
+        old.in_flight.store(1, std::sync::atomic::Ordering::SeqCst);
+        mgr.advance_pinned_slots_to_newer_installs();
+        assert_eq!(mgr.settings().selected(Slot::Ocr).unwrap().version.as_deref(), Some("0.1.0"));
+
+        old.in_flight.store(0, std::sync::atomic::Ordering::SeqCst);
+        mgr.advance_pinned_slots_to_newer_installs();
+        assert_eq!(mgr.settings().selected(Slot::Ocr).unwrap().version.as_deref(), Some("0.2.0"));
     }
 
     #[test]

@@ -470,7 +470,9 @@ the same directory (`extraAssets`).
 LM Studio semantics: the channel (`stable`/`beta`) picks versions; **Check for updates** refreshes the index;
 with **auto-update** on, updates of runtimes that fill a slot are installed in the background and the slot
 moves to the new version once no process of the old one is in use (the old version stays installed until
-the user removes it). With **auto-update off**, a pinned slot never moves on its own, even when a newer
+the user removes it). "In use" means answering a request: a running but idle old process does not hold the
+slot back, and the next call replaces it with the selected version (`Supervisor::ensure_started`), since a
+page that polls the runtime would otherwise keep the old process alive forever. With **auto-update off**, a pinned slot never moves on its own, even when a newer
 version is already installed alongside it — a user who wants to stay on an older version (e.g. to roll back a
 regression) turns auto-update off; turning it back on is what lets that slot advance again.
 
