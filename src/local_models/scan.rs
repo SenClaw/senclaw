@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use sen_runtime_sdk::manifest::{Capability, ModelFormat, Slot};
 
 use super::gguf;
+use super::gturbo;
 use super::keys::{model_key, quant_from_filename};
 
 /// Directories under the model root that are never listed as MLX/GGUF
@@ -202,9 +203,8 @@ fn scan_gguf(root: &Path) -> Vec<LocalModel> {
     out
 }
 
-/// A finished TurboFieldfare text install: directory name `*.gturbo` (not the
-/// `*.vision.gturbo` companion), `manifest.json` magic `GTURBO`, and the packed
-/// weight file the runtime refuses to start without.
+/// A finished TurboFieldfare text install of the pinned Gemma 4 checkpoint.
+/// Any other `.gturbo` directory is ignored: the engine will not load it.
 fn scan_gturbo(root: &Path) -> Vec<LocalModel> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
@@ -213,28 +213,13 @@ fn scan_gturbo(root: &Path) -> Vec<LocalModel> {
     for entry in entries.filter_map(Result::ok) {
         let dir = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !dir.is_dir() || !is_gturbo_text_dir(&name) {
+        if !dir.is_dir() || !gturbo::is_text_dir_name(&name) || !gturbo::text_dir_matches_pin(&dir) {
             continue;
         }
-        let Some(manifest) = read_json_capped(&dir.join("manifest.json"), 4 * 1024 * 1024) else {
-            continue;
-        };
-        if manifest.get("magic").and_then(|v| v.as_str()) != Some("GTURBO") {
-            continue;
-        }
-        if !dir.join("model_weights.bin").is_file() {
-            continue;
-        }
-        let model_id = manifest
-            .get("modelID")
-            .or_else(|| manifest.get("model_id"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(&name)
-            .to_string();
+        let model_id = gturbo::REPO_ID.to_string();
         let stem = name.trim_end_matches(".gturbo");
         let vision_dir = dir.with_file_name(format!("{stem}.vision.gturbo"));
-        let vision = vision_manifest_present(&vision_dir);
+        let vision = gturbo::vision_manifest_present(&vision_dir);
         let mut capabilities = vec![Capability::Chat];
         if vision {
             capabilities.push(Capability::Vision);
@@ -251,30 +236,11 @@ fn scan_gturbo(root: &Path) -> Vec<LocalModel> {
             embedding: false,
             mmproj_path: None,
             quant: Some("4-bit".into()),
-            repo: None,
+            repo: Some(gturbo::REPO_ID.into()),
             context_length: Some(65_536),
         });
     }
     out
-}
-
-fn is_gturbo_text_dir(name: &str) -> bool {
-    name.ends_with(".gturbo") && !name.ends_with(".vision.gturbo") && name.len() > ".gturbo".len()
-}
-
-fn vision_manifest_present(dir: &Path) -> bool {
-    read_json_capped(&dir.join("manifest.json"), 4 * 1024 * 1024)
-        .and_then(|v| v.get("magic").and_then(|m| m.as_str()).map(|s| s == "GTURBO-VISION"))
-        .unwrap_or(false)
-}
-
-fn read_json_capped(path: &Path, max_bytes: u64) -> Option<serde_json::Value> {
-    let len = std::fs::metadata(path).ok()?.len();
-    if len > max_bytes {
-        return None;
-    }
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
 }
 
 /// Every local model on disk — MLX snapshots, GGUF files, and TurboFieldfare
@@ -428,7 +394,11 @@ mod tests {
         std::fs::create_dir_all(&text).unwrap();
         std::fs::write(
             text.join("manifest.json"),
-            r#"{"magic":"GTURBO","modelID":"gemma-4-26b-a4b-it"}"#,
+            format!(
+                r#"{{"magic":"GTURBO","modelID":"{}","sourceSnapshotHash":"sha256:{}"}}"#,
+                gturbo::REPO_ID,
+                gturbo::SOURCE_INDEX_SHA256
+            ),
         )
         .unwrap();
         std::fs::write(text.join("model_weights.bin"), b"weights").unwrap();
@@ -439,10 +409,25 @@ mod tests {
         let models = scan_all(tmp.path());
         assert_eq!(models.len(), 1, "{:?}", models.iter().map(|m| &m.name).collect::<Vec<_>>());
         assert_eq!(models[0].format, ModelFormat::Gturbo);
-        assert_eq!(models[0].name, "gemma-4-26b-a4b-it");
+        assert_eq!(models[0].name, gturbo::REPO_ID);
+        assert_eq!(models[0].repo.as_deref(), Some(gturbo::REPO_ID));
         assert!(models[0].vision);
         assert_eq!(models[0].slot(), Slot::Gturbo);
         assert!(models[0].key.starts_with("gturbo-"));
+    }
+
+    #[test]
+    fn a_gturbo_of_a_different_model_is_not_listed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let text = tmp.path().join("other.gturbo");
+        std::fs::create_dir_all(&text).unwrap();
+        std::fs::write(
+            text.join("manifest.json"),
+            r#"{"magic":"GTURBO","modelID":"other/model","sourceSnapshotHash":"sha256:dead"}"#,
+        )
+        .unwrap();
+        std::fs::write(text.join("model_weights.bin"), b"weights").unwrap();
+        assert!(scan_all(tmp.path()).is_empty());
     }
 
     #[test]

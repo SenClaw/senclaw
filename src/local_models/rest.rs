@@ -17,8 +17,7 @@ use crate::runtime::manager::RuntimeManager;
 use crate::runtime::proxy::error_response;
 use crate::runtime::store::InstalledPackage;
 
-use super::settings::resolve_context_length;
-use super::{config_id, download, hf_files, scan, settings};
+use super::{config_id, download, gturbo, hf_files, scan, settings};
 
 fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -49,7 +48,7 @@ pub fn llm_configs(local_models_dir: &Path) -> Vec<LlmConfig> {
             // No live request to defer to here — always the daemon's effective
             // cap (§5.3), so the picker's advertised budget matches what a
             // JIT load through the model route will actually launch with.
-            context_length: resolve_context_length(None, m.context_length, default_context_length),
+            context_length: settings::resolve_launch_context(m.format, None, m.context_length, default_context_length),
             vision: Some(m.vision),
             edit_format: None,
             auth: None,
@@ -107,17 +106,43 @@ pub(crate) async fn get_hf_files(Query(q): Query<HfFilesQuery>) -> Result<Json<V
 
 #[derive(Deserialize)]
 pub(crate) struct DownloadBody {
-    repo: String,
+    #[serde(default)]
+    repo: Option<String>,
     #[serde(default)]
     file: Option<String>,
     #[serde(default)]
     mmproj: Option<String>,
     #[serde(default)]
     revision: Option<String>,
+    /// `gturbo` runs TurboFieldfareRepack for the pinned Gemma 4 checkpoint.
+    /// Omitted means GGUF when `file` is set, otherwise an MLX snapshot.
+    #[serde(default)]
+    format: Option<String>,
+    /// Install the image companion beside the text model. Requires `format: "gturbo"`.
+    #[serde(default)]
+    vision: bool,
 }
 
 pub(crate) async fn post_download(State(s): State<Arc<UiState>>, Json(body): Json<DownloadBody>) -> Result<Response, AppError> {
-    let repo = hf_files::normalize_repo(&body.repo).map_err(bad)?;
+    if body.format.as_deref() == Some("gturbo") || body.vision {
+        if body.vision && body.format.as_deref().is_some_and(|f| f != "gturbo") {
+            return Err(bad("an image pack download uses format \"gturbo\""));
+        }
+        gturbo::check_request(body.repo.as_deref(), body.revision.as_deref(), body.file.as_deref()).map_err(bad)?;
+        let mgr = s
+            .runtime_manager
+            .as_ref()
+            .ok_or_else(|| bad("runtime manager is not available"))?;
+        let bin = gturbo::repack_binary(&mgr.installed()).map_err(|e| AppError(StatusCode::CONFLICT, e))?;
+        let state = download::start_gturbo(&s.config.paths.local_models_dir, &bin, body.vision).map_err(|e| match e {
+            gturbo::StartError::AlreadyInstalled | gturbo::StartError::Foreign(_) => {
+                AppError(StatusCode::CONFLICT, e.to_string())
+            }
+            other => bad(other.to_string()),
+        })?;
+        return Ok((StatusCode::ACCEPTED, Json(json!({"downloadId": state.download_id}))).into_response());
+    }
+    let repo = hf_files::normalize_repo(body.repo.as_deref().unwrap_or("")).map_err(bad)?;
     let revision = body.revision.as_deref().unwrap_or("main").to_string();
     let format = if body.file.is_some() { "gguf" } else { "mlx" };
     if format == "gguf" && body.file.is_none() {
@@ -219,7 +244,7 @@ pub(crate) async fn post_load(State(s): State<Arc<UiState>>, AxumPath(key): Axum
         return AppError(StatusCode::INTERNAL_SERVER_ERROR, "the runtime manager is not wired".into()).into_response();
     };
     let default_context_length = settings::load_daemon_settings(&s.config.paths.local_models_dir).default_context_length;
-    let context_length = resolve_context_length(body.context_length, model.context_length, default_context_length);
+    let context_length = settings::resolve_launch_context(model.format, body.context_length, model.context_length, default_context_length);
     let dial = match manager
         .ensure_model_started(model.format, &model.key, &model.path, model.mmproj_path.as_deref(), context_length, model.capability_list())
         .await

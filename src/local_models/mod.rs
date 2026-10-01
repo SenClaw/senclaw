@@ -7,6 +7,7 @@
 
 pub mod download;
 pub mod gguf;
+pub mod gturbo;
 pub mod hf_files;
 pub mod keys;
 pub mod rest;

@@ -362,7 +362,7 @@ runtime's `GET /v1/sessions`.
 |---|---|
 | `GET /api/local-models` | `{root, models:[LocalModel], downloads:[Download]}` |
 | `GET /api/local-models/hf-files?repo=` | `{repo, format: "gguf"\|"mlx"\|"unknown", files:[{name, size, quant\|null, mmproj}]}` |
-| `POST /api/local-models/download` `{repo, file?, mmproj?, revision?}` | 202 `{downloadId}` — GGUF needs `file`; MLX downloads the snapshot |
+| `POST /api/local-models/download` `{repo?, file?, mmproj?, revision?, format?, vision?}` | 202 `{downloadId}` — GGUF needs `file`; MLX downloads the snapshot; `format: "gturbo"` runs `TurboFieldfareRepack` from the installed `sen-turbo-fieldfare` package for `mlx-community/gemma-4-26b-a4b-it-4bit` at revision `0d77464eeb233a2da68ebf9d7dc4edaac7db956d` into `gemma4.gturbo` (`vision: true` installs the image sibling). Any other repo or revision is rejected. |
 | `GET /api/local-models/downloads` · `GET …/downloads/:id` · `POST …/downloads/:id/cancel` | progress |
 | `DELETE /api/local-models/:key?force=1` | 409 while loaded unless `force` |
 | `POST /api/local-models/:key/load` `{contextLength?}` | start (or reuse) its process; returns the process |

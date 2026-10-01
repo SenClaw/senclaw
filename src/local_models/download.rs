@@ -197,6 +197,74 @@ pub fn start(
     snapshot
 }
 
+/// Download the pinned Gemma 4 checkpoint by running `TurboFieldfareRepack`.
+/// This does not copy the Hugging Face repo. The installer streams that
+/// revision and writes `gemma4.gturbo` (or the vision sibling).
+pub fn start_gturbo(local_models_dir: &Path, repack_bin: &Path, vision: bool) -> Result<DownloadState, super::gturbo::StartError> {
+    let plan = super::gturbo::plan(local_models_dir, vision)?;
+    let target_key = format!("gturbo:{}:{}", super::gturbo::REPO_ID, plan.file_label);
+    {
+        let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = reg.values().find(|h| {
+            let current = h.state.lock().unwrap_or_else(|e| e.into_inner());
+            !current.is_finished()
+                && format!(
+                    "{}:{}:{}",
+                    current.format,
+                    current.repo,
+                    current.files.first().cloned().unwrap_or_default()
+                ) == target_key
+        }) {
+            return Ok(existing.state.lock().unwrap_or_else(|e| e.into_inner()).clone());
+        }
+    }
+
+    let download_id = uuid::Uuid::new_v4().to_string();
+    let state = Arc::new(Mutex::new(DownloadState::new(&download_id, super::gturbo::REPO_ID, "gturbo")));
+    {
+        let mut current = state.lock().unwrap_or_else(|e| e.into_inner());
+        current.files = vec![plan.file_label.clone()];
+        current.total_bytes = plan.total_bytes;
+        current.state = DownloadStatus::Downloading;
+    }
+    let cancel = CancellationToken::new();
+    registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(download_id.clone(), Handle { state: Arc::clone(&state), cancel: cancel.clone() });
+
+    let bin = repack_bin.to_path_buf();
+    let tracked = Arc::clone(&state);
+    tokio::spawn(async move {
+        let outcome = super::gturbo::run_repack(&bin, &plan, &tracked, &cancel).await;
+        let mut current = tracked.lock().unwrap_or_else(|e| e.into_inner());
+        if current.state == DownloadStatus::Cancelled {
+            current.finished_at = Some(now_millis());
+            return;
+        }
+        match outcome {
+            Ok(super::gturbo::RepackOutcome::Cancelled) => {
+                current.state = DownloadStatus::Cancelled;
+            }
+            Ok(super::gturbo::RepackOutcome::Finished) => {
+                current.state = DownloadStatus::Done;
+                current.percent = Some(100.0);
+                if current.total_bytes > 0 {
+                    current.received_bytes = current.total_bytes;
+                }
+            }
+            Err(e) => {
+                current.state = DownloadStatus::Failed;
+                current.error = Some(e.to_string());
+            }
+        }
+        current.finished_at = Some(now_millis());
+    });
+
+    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(snapshot)
+}
+
 pub fn status(download_id: &str) -> Option<DownloadState> {
     registry().lock().unwrap_or_else(|e| e.into_inner()).get(download_id).map(|h| h.state.lock().unwrap_or_else(|e| e.into_inner()).clone())
 }
@@ -369,5 +437,70 @@ mod tests {
             s.state = st;
             assert!(s.is_finished());
         }
+    }
+
+    /// The repack process can exit 0 and still have written the wrong
+    /// checkpoint. That must not become a listed model. A second run that
+    /// writes the pin does.
+    #[tokio::test]
+    async fn gturbo_download_keeps_only_the_pinned_checkpoint() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("models");
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = tmp.path().join("repack.sh");
+
+        let write_script = |good: bool| {
+            let model = if good { crate::local_models::gturbo::REPO_ID } else { "other/model" };
+            let hash = if good {
+                format!("sha256:{}", crate::local_models::gturbo::SOURCE_INDEX_SHA256)
+            } else {
+                "sha256:dead".into()
+            };
+            let json = serde_json::json!({
+                "magic": "GTURBO",
+                "modelID": model,
+                "sourceSnapshotHash": hash,
+            });
+            let mut script = String::from("#!/bin/sh\n");
+            script.push_str("out=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --output) out=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n");
+            script.push_str("echo '[install] 7.3 GiB of 13.6 GiB (50%)' >&2\n");
+            script.push_str("mkdir -p \"$out\"\ncat > \"$out/manifest.json\" <<'EOF'\n");
+            script.push_str(&json.to_string());
+            script.push_str("\nEOF\nprintf '%s' weights > \"$out/model_weights.bin\"\nexit 0\n");
+            std::fs::write(&bin, script).unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+
+        write_script(false);
+        let bad = start_gturbo(&root, &bin, false).unwrap();
+        let failed = wait_until_finished(&bad.download_id).await;
+        assert_eq!(failed.state, DownloadStatus::Failed, "{:?}", failed.error);
+        assert!(failed.error.as_deref().unwrap_or("").contains("pinned"), "{:?}", failed.error);
+        assert!(crate::local_models::scan::scan_all(&root).is_empty());
+        assert!(start_gturbo(&root, &bin, false).is_err(), "a foreign directory must not be overwritten");
+
+        std::fs::remove_dir_all(root.join(crate::local_models::gturbo::TEXT_DIR_NAME)).unwrap();
+        write_script(true);
+        let good = start_gturbo(&root, &bin, false).unwrap();
+        let done = wait_until_finished(&good.download_id).await;
+        assert_eq!(done.state, DownloadStatus::Done, "{:?}", done.error);
+        assert_eq!(done.repo, crate::local_models::gturbo::REPO_ID);
+        let models = crate::local_models::scan::scan_all(&root);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].repo.as_deref(), Some(crate::local_models::gturbo::REPO_ID));
+    }
+
+    async fn wait_until_finished(id: &str) -> DownloadState {
+        for _ in 0..100 {
+            if let Some(state) = status(id) {
+                if state.is_finished() {
+                    return state;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("download {id} did not finish");
     }
 }

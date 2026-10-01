@@ -87,6 +87,27 @@ pub fn resolve_context_length(requested: Option<u32>, model_max: Option<u32>, de
     }
 }
 
+/// Context window to launch and advertise for one local model.
+///
+/// MLX and GGUF stay on [`resolve_context_length`]: the shared default is
+/// smaller than a checkpoint's maximum so the runtime does not reserve a
+/// dense KV cache for the whole window. TurboFieldfare streams experts from
+/// disk and only accepts 4096, 8192, 16384, 32768, or 65536. Capping Gemma 4
+/// at 32768 makes an agent turn (system prompt plus tool schemas) cross the
+/// engine's `context_length_exceeded` line and reset the session while the
+/// checkpoint still has room. An explicit request still wins.
+pub fn resolve_launch_context(
+    format: sen_runtime_sdk::manifest::ModelFormat,
+    requested: Option<u32>,
+    model_max: Option<u32>,
+    default_context_length: Option<u32>,
+) -> u32 {
+    if format == sen_runtime_sdk::manifest::ModelFormat::Gturbo {
+        return requested.or(model_max).unwrap_or(65_536);
+    }
+    resolve_context_length(requested, model_max, default_context_length)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +147,14 @@ mod tests {
     fn no_known_model_maximum_falls_back_to_the_default_alone() {
         assert_eq!(resolve_context_length(None, None, Some(2048)), 2048);
         assert_eq!(resolve_context_length(None, None, None), DEFAULT_CONTEXT_LENGTH);
+    }
+
+    #[test]
+    fn gturbo_launches_at_the_checkpoint_maximum() {
+        use sen_runtime_sdk::manifest::ModelFormat;
+        assert_eq!(resolve_launch_context(ModelFormat::Gturbo, None, Some(65_536), None), 65_536);
+        assert_eq!(resolve_launch_context(ModelFormat::Gturbo, Some(8_192), Some(65_536), None), 8_192);
+        assert_eq!(resolve_launch_context(ModelFormat::Mlx, None, Some(65_536), None), DEFAULT_CONTEXT_LENGTH);
     }
 
     #[test]

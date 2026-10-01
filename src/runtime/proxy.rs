@@ -304,11 +304,17 @@ pub(crate) async fn proxy_model(
     };
     let capabilities = model.capability_list();
     // The OpenAI-compatible route has no per-request way to name a context
-    // length (unlike `POST /api/local-models/:key/load {contextLength}`), so
-    // this always resolves to the daemon's effective cap (§5.3): never the
-    // model's full maximum by default.
+    // length (unlike `POST /api/local-models/:key/load {contextLength}`).
+    // MLX and GGUF stay on the daemon cap. TurboFieldfare uses the
+    // checkpoint maximum (65536): its window is not a dense KV allocation,
+    // and the 32K cap was resetting agent sessions.
     let default_context_length = crate::local_models::settings::load_daemon_settings(&s.config.paths.local_models_dir).default_context_length;
-    let context_length = crate::local_models::settings::resolve_context_length(None, model.context_length, default_context_length);
+    let context_length = crate::local_models::settings::resolve_launch_context(
+        model.format,
+        None,
+        model.context_length,
+        default_context_length,
+    );
     let dial = match manager
         .ensure_model_started(model.format, &model.key, &model.path, model.mmproj_path.as_deref(), context_length, capabilities)
         .await
