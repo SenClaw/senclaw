@@ -62,7 +62,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 
 [package]
 name = "senclaw"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "SenClaw provides the runtime machinery around large language models: permissions, memory, scheduling, multi-agent orchestration, channel adapters, Space Apps, local model support, and a Web UI"
 license = "MIT"
