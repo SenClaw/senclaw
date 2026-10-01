@@ -493,44 +493,124 @@ pub struct SkillReminderRow<'a> {
     pub disable_model_invocation: bool,
 }
 
+/// Size of the skills list in the system prompt, in characters, for a model
+/// whose window is `context_length` tokens (0 = unknown, 128k assumed).
+///
+/// About 4% of the window, between 1k and 4k tokens at ~4 characters a token.
+/// The list is sent on every call, so it competes with the conversation for
+/// the whole window: unbounded, 219 installed skills rendered 88 KB (~25k
+/// tokens) and a 32k-context local model refused the very first turn with
+/// `context_length_exceeded`.
+pub fn skills_reminder_budget(context_length: u32) -> usize {
+    let ctx = if context_length == 0 { 128_000 } else { context_length as usize };
+    (ctx / 25).clamp(1_000, 4_000) * 4
+}
+
+/// Longest description kept in the condensed (one line per skill) form.
+const SKILL_SHORT_DESCRIPTION_CHARS: usize = 120;
+
 /// Render the skills section appended to the system prompt when the `Skill`
 /// tool is available. The LLM reads the descriptions to decide when to call
-/// `Skill { skill: <name> }`. Sema-core calls this approach
-/// **metadata-driven auto-trigger** (not regex/keyword matching) — the
-/// description quality drives invocation likelihood.
+/// `Skill { skill: <name> }` — **metadata-driven auto-trigger** (not
+/// regex/keyword matching), so description quality drives invocation.
+///
+/// The richest form that fits `budget_chars` (see [`skills_reminder_budget`])
+/// wins, and the same form is used for every skill so none is favoured by its
+/// place in the alphabet:
+///
+/// 1. description + `Triggers:` line — what a handful of skills always got;
+/// 2. one line each, the description cut to its first sentence;
+/// 3. names only, with a count of any that still did not fit.
+///
+/// The condensed forms defer the detail to `ToolSearch`, which already ranks
+/// skills by name, triggers and description — the same "list it, search it
+/// when needed" contract the deferred-tools reminder uses.
+///
+/// Rows keep the caller's order (the registry's sorted names) so the block is
+/// identical from turn to turn and never breaks a prompt-prefix cache.
 ///
 /// Returns `None` when no auto-invokable skills are loaded so the caller
 /// can skip the empty block (saves tokens).
-pub fn render_skills_reminder(skills: &[SkillReminderRow<'_>]) -> Option<String> {
-    let mut rows: Vec<String> = Vec::new();
-    for s in skills {
-        if s.disable_model_invocation {
-            continue;
-        }
-        // Two lines per skill: description first, then explicit `Triggers:`
-        // on its own line. Bold-line format attracts model attention much
-        // more reliably than the previous italic `*(when: ...)*` parenthetical,
-        // which models tended to skim as a side note.
-        let mut row = format!("- **{}**: {}", s.name, s.description);
-        if let Some(w) = s.when_to_use {
-            let w = w.trim();
-            if !w.is_empty() {
-                row.push_str(&format!("\n    Triggers: {w}"));
-            }
-        }
-        rows.push(row);
-    }
-    if rows.is_empty() {
+pub fn render_skills_reminder(skills: &[SkillReminderRow<'_>], budget_chars: usize) -> Option<String> {
+    let visible: Vec<&SkillReminderRow<'_>> = skills.iter().filter(|s| !s.disable_model_invocation).collect();
+    if visible.is_empty() {
         return None;
     }
+    let fits = |rows: &[String]| rows.iter().map(|r| r.len() + 1).sum::<usize>() <= budget_chars;
+
+    // Two lines per skill: description first, then explicit `Triggers:` on its
+    // own line. Bold-line format attracts model attention much more reliably
+    // than an italic `*(when: ...)*` parenthetical, which models skim.
+    let full: Vec<String> = visible
+        .iter()
+        .map(|s| {
+            let mut row = format!("- **{}**: {}", s.name, s.description);
+            if let Some(w) = s.when_to_use.map(str::trim).filter(|w| !w.is_empty()) {
+                row.push_str(&format!("\n    Triggers: {w}"));
+            }
+            row
+        })
+        .collect();
+    if fits(&full) {
+        return Some(format!(
+            "<system-reminder>\nAvailable skills (invoke via the `Skill` tool with `skill: <name>`):\n\n{}\n\n\
+             **CHECK SKILL TRIGGERS BEFORE ANSWERING.** If the user's request clearly matches a skill's \
+             `Triggers:` line and no already-visible tool is sufficient, invoke the skill via \
+             `Skill {{ \"skill\": \"<name>\" }}` first.\n\
+             </system-reminder>",
+            full.join("\n")
+        ));
+    }
+
+    let short: Vec<String> = visible
+        .iter()
+        .map(|s| format!("- **{}**: {}", s.name, first_sentence(s.description, SKILL_SHORT_DESCRIPTION_CHARS)))
+        .collect();
+    let body = if fits(&short) {
+        short.join("\n")
+    } else {
+        let mut names: Vec<&str> = Vec::new();
+        let mut used = 0usize;
+        for s in &visible {
+            if used + s.name.len() + 2 > budget_chars {
+                break;
+            }
+            used += s.name.len() + 2;
+            names.push(s.name);
+        }
+        let mut line = names.join(", ");
+        let omitted = visible.len() - names.len();
+        if omitted > 0 {
+            line.push_str(&format!(", … and {omitted} more"));
+        }
+        line
+    };
     Some(format!(
-        "<system-reminder>\nAvailable skills (invoke via the `Skill` tool with `skill: <name>`):\n\n{}\n\n\
-         **CHECK SKILL TRIGGERS BEFORE ANSWERING.** If the user's request clearly matches a skill's \
-         `Triggers:` line and no already-visible tool is sufficient, invoke the skill via \
-         `Skill {{ \"skill\": \"<name>\" }}` first.\n\
+        "<system-reminder>\n{} skills are installed (invoke via the `Skill` tool with `skill: <name>`):\n\n{body}\n\n\
+         **CHECK FOR A MATCHING SKILL BEFORE ANSWERING.** When the request may need one, call \
+         `ToolSearch {{ query: \"<keywords>\" }}` — it returns matching skills with their full description and \
+         triggers, and the tools they use — then invoke the skill via `Skill {{ \"skill\": \"<name>\" }}`. \
+         A skill you are already sure of can be invoked directly.\n\
          </system-reminder>",
-        rows.join("\n")
+        visible.len()
     ))
+}
+
+/// The first sentence (or line) of `text`, cut to `max_chars` characters.
+fn first_sentence(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    let end = text
+        .find(|c| c == '\n')
+        .into_iter()
+        .chain(text.find(". ").map(|i| i + 1))
+        .min()
+        .unwrap_or(text.len());
+    let sentence = text[..end].trim();
+    if sentence.chars().count() <= max_chars {
+        return sentence.to_string();
+    }
+    let cut: String = sentence.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", cut.trim_end())
 }
 
 // ============================================================================
@@ -707,12 +787,97 @@ mod tests {
                 disable_model_invocation: true,
             },
         ];
-        let out = render_skills_reminder(&rows).expect("non-empty");
+        let out = render_skills_reminder(&rows, 10_000).expect("non-empty");
         assert!(out.contains("**pdf**"));
         assert!(out.contains("Triggers: any .pdf file"));
         assert!(!out.contains("internal"));
         assert!(out.contains("<system-reminder>"));
         assert!(out.contains("CHECK SKILL TRIGGERS"));
+    }
+
+    fn many_skills(n: usize) -> Vec<(String, String, String)> {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("skill-{i:03}"),
+                    format!(
+                        "Does task number {i} for the user. It also explains, at length, every option the task \
+                         has, which edge cases it covers and how it differs from its neighbours."
+                    ),
+                    format!("\"task {i}\", \"việc số {i}\", any request that mentions task {i}"),
+                )
+            })
+            .collect()
+    }
+
+    fn rows(skills: &[(String, String, String)]) -> Vec<SkillReminderRow<'_>> {
+        skills
+            .iter()
+            .map(|(n, d, w)| SkillReminderRow {
+                name: n,
+                description: d,
+                when_to_use: Some(w),
+                disable_model_invocation: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_few_skills_keep_their_full_description_and_triggers() {
+        let skills = many_skills(5);
+        let out = render_skills_reminder(&rows(&skills), skills_reminder_budget(128_000)).unwrap();
+        assert!(out.contains("Triggers: \"task 4\""), "{out}");
+        assert!(out.contains("CHECK SKILL TRIGGERS"));
+    }
+
+    #[test]
+    fn many_skills_condense_to_one_line_each_and_point_at_tool_search() {
+        let skills = many_skills(120);
+        let budget = skills_reminder_budget(128_000);
+        let out = render_skills_reminder(&rows(&skills), budget).unwrap();
+        assert!(!out.contains("Triggers:"), "{out}");
+        assert!(out.contains("- **skill-119**: Does task number 119 for the user."), "{out}");
+        assert!(!out.contains("at length"), "only the first sentence is kept");
+        assert!(out.contains("ToolSearch"));
+        assert!(out.starts_with("<system-reminder>\n120 skills are installed"));
+    }
+
+    #[test]
+    fn hundreds_of_skills_stay_inside_the_budget_of_a_small_window() {
+        // The measured failure: 219 skills, a 32k-context local model.
+        let skills = many_skills(219);
+        let budget = skills_reminder_budget(32_768);
+        let out = render_skills_reminder(&rows(&skills), budget).unwrap();
+        // Budget plus the fixed header and instruction (< 600 chars).
+        assert!(out.len() <= budget + 600, "{} chars for a {budget} budget", out.len());
+        assert!(out.contains("skill-000, skill-001"), "names only: {out}");
+        let full = render_skills_reminder(&rows(&skills), usize::MAX).unwrap();
+        assert!(full.len() > 10 * out.len(), "{} vs {}", full.len(), out.len());
+    }
+
+    #[test]
+    fn names_that_do_not_fit_are_counted() {
+        let skills = many_skills(219);
+        let out = render_skills_reminder(&rows(&skills), 200).unwrap();
+        assert!(out.contains("more"), "{out}");
+        let shown = out.matches("skill-").count();
+        assert!(out.contains(&format!("and {} more", 219 - shown)), "{out}");
+    }
+
+    #[test]
+    fn the_skills_budget_follows_the_context_window() {
+        assert_eq!(skills_reminder_budget(32_768), 5_240);
+        assert_eq!(skills_reminder_budget(0), 16_000, "unknown window = 128k");
+        assert_eq!(skills_reminder_budget(1_000_000), 16_000);
+        assert_eq!(skills_reminder_budget(8_192), 4_000);
+    }
+
+    #[test]
+    fn first_sentence_stops_at_a_period_or_a_line_and_respects_the_cap() {
+        assert_eq!(first_sentence("Read PDFs. Also writes them.", 120), "Read PDFs.");
+        assert_eq!(first_sentence("Line one\nline two", 120), "Line one");
+        assert_eq!(first_sentence("v1.2 is supported", 120), "v1.2 is supported");
+        assert_eq!(first_sentence("Tìm kiếm thông tin rất dài", 10), "Tìm kiếm…");
     }
 
     #[test]
@@ -789,7 +954,7 @@ mod tests {
             when_to_use: None,
             disable_model_invocation: true,
         }];
-        assert!(render_skills_reminder(&rows).is_none());
+        assert!(render_skills_reminder(&rows, 10_000).is_none());
     }
 
     #[test]

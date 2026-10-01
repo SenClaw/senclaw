@@ -39,8 +39,81 @@ use permissions::PermissionManager;
 /// (`mcp__browser__search`, inserted by the `agent-browser` load hook).
 /// Normalizing the queried tool's name collapses both onto the same key so a
 /// tool pre-discovered under either form un-defers correctly.
-fn discovered_has(set: &std::collections::HashSet<String>, name: &str) -> bool {
+fn discovered_has(set: &DiscoveredTools, name: &str) -> bool {
     set.contains(name) || set.contains(&normalize_mcp_tool_name(name))
+}
+
+/// Whether `text` names `ident` as a whole identifier — not inside a longer
+/// one (`get` in `budget`, `space_list` in `space_list_all`).
+fn mentions_identifier(text: &str, ident: &str) -> bool {
+    if ident.is_empty() {
+        return false;
+    }
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices(ident).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + ident.len()..].chars().next();
+        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+    })
+}
+
+/// Most deferred tools a session keeps active at once through `ToolSearch` or
+/// a skill's pre-discovery. Every active tool's schema is sent on every call,
+/// and the set only ever grew: one session reached 93 tools, and the larger the
+/// list the sooner a request hits a provider's tool or context limit. 24 keeps
+/// a turn near 55 tools on top of the ~30 always-loaded ones.
+pub(crate) const MAX_DISCOVERED_TOOLS: usize = 24;
+
+/// Deferred tools this session made callable.
+///
+/// Two kinds: `pinned` — named by the agent's own configuration (`use_tools`,
+/// DAG mode's dispatch tools), always kept — and `recent`, what `ToolSearch`
+/// and skill activation loaded, capped at [`MAX_DISCOVERED_TOOLS`] with the
+/// least recently (re)discovered dropped first. A dropped tool is still one
+/// `ToolSearch` away; the deferred-tools reminder keeps listing it.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct DiscoveredTools {
+    pinned: std::collections::HashSet<String>,
+    recent: std::collections::VecDeque<String>,
+}
+
+impl DiscoveredTools {
+    /// Mark `name` discovered (most recent first in line to stay). Returns
+    /// whether it was not active before, like `HashSet::insert`.
+    pub(crate) fn insert(&mut self, name: String) -> bool {
+        if self.pinned.contains(&name) {
+            return false;
+        }
+        let was_new = match self.recent.iter().position(|n| *n == name) {
+            Some(i) => {
+                self.recent.remove(i);
+                false
+            }
+            None => true,
+        };
+        self.recent.push_back(name);
+        while self.recent.len() > MAX_DISCOVERED_TOOLS {
+            if let Some(dropped) = self.recent.pop_front() {
+                tracing::info!("[ToolSearch] tool budget: deactivated least recently discovered {dropped}");
+            }
+        }
+        was_new
+    }
+
+    /// Keep `name` active for the whole session, outside the cap.
+    pub(crate) fn pin(&mut self, name: String) {
+        self.recent.retain(|n| *n != name);
+        self.pinned.insert(name);
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.pinned.contains(name) || self.recent.iter().any(|n| n == name)
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.pinned.clear();
+        self.recent.clear();
+    }
 }
 
 /// Per-instance agent execution engine.
@@ -92,7 +165,7 @@ pub struct ZenEngine {
     /// `tools_for_main_agent` includes these even when `should_defer() == true`,
     /// so the model can actually call what ToolSearch promised. Reset on
     /// `dispose()` / new session.
-    pub(crate) discovered_tools: Arc<Mutex<std::collections::HashSet<String>>>,
+    pub(crate) discovered_tools: Arc<Mutex<DiscoveredTools>>,
 
     /// Weak self-reference set during construction. Lets `&self` methods hand
     /// out closures that re-fetch live engine state without holding a strong
@@ -165,7 +238,7 @@ impl ZenEngine {
             session_id: RwLock::new(None),
             hook_manager: Arc::new(HookManager::empty()),
             workbench_service: workbench_service.clone(),
-            discovered_tools: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            discovered_tools: Arc::new(Mutex::new(DiscoveredTools::default())),
             self_weak: Mutex::new(std::sync::Weak::new()),
             identity_refresh_pending: Arc::new(AtomicBool::new(false)),
         });
@@ -1473,7 +1546,7 @@ impl ZenCore for ZenEngine {
                     "DispatchTask",
                     "DispatchAllTasks",
                 ] {
-                    disc.insert((*name).to_string());
+                    disc.pin((*name).to_string());
                 }
                 tracing::info!(
                     "[{}] DAG mode: pre-discovered dispatch tools",
@@ -1650,8 +1723,14 @@ impl ZenEngine {
             .unwrap()
             .iter()
             .any(|t| t.name() == "Skill");
+        // Resolve profile: per-group override → active UI config → env fallback.
+        // Resolved before the prompt is assembled because the model's edit
+        // format (Aider-style) decides whether the prompt tells it to send
+        // unified diffs or whole files, and its context window sizes the
+        // skills list.
+        let profile = self.resolve_model_profile();
         let skills_reminder = if has_skill_tool {
-            self.build_skills_reminder()
+            self.build_skills_reminder(profile.context_length)
         } else {
             None
         };
@@ -1702,11 +1781,6 @@ impl ZenEngine {
         // Where this project keeps documentation, when the project keeps any.
         let project_docs_block = crate::zen_core::prompt::project_docs_block(&opts.working_dir);
 
-        // Resolve profile: per-group override → active UI config → env fallback.
-        // Resolved before the prompt is assembled because the model's edit
-        // format (Aider-style) decides whether the prompt tells it to send
-        // unified diffs or whole files.
-        let profile = self.resolve_model_profile();
         let edit_format_reminder = profile
             .edit_format
             .and_then(|f| f.prompt_reminder())
@@ -2194,8 +2268,8 @@ impl ZenEngine {
 
     /// Render the metadata-driven skills reminder block when the `Skill` tool
     /// is registered. Returns `None` when there are zero auto-invokable skills.
-    fn build_skills_reminder(&self) -> Option<String> {
-        use crate::zen_core::prompt::{render_skills_reminder, SkillReminderRow};
+    fn build_skills_reminder(&self, context_length: u32) -> Option<String> {
+        use crate::zen_core::prompt::{render_skills_reminder, skills_reminder_budget, SkillReminderRow};
         // Snapshot skill names then re-fetch metadata so we don't hold the
         // registry lock across the borrow into SkillReminderRow.
         let names = self.skill_registry.names();
@@ -2216,7 +2290,7 @@ impl ZenEngine {
                 disable_model_invocation: s.metadata.disable_model_invocation,
             })
             .collect();
-        render_skills_reminder(&rows)
+        render_skills_reminder(&rows, skills_reminder_budget(context_length))
     }
 
     /// Build the always-on skills block: every eligible skill declared
@@ -2402,10 +2476,17 @@ reference are already available (no ToolSearch needed).\n\n{}\n\
                 // Match either the registered verb (`space_current_time`) or the
                 // canonical stripped bridge name (`mcp__space__current_time`) the
                 // skill docs use, so standardized docs still surface the tool.
-                let verb = full.rsplit("__").next().unwrap_or(full);
+                //
+                // Whole identifiers only, and a bare verb only when it is
+                // several words (`space_recurring_create`): a substring match
+                // on any verb of 3+ letters loaded every `status`, `get` and
+                // `list` tool whose word appeared anywhere in the skill's
+                // prose, which is how one session reached 93 active tools.
+                let verb = full.rsplit("__").next().unwrap_or(full).to_lowercase();
                 let canonical = normalize_mcp_tool_name(full).to_lowercase();
-                let matched = (verb.len() >= 3 && content_lower.contains(&verb.to_lowercase()))
-                    || content_lower.contains(&canonical);
+                let matched = (verb.contains('_') && mentions_identifier(&content_lower, &verb))
+                    || mentions_identifier(&content_lower, &canonical)
+                    || mentions_identifier(&content_lower, &full.to_lowercase());
                 if matched {
                     if discovered.insert(full.to_string()) {
                         tracing::info!(
@@ -2981,7 +3062,7 @@ mod tests {
 
     #[test]
     fn discovered_has_matches_both_naming_schemes() {
-        let mut set = std::collections::HashSet::new();
+        let mut set = DiscoveredTools::default();
         // The agent-browser load hook inserts the STRIPPED bridge name…
         set.insert("mcp__browser__search".to_string());
         // …yet the deferred tool is registered under its FULL name. Membership
@@ -2989,7 +3070,7 @@ mod tests {
         assert!(discovered_has(&set, "mcp__senclaw-browser__browser_search"));
         assert!(discovered_has(&set, "mcp__browser__search"));
         // ToolSearch / apply_skill_activation insert the FULL name directly.
-        let mut set2 = std::collections::HashSet::new();
+        let mut set2 = DiscoveredTools::default();
         set2.insert("mcp__senclaw-space__space_note_create".to_string());
         assert!(discovered_has(
             &set2,
@@ -3832,6 +3913,66 @@ mod tests {
         fn should_defer(&self) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn a_skill_does_not_load_tools_whose_short_verb_its_prose_happens_to_use() {
+        // "status", "get" and "list" are everyday words in a skill's text;
+        // matching them loaded every such tool on the machine.
+        let e = engine_with_skill(
+            "activation-generic-verbs",
+            "deploy",
+            "Check the status, get the logs, list the hosts, then call space_recurring_create.",
+        );
+        for name in [
+            "mcp__core__status",
+            "mcp__ai-office-mcp__get",
+            "mcp__core__space_recurring_create",
+            "mcp__core__space_recurring_create_all",
+        ] {
+            e.register_tool(Arc::new(DeferredStub(name)));
+        }
+        let skill = e.skill_registry.find("deploy").unwrap();
+        e.apply_skill_activation(&skill);
+        let discovered = e.discovered_tools.lock().unwrap();
+        assert!(discovered.contains("mcp__core__space_recurring_create"), "{discovered:?}");
+        assert!(!discovered.contains("mcp__core__space_recurring_create_all"), "{discovered:?}");
+        assert!(!discovered.contains("mcp__core__status"), "{discovered:?}");
+        assert!(!discovered.contains("mcp__ai-office-mcp__get"), "{discovered:?}");
+    }
+
+    #[test]
+    fn a_skill_still_loads_a_one_word_tool_it_names_in_full() {
+        let e = engine_with_skill("activation-full-name", "office", "Use mcp__core__status first.");
+        e.register_tool(Arc::new(DeferredStub("mcp__core__status")));
+        let skill = e.skill_registry.find("office").unwrap();
+        e.apply_skill_activation(&skill);
+        assert!(e.discovered_tools.lock().unwrap().contains("mcp__core__status"));
+    }
+
+    #[test]
+    fn discovered_tools_keep_the_most_recent_within_the_cap() {
+        let mut d = DiscoveredTools::default();
+        d.pin("DispatchTask".to_string());
+        for i in 0..MAX_DISCOVERED_TOOLS {
+            assert!(d.insert(format!("tool_{i}")));
+        }
+        // Re-discovering the oldest makes it the newest instead of a duplicate.
+        assert!(!d.insert("tool_0".to_string()));
+        assert!(d.insert("one_more".to_string()));
+        assert!(d.contains("tool_0"), "refreshed, so kept");
+        assert!(!d.contains("tool_1"), "least recently discovered is dropped first");
+        assert!(d.contains("one_more"));
+        assert!(d.contains("DispatchTask"), "configured tools are never dropped");
+        assert_eq!(d.recent.len(), MAX_DISCOVERED_TOOLS);
+    }
+
+    #[test]
+    fn identifiers_match_whole_words_only() {
+        assert!(mentions_identifier("call `space_list` now", "space_list"));
+        assert!(!mentions_identifier("call space_list_all now", "space_list"));
+        assert!(!mentions_identifier("the budget", "get"));
+        assert!(mentions_identifier("mcp__core__status.", "mcp__core__status"));
     }
 
     #[test]

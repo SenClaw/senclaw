@@ -273,7 +273,7 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
             if let Some(t) =
                 crate::tools::tool_search::resolve_tool_by_name(entry, deferred.as_slice())
             {
-                discovered.insert(t.name().to_string());
+                discovered.pin(t.name().to_string());
                 pre_discovered += 1;
             }
         }
