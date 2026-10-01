@@ -126,7 +126,7 @@ impl Tool for PersonaUpdateTool {
         // Resolve SOUL.md path. ctx.agent_id == the agent folder slug, per
         // the convention in `agent_pool::pool::mcp_servers.push(...)`.
         let cfg = Config::from_env();
-        let soul_path = cfg.paths.agents_dir.join(ctx.agent_id).join("SOUL.md");
+        let soul_path = cfg.paths.profiles_dir.join(ctx.agent_id).join("SOUL.md");
 
         // Read current — missing file is OK; editor will create the
         // section. Build a minimal stub with H1 so the file is well-formed.
@@ -171,7 +171,7 @@ impl Tool for PersonaUpdateTool {
         // turn's pre-retrieval already sees the new persona facts. The
         // poll-based watcher would catch this in ~30 s anyway; this just
         // shortens the gap.
-        spawn_ingest(cfg.paths.agents_dir.clone(), ctx.agent_id.to_string());
+        spawn_ingest(cfg.paths.profiles_dir.clone(), ctx.agent_id.to_string());
 
         let data = serde_json::json!({
             "section": section,
@@ -208,12 +208,12 @@ impl Tool for PersonaUpdateTool {
 
 /// Mirror of `agent_manager::spawn_soul_ingest` — kept here so tools/
 /// doesn't depend on gateway/. Same fire-and-forget semantics.
-fn spawn_ingest(agents_dir: std::path::PathBuf, folder: String) {
+fn spawn_ingest(profiles_dir: std::path::PathBuf, folder: String) {
     tokio::spawn(async move {
         let Some(sys) = crate::memory::cognitive::try_get_instance() else {
             return;
         };
-        match crate::memory::cognitive::ingest_soul_from_disk(&sys, &agents_dir, &folder).await {
+        match crate::memory::cognitive::ingest_soul_from_disk(&sys, &profiles_dir, &folder).await {
             Ok(Some(_)) => {}
             Ok(None) => {}
             Err(e) => tracing::warn!(

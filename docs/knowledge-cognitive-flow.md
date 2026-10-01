@@ -7,7 +7,7 @@
 | Hệ thống | Lưu trữ | Vai trò | Tài liệu |
 |---|---|---|---|
 | **Knowledge (cognitive)** — tài liệu này | SQLite graph (nodes + edges + vector) | Đồ thị tri thức: entity, quan hệ, Hebbian strengthen/decay | `docs/knowledge-cognitive-flow.md` |
-| Curated memory | File `.md` trong `~/.senclaw/agents/<folder>/memory/` + `MEMORY.md` | Ghi nhớ có chọn lọc do agent/user quản lý, recall injection + consolidation khi compaction | `docs/curated-memory-design.md` |
+| Curated memory | File `.md` trong `~/senclaw/profiles/<folder>/memory/` + `MEMORY.md` | Ghi nhớ có chọn lọc do agent/user quản lý, recall injection + consolidation khi compaction | `docs/curated-memory-design.md` |
 | FTS memory | Bảng FTS5 + vector | Tìm kiếm ngữ nghĩa trên log/tài liệu thô | `docs/memory.md` |
 
 Trên UI (web + desktop), lớp cognitive hiển thị dưới tên **"Knowledge"** (trước đây là "Memory"). Ba năng lực mà UI expose khớp với ba luồng nạp bên dưới: tổng hợp thông tin người dùng từ hội thoại (auto-reflection), mở rộng bằng tài liệu ngoài (upload), và nghiên cứu tổng hợp trả lời chi tiết (Recall).

@@ -279,7 +279,7 @@ pub fn ensure_wechat_admin_group(
     } else {
         "registered"
     };
-    tracing::info!("[GroupManager] WeChat group {action}: {owner_jid} → agents/{folder}/");
+    tracing::info!("[GroupManager] WeChat group {action}: {owner_jid} → profiles/{folder}/");
 }
 
 /// Auto-register an app-channel JID as a group on first contact, mirroring the
@@ -334,5 +334,5 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
     } else {
         "registered"
     };
-    tracing::info!("[GroupManager] App group {action}: {chat_jid} → agents/{folder}/");
+    tracing::info!("[GroupManager] App group {action}: {chat_jid} → profiles/{folder}/");
 }

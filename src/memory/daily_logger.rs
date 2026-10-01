@@ -31,12 +31,12 @@ impl Role {
 }
 
 pub struct DailyLogger {
-    agents_dir: PathBuf,
+    profiles_dir: PathBuf,
 }
 
 impl DailyLogger {
-    pub fn new(agents_dir: PathBuf) -> Self {
-        Self { agents_dir }
+    pub fn new(profiles_dir: PathBuf) -> Self {
+        Self { profiles_dir }
     }
 
     /// Append one entry to today's log. Empty content is silently dropped.
@@ -109,7 +109,7 @@ impl DailyLogger {
     }
 
     fn memory_dir(&self, folder: &str) -> PathBuf {
-        self.agents_dir.join(folder).join("memory")
+        self.profiles_dir.join(folder).join("memory")
     }
 }
 

@@ -607,9 +607,9 @@ flowchart LR
   workspace-state-{folder}.json      # Trạng thái workspace từng agent
 
 ~/senclaw/                          # Thư mục dữ liệu người dùng
-  agents/{folder}/                   # Mỗi group một folder
+  profiles/{folder}/                 # Mỗi group một folder
     CLAUDE.md                        # Agent persona
-    .sema/sessions/                  # Session state
+    .sen/sessions/                   # Session state
     memory/                          # Memory index
   workspace/{folder}/                # Workspace files cho từng agent
   wiki/                              # Git-backed knowledge base
@@ -702,7 +702,7 @@ flowchart TB
     end
 
     subgraph "Storage"
-        SESS_DIR[(~/.sema/sessions/)]
+        SESS_DIR[(~/.sen/sessions/)]
         MCONF[(senclaw-model.conf)]
     end
 
@@ -940,7 +940,7 @@ SenClaw có **4 chế độ** sử dụng LLM, mỗi chế độ có đặc đi�
 ```mermaid
 flowchart TB
     subgraph "Group Agent (chế độ chính)"
-        G_DIR[Session lưu trên disk<br/>~/.sema/sessions/]
+        G_DIR[Session lưu trên disk<br/>~/.sen/sessions/]
         G_CTX[Có lịch sử chat đầy đủ<br/>từ DB messages]
         G_CACHE[Prompt Cache ấm<br/>nếu idle < 5 phút]
         G_PERM[Cần PermissionBridge<br/>cho tool nguy hiểm]

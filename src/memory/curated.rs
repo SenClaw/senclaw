@@ -6,7 +6,7 @@
 //! `MemoryManager` watcher picks the files up on its next poll and FTS/vector-indexes
 //! them, so recall reuses the existing `hybrid_search` — no new storage.
 //!
-//! Layout mirrors `MemoryManager::sync_folder`: `base` is `agents_dir/{folder}` (or a
+//! Layout mirrors `MemoryManager::sync_folder`: `base` is `profiles_dir/{folder}` (or a
 //! custom cowork dir); `MEMORY.md` lives at `base/MEMORY.md`; files at `base/memory/*.md`.
 
 use std::fs;

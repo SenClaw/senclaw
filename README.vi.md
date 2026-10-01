@@ -275,10 +275,10 @@ Mặc định SenClaw lưu dữ liệu runtime trong home directory, tách thàn
 └── workspace-state-{folder}.json   # trạng thái workspace từng agent
 
 ~/senclaw/                          # workspace hiển thị với người dùng
-├── agents/{folder}/                # mỗi profile agent một thư mục
+├── profiles/{folder}/              # mỗi profile agent một thư mục
 │   ├── SOUL.md                     # persona
 │   ├── memory/                     # curated memory (*.md + index MEMORY.md)
-│   └── .sema/sessions/             # các phiên hội thoại
+│   └── .sen/sessions/              # các phiên hội thoại
 ├── workspace/{folder}/             # thư mục làm việc của các chat
 ├── workspace/space-apps/{app-id}/  # Space Apps đã cài (binary + web_dist)
 ├── wiki/                           # knowledge base quản lý bằng Git

@@ -564,7 +564,7 @@ Khi vault bật, `USER.md` và `TOOLS.md` thành `USER.md.enc` / `TOOLS.md.enc`;
 │   │   ├── SOUL.md            ← persona CỦA AGENT (giữ nguyên nghĩa cũ)
 │   │   ├── MEMORY.md
 │   │   ├── memory/            ← curated *.md + nhật ký ngày
-│   │   └── .sema/sessions/
+│   │   └── .sen/sessions/
 │   ├── coder/  ·  researcher/  ·  copywriter/  ·  ssh/  … (30 folder nữa)
 │   └── schedule_<uuid>/       × 6
 ├── workspace/                 ← thư mục làm việc theo agent
@@ -573,7 +573,7 @@ Khi vault bật, `USER.md` và `TOOLS.md` thành `USER.md.enc` / `TOOLS.md.enc`;
 ```
 
 **Không sửa một dòng nào ở cây này.** Đó là điều làm cho toàn bộ thiết kế an toàn:
-`spawn_soul_watcher` chỉ quét `agents_dir` (`~/senclaw/agents`), nên nó không bao giờ
+`spawn_soul_watcher` chỉ quét `profiles_dir` (`~/senclaw/profiles`), nên nó không bao giờ
 thấy `~/.senclaw/USER.md`. Va chạm với persona tự tan.
 
 Con số 34 cũng là lập luận: hồ sơ người dùng mà đặt trong đây thì phải khai 34 lần.

@@ -1055,7 +1055,7 @@ impl AgentPool {
         // Seed agent_data_dir BEFORE engine creation so SOUL.md lands in the
         // system prompt on the first turn (PersonaUpdate / memory also use it).
         if let Some(cfg) = self.config.lock().unwrap().as_ref() {
-            let agent_data = cfg.paths.agents_dir.join(&binding.folder);
+            let agent_data = cfg.paths.profiles_dir.join(&binding.folder);
             let _ = crate::gateway::group_manager::ensure_agent_dirs(
                 cfg,
                 &binding.folder,
@@ -1076,7 +1076,7 @@ impl AgentPool {
             let state_file_s = state_file.to_string_lossy().to_string();
             let workspace_s = workspace_dir.to_string_lossy().to_string();
             let db_path_s = cfg.paths.db_path.to_string_lossy().to_string();
-            let agents_dir_s = cfg.paths.agents_dir.to_string_lossy().to_string();
+            let profiles_dir_s = cfg.paths.profiles_dir.to_string_lossy().to_string();
             let user_profile_s = cfg.paths.user_profile_path.to_string_lossy().to_string();
             let dispatch_state_s = cfg.paths.dispatch_state_path.to_string_lossy().to_string();
             let virtual_agents_dir_s = cfg.paths.virtual_agents_dir.to_string_lossy().to_string();
@@ -1105,7 +1105,7 @@ impl AgentPool {
                         workspace_state_file: &state_file_s,
                         default_workspace: &workspace_s,
                         allowed_work_dirs: allowed_work_dirs.as_deref(),
-                        agents_dir: &agents_dir_s,
+                        profiles_dir: &profiles_dir_s,
                         memory_folder: &memory_index_folder,
                         embedding_provider: Some(cfg.memory.embedding_provider.as_str()),
                         openai_api_key: openai_key,
@@ -1182,7 +1182,7 @@ impl AgentPool {
                 mcp_servers.push(memory_mcp_config(
                     &db_path_s,
                     &memory_index_folder,
-                    &agents_dir_s,
+                    &profiles_dir_s,
                     Some(cfg.memory.embedding_provider.as_str()),
                     openai_key,
                     openai_base,
@@ -1798,7 +1798,7 @@ impl AgentPool {
         //   • Cognitive    → global `preCognitive` toggle (pre-cognitive stage)
         //   • Curated      → global `memoryRecall` toggle (hybrid FTS5/vector
         //                    search over curated memory/*.md, per-memory hits)
-        // The memory backend now loads `~/.senclaw/agents/<folder>/MEMORY.md`
+        // The memory backend now loads `~/senclaw/profiles/<folder>/MEMORY.md`
         // verbatim instead of FTS-searching chunks + daily history.
         let full_prompt = {
             let (do_memory, max_results) = {
@@ -1820,13 +1820,13 @@ impl AgentPool {
 
             // MEMORY.md backend — read the file verbatim from the agent's dir.
             let mem_context = if do_memory {
-                let agents_dir = self
+                let profiles_dir = self
                     .config
                     .lock()
                     .unwrap()
                     .as_ref()
-                    .map(|c| c.paths.agents_dir.clone());
-                match agents_dir {
+                    .map(|c| c.paths.profiles_dir.clone());
+                match profiles_dir {
                     Some(dir) => {
                         let memory_md = dir.join(&group.folder).join("MEMORY.md");
                         match std::fs::read_to_string(&memory_md) {
@@ -1883,7 +1883,7 @@ impl AgentPool {
         };
 
         // Daily history log disabled — memory now flows only through
-        // ~/.senclaw/agents/<folder>/MEMORY.md. Daily-log files are no
+        // ~/senclaw/profiles/<folder>/MEMORY.md. Daily-log files are no
         // longer written or read.
         let _ = &self.daily_logger;
 
@@ -3065,7 +3065,7 @@ impl AgentPool {
                             if enabled {
                                 let folder = folder.clone();
                                 let jid_for_origin = jid.clone();
-                                let base = cfg.paths.agents_dir.join(&folder);
+                                let base = cfg.paths.profiles_dir.join(&folder);
                                 tokio::spawn(async move {
                                     let llm =
                                         crate::memory::cognitive::llm_openai::create_cognitive_llm(
@@ -3094,21 +3094,17 @@ impl AgentPool {
                     }
 
                     let today: String = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                    let changed_file = dirs::home_dir()
-                        .map(|h| {
-                            h.join("senclaw")
-                                .join("agents")
-                                .join(&folder)
-                                .join("memory")
-                                .join(format!("{today}.md"))
-                        })
-                        .unwrap_or_else(|| {
-                            std::path::PathBuf::from("senclaw")
-                                .join("agents")
-                                .join(&folder)
-                                .join("memory")
-                                .join(format!("{today}.md"))
-                        });
+                    let profiles_dir = pool
+                        .config
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|c| c.paths.profiles_dir.clone())
+                        .unwrap_or_else(|| crate::config::Config::from_env().paths.profiles_dir);
+                    let changed_file = profiles_dir
+                        .join(&folder)
+                        .join("memory")
+                        .join(format!("{today}.md"));
                     let mgr = crate::memory::manager::get_instance();
                     let changed_str = changed_file.to_string_lossy().to_string();
                     mgr.mark_dirty(&folder, Some(&changed_str));

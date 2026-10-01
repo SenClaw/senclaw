@@ -216,7 +216,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = crate::config::Config::from_env();
         config.paths.global_config_path = tmp.path().join("config.json");
-        config.paths.agents_dir = tmp.path().join("agents");
+        config.paths.profiles_dir = tmp.path().join("agents");
         config.paths.workspace_dir = tmp.path().join("workspace");
         std::fs::write(
             &config.paths.global_config_path,

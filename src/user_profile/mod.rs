@@ -2,7 +2,7 @@
 //!
 //! SenClaw already had a `SOUL.md`, but it answers a different question: it is
 //! the **agent's** persona, one file per agent folder under
-//! `~/senclaw/agents/<folder>/`, ingested into the cognitive graph and edited
+//! `~/senclaw/profiles/<folder>/`, ingested into the cognitive graph and edited
 //! by the `PersonaUpdate` tool. Nothing anywhere recorded the owner's name,
 //! how to address them, their timezone or their email — so every profile
 //! started cold, and a machine with 34 agent folders would have needed the
@@ -10,7 +10,7 @@
 //!
 //! Soul Core lives at **`~/.senclaw/USER.md`** — `senclaw_home`, a different
 //! tree from `senclaw_data` where the agents live. That placement is load
-//! bearing rather than cosmetic: `spawn_soul_watcher` only walks `agents_dir`,
+//! bearing rather than cosmetic: `spawn_soul_watcher` only walks `profiles_dir`,
 //! so the persona watcher, the persona ingest and `PersonaUpdate` all
 //! structurally cannot touch this file.
 //!

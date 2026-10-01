@@ -1,6 +1,6 @@
 //! Ingest each agent's `SOUL.md` persona file into cognitive memory.
 //!
-//! SOUL.md is the agent's identity file at `~/.senclaw/agents/<folder>/SOUL.md`.
+//! SOUL.md is the agent's identity file at `~/senclaw/profiles/<folder>/SOUL.md`.
 //! It already drives the agent's system prompt via the legacy core_prompt
 //! field, but those facts live only in the prompt — they're not in the
 //! cognitive graph, so:
@@ -134,10 +134,10 @@ pub async fn ingest_soul(
 /// the file is missing (an agent that never had a persona file written).
 pub async fn ingest_soul_from_disk(
     sys: &CognitiveSystem,
-    agents_dir: &std::path::Path,
+    profiles_dir: &std::path::Path,
     agent_folder: &str,
 ) -> Result<Option<CognifyReport>> {
-    let path = agents_dir.join(agent_folder).join("SOUL.md");
+    let path = profiles_dir.join(agent_folder).join("SOUL.md");
     if !path.exists() {
         return Ok(None);
     }
@@ -172,7 +172,7 @@ const LEARNED_END: &str = "<!-- senclaw:learned:end -->";
 /// preserved.
 pub async fn consolidate_to_soul(
     graph: &dyn super::GraphStore,
-    agents_dir: &std::path::Path,
+    profiles_dir: &std::path::Path,
     agent_folder: &str,
     min_strength: f32,
 ) -> Result<ConsolidateReport> {
@@ -230,7 +230,7 @@ pub async fn consolidate_to_soul(
     body.push_str(LEARNED_END);
     body.push('\n');
 
-    let path = agents_dir.join(agent_folder).join("SOUL.md");
+    let path = profiles_dir.join(agent_folder).join("SOUL.md");
     let current = std::fs::read_to_string(&path).unwrap_or_default();
     let next = splice_learned_section(&current, &body);
     if next != current {
@@ -304,7 +304,7 @@ pub(crate) fn splice_learned_section(existing: &str, new_section: &str) -> Strin
 /// called from `run_daemon` right after `ingest_all_souls`.
 pub fn spawn_soul_watcher(
     sys: Arc<super::CognitiveSystem>,
-    agents_dir: std::path::PathBuf,
+    profiles_dir: std::path::PathBuf,
     interval: std::time::Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -317,7 +317,7 @@ pub fn spawn_soul_watcher(
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let entries = match std::fs::read_dir(&agents_dir) {
+            let entries = match std::fs::read_dir(&profiles_dir) {
                 Ok(e) => e,
                 Err(_) => continue, // dir disappeared / not yet created — retry next tick
             };
@@ -345,7 +345,7 @@ pub fn spawn_soul_watcher(
                 }
                 // Changed since last sweep — re-ingest.
                 tracing::info!(folder = %folder_name, "[soul-watcher] SOUL.md changed; re-ingesting");
-                if let Err(e) = ingest_soul_from_disk(&sys, &agents_dir, &folder_name).await {
+                if let Err(e) = ingest_soul_from_disk(&sys, &profiles_dir, &folder_name).await {
                     tracing::warn!(folder = %folder_name, error = %e, "[soul-watcher] ingest failed");
                 }
             }
@@ -358,13 +358,13 @@ pub fn spawn_soul_watcher(
 /// Fire-and-forget — failures per-agent log a warning and don't abort the
 /// rest of the sweep. Designed to be called from `run_daemon` right after
 /// `cognitive::init_daemon` succeeds.
-pub async fn ingest_all_souls(sys: Arc<CognitiveSystem>, agents_dir: std::path::PathBuf) {
-    let entries = match std::fs::read_dir(&agents_dir) {
+pub async fn ingest_all_souls(sys: Arc<CognitiveSystem>, profiles_dir: std::path::PathBuf) {
+    let entries = match std::fs::read_dir(&profiles_dir) {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!(
                 error = %e,
-                dir = %agents_dir.display(),
+                dir = %profiles_dir.display(),
                 "[soul] could not scan agents dir; skipping SOUL.md ingestion"
             );
             return;
@@ -379,7 +379,7 @@ pub async fn ingest_all_souls(sys: Arc<CognitiveSystem>, agents_dir: std::path::
             Some(s) => s.to_string(),
             None => continue,
         };
-        match ingest_soul_from_disk(&sys, &agents_dir, &folder_name).await {
+        match ingest_soul_from_disk(&sys, &profiles_dir, &folder_name).await {
             Ok(Some(r)) => {
                 count += 1;
                 tracing::info!(

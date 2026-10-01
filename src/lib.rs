@@ -1355,6 +1355,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // boot so an upgrade fixes them without the user doing anything.
     harden_data_dir_permissions(&cfg);
 
+    // ===== 0c. Workspace layout =====
+    // `~/senclaw/agents/` → `profiles/`, per-profile `.sema/` → `.sen/`.
+    gateway::group_manager::migrate_legacy_layout(&cfg);
+
     // ===== 1. Database =====
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
     tracing::info!("[SenClaw] DB initialized: {}", cfg.paths.db_path.display());
@@ -1428,8 +1432,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 // Spawn in background — slow first-time LLM calls shouldn't
                 // delay daemon readiness.
                 let sys_clone = Arc::clone(&sys);
-                let agents_dir = cfg.paths.agents_dir.clone();
-                let agents_dir_for_watch = agents_dir.clone();
+                let profiles_dir = cfg.paths.profiles_dir.clone();
+                let profiles_dir_for_watch = profiles_dir.clone();
                 let sys_for_watch = Arc::clone(&sys);
                 let mut http_ready = http_ready_rx;
                 tokio::spawn(async move {
@@ -1438,14 +1442,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     // retried only on the next boot, which would fail the
                     // same way. An `Err` (server never came up) still ingests.
                     let _ = http_ready.wait_for(|up| *up).await;
-                    memory::cognitive::ingest_all_souls(sys_clone, agents_dir).await;
+                    memory::cognitive::ingest_all_souls(sys_clone, profiles_dir).await;
                 });
                 // Then start the mtime-poll watcher so external edits to
                 // SOUL.md (vim, VS Code, git pull, …) trigger re-ingest
                 // without needing the API write hook.
                 memory::cognitive::spawn_soul_watcher(
                     sys_for_watch,
-                    agents_dir_for_watch,
+                    profiles_dir_for_watch,
                     std::time::Duration::from_secs(30),
                 );
 
@@ -1480,7 +1484,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== 1d. Soul Core =====
     // `USER.md` / `TOOLS.md` / `AGENTS.md` at `~/.senclaw/`. Global, outside
-    // `agents_dir`, so every agent profile shares one answer to "who is my
+    // `profiles_dir`, so every agent profile shares one answer to "who is my
     // human". Kept OUTSIDE the cognitive block above on purpose: that branch
     // only runs when an embedding provider is configured, which is right for
     // persona ingest and wrong here — the profile has nothing to do with the
@@ -2045,7 +2049,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     // ===== DailyLogger for conversation history =====
     let daily_logger = Arc::new(memory::daily_logger::DailyLogger::new(
-        cfg.paths.agents_dir.clone(),
+        cfg.paths.profiles_dir.clone(),
     ));
     agent_pool.set_daily_logger(daily_logger);
     tracing::info!("[SenClaw] DailyLogger initialized");

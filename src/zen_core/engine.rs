@@ -1744,7 +1744,7 @@ impl ZenEngine {
         let plan_mode_reminder = match opts.agent_mode {
             AgentMode::Plan => {
                 let plans_dir = std::path::Path::new(&opts.agent_data_dir)
-                    .join(".sema")
+                    .join(crate::config::AGENT_STATE_DIR)
                     .join("plans")
                     .join("") // ensure trailing slash
                     .to_string_lossy()

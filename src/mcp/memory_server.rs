@@ -78,7 +78,7 @@ struct MemoryDeleteParams {
 pub struct McpMemoryServer {
     db_path: String,
     folder: String,
-    agents_dir: PathBuf,
+    profiles_dir: PathBuf,
     custom_memory_dir: Option<PathBuf>,
 }
 
@@ -87,17 +87,17 @@ impl McpMemoryServer {
     /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
     /// unconfigured child is `None` rather than an error.
     pub fn from_env() -> Result<Option<Self>> {
-        let (Ok(db_path), Ok(folder), Ok(agents_dir)) = (
+        let (Ok(db_path), Ok(folder), Ok(profiles_dir)) = (
             std::env::var("SENCLAW_DB_PATH"),
             std::env::var("SENCLAW_FOLDER"),
-            std::env::var("SENCLAW_AGENTS_DIR"),
+            std::env::var("SENCLAW_PROFILES_DIR"),
         ) else {
             return Ok(None);
         };
         Ok(Some(Self {
             db_path,
             folder,
-            agents_dir: PathBuf::from(agents_dir),
+            profiles_dir: PathBuf::from(profiles_dir),
             custom_memory_dir: std::env::var("SENCLAW_CUSTOM_MEMORY_DIR")
                 .ok()
                 .map(PathBuf::from),
@@ -105,12 +105,12 @@ impl McpMemoryServer {
     }
 
     /// The per-folder base dir (mirrors `MemoryManager::get_memory_dir_for_folder`):
-    /// custom cowork dir, else `agents_dir/{folder}`. `MEMORY.md` lives here; curated
+    /// custom cowork dir, else `profiles_dir/{folder}`. `MEMORY.md` lives here; curated
     /// files live under `<base>/memory/`.
     fn base_dir(&self) -> PathBuf {
         self.custom_memory_dir
             .clone()
-            .unwrap_or_else(|| self.agents_dir.join(&self.folder))
+            .unwrap_or_else(|| self.profiles_dir.join(&self.folder))
     }
 
     fn open_db_and_provider(&self) -> Result<(Db, Option<Box<dyn EmbeddingProvider>>)> {
@@ -140,7 +140,7 @@ impl McpMemoryServer {
         let srv = MemoryServer::new(
             db,
             &self.folder,
-            &self.agents_dir,
+            &self.profiles_dir,
             provider,
             self.custom_memory_dir.clone(),
         );
@@ -163,7 +163,7 @@ impl McpMemoryServer {
         let srv = MemoryServer::new(
             db,
             &self.folder,
-            &self.agents_dir,
+            &self.profiles_dir,
             None,
             self.custom_memory_dir.clone(),
         );
@@ -220,7 +220,7 @@ impl McpMemoryServer {
         let srv = MemoryServer::new(
             db,
             &self.folder,
-            &self.agents_dir,
+            &self.profiles_dir,
             provider,
             self.custom_memory_dir.clone(),
         );
@@ -256,7 +256,7 @@ pub async fn run_stdio_server() -> Result<()> {
         .try_init();
 
     let server = McpMemoryServer::from_env()?
-        .context("SENCLAW_DB_PATH / SENCLAW_FOLDER / SENCLAW_AGENTS_DIR not set")?;
+        .context("SENCLAW_DB_PATH / SENCLAW_FOLDER / SENCLAW_PROFILES_DIR not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
@@ -266,7 +266,7 @@ pub async fn run_stdio_server() -> Result<()> {
 pub struct MemoryServer {
     db: Db,
     folder: String,
-    agents_dir: PathBuf,
+    profiles_dir: PathBuf,
     embedding_provider: Option<Box<dyn EmbeddingProvider>>,
     custom_memory_dir: Option<PathBuf>,
 }
@@ -275,14 +275,14 @@ impl MemoryServer {
     pub fn new(
         db: Db,
         folder: &str,
-        agents_dir: &Path,
+        profiles_dir: &Path,
         embedding_provider: Option<Box<dyn EmbeddingProvider>>,
         custom_memory_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             db,
             folder: folder.to_owned(),
-            agents_dir: agents_dir.to_path_buf(),
+            profiles_dir: profiles_dir.to_path_buf(),
             embedding_provider,
             custom_memory_dir,
         }
@@ -292,7 +292,7 @@ impl MemoryServer {
         self.custom_memory_dir
             .as_ref()
             .map(|p| p.as_path())
-            .unwrap_or_else(|| &self.agents_dir)
+            .unwrap_or_else(|| &self.profiles_dir)
     }
 
     // ===== memory_search =====
@@ -487,8 +487,8 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// Resolve a relative memory path to an absolute path, with path-traversal protection.
-fn resolve_memory_path(agents_dir: &Path, folder: &str, relative_path: &str) -> Option<PathBuf> {
-    let agent_dir = agents_dir.join(folder);
+fn resolve_memory_path(profiles_dir: &Path, folder: &str, relative_path: &str) -> Option<PathBuf> {
+    let agent_dir = profiles_dir.join(folder);
 
     let safe_check =
         |p: &PathBuf| -> bool { p.starts_with(&agent_dir) || p.as_path() == agent_dir.as_path() };

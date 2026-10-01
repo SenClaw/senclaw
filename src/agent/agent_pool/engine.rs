@@ -41,7 +41,7 @@ pub struct ZenCoreApi {
     /// the empty `ZenCoreOptions` default and every Bash spawn fails with ENOENT
     /// (`current_dir("")`), so the whole "code" feature is dead on a fresh chat.
     working_dirs: Mutex<HashMap<String, String>>,
-    /// Per-jid agent data directory (`~/.senclaw/agents/<folder>`). Cached so a
+    /// Per-jid agent data directory (`~/senclaw/profiles/<folder>`). Cached so a
     /// lazily created engine can load SOUL.md / plans into the system prompt.
     agent_data_dirs: Mutex<HashMap<String, String>>,
     /// Callback invoked when an engine emits a plan-exit request. Caller

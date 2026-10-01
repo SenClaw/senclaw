@@ -225,7 +225,7 @@ fn with_daemon_token(cfg: &mut McpServerConfig) {
 pub fn memory_mcp_config(
     db_path: &str,
     folder: &str,
-    agents_dir: &str,
+    profiles_dir: &str,
     embedding_provider: Option<&str>,
     openai_api_key: Option<&str>,
     openai_base_url: Option<&str>,
@@ -235,7 +235,7 @@ pub fn memory_mcp_config(
     cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
     cfg.env.insert("SENCLAW_FOLDER".into(), folder.to_owned());
     cfg.env
-        .insert("SENCLAW_AGENTS_DIR".into(), agents_dir.to_owned());
+        .insert("SENCLAW_PROFILES_DIR".into(), profiles_dir.to_owned());
     if let Some(p) = embedding_provider {
         cfg.env
             .insert("SENCLAW_EMBEDDING_PROVIDER".into(), p.to_owned());
@@ -464,7 +464,7 @@ pub struct CoreMcpParams<'a> {
     pub workspace_state_file: &'a str,
     pub default_workspace: &'a str,
     pub allowed_work_dirs: Option<&'a [String]>,
-    pub agents_dir: &'a str,
+    pub profiles_dir: &'a str,
     pub memory_folder: &'a str,
     pub embedding_provider: Option<&'a str>,
     pub openai_api_key: Option<&'a str>,
@@ -552,7 +552,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         memory_mcp_config(
             p.db_path,
             p.memory_folder,
-            p.agents_dir,
+            p.profiles_dir,
             p.embedding_provider,
             p.openai_api_key,
             p.openai_base_url,
@@ -594,7 +594,7 @@ mod tests {
             workspace_state_file: "/data/workspace-state.json",
             default_workspace: "/data/workspace",
             allowed_work_dirs: Some(allowed),
-            agents_dir: "/data/agents",
+            profiles_dir: "/data/agents",
             memory_folder: "team-a",
             embedding_provider: Some("openai"),
             openai_api_key: Some("sk-test"),

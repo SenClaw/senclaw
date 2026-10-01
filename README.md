@@ -288,10 +288,10 @@ By default, SenClaw stores runtime data under the user's home directory, split i
 └── workspace-state-{folder}.json   # per-agent workspace state
 
 ~/senclaw/                          # user-visible workspace
-├── agents/{folder}/                # one folder per agent profile
+├── profiles/{folder}/              # one folder per agent profile
 │   ├── SOUL.md                     # persona
 │   ├── memory/                     # curated memory (*.md + MEMORY.md index)
-│   └── .sema/sessions/             # conversation sessions
+│   └── .sen/sessions/              # conversation sessions
 ├── workspace/{folder}/             # working directories for chats
 ├── workspace/space-apps/{app-id}/  # installed Space Apps (binary + web_dist)
 ├── wiki/                           # Git-backed knowledge base

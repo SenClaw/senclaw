@@ -72,7 +72,7 @@ pub struct OneShotOptions {
     pub prompt: String,
     /// Working directory (file I/O, Bash, etc.).
     pub working_dir: String,
-    /// Agent data dir (CLAUDE.md, .sema/). Defaults to `working_dir` when `None`.
+    /// Agent data dir (CLAUDE.md, .sen/). Defaults to `working_dir` when `None`.
     pub agent_data_dir: Option<String>,
     /// Multi-tenant instance key. Auto-generated when `None`.
     pub instance_id: Option<String>,

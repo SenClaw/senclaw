@@ -10,7 +10,7 @@ SenClaw already ships two memory systems, but neither does what we want:
 
 | System | Tools | Writes? | Nature |
 |---|---|---|---|
-| **Basic memory** (`senclaw-memory`) | `memory_search`, `memory_get` | ❌ read-only — syncs existing `.md` files, chunks + FTS5 + vector | read-only over `agents/{folder}/memory/*.md` |
+| **Basic memory** (`senclaw-memory`) | `memory_search`, `memory_get` | ❌ read-only — syncs existing `.md` files, chunks + FTS5 + vector | read-only over `profiles/{folder}/memory/*.md` |
 | **Cognitive** (`senclaw-cognitive`) | `cog_add`, `cog_cognify`, `cog_search`, `cog_recall`, `cog_forget` | ✅ but into a **knowledge graph** (triplets + Hebbian dynamics), not human-readable files | entity/relation graph, multi-hop reasoning |
 
 The gap: there is no way for an agent to **deliberately write one structured memory**
@@ -34,7 +34,7 @@ chunks, embeds, and FTS-indexes them. So **save** just has to write a well-forme
 ## File layout
 
 ```
-agents/{folder}/memory/
+profiles/{folder}/memory/
 ├── MEMORY.md              # index: one line per memory, "- [Title](file.md) — hook"
 ├── {kebab-name}.md        # one memory = one concept, with frontmatter
 └── YYYY-MM-DD.md          # daily log (already exists — untouched by this feature)

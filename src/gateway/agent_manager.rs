@@ -53,7 +53,7 @@ impl AgentManager {
         ensure_agent_dirs(config, folder, name);
         // Write user's core_prompt to SOUL.md (overrides the default template)
         write_soul_md(config, folder, name, core_prompt);
-        spawn_soul_ingest(config.paths.agents_dir.clone(), folder.to_string());
+        spawn_soul_ingest(config.paths.profiles_dir.clone(), folder.to_string());
 
         let id = db.insert_agent(
             folder,
@@ -139,7 +139,7 @@ impl AgentManager {
         if let Some(cp) = core_prompt {
             if let Ok(Some(agent)) = db.get_agent(id) {
                 write_soul_md(config, &agent.folder, &agent.name, cp);
-                spawn_soul_ingest(config.paths.agents_dir.clone(), agent.folder.clone());
+                spawn_soul_ingest(config.paths.profiles_dir.clone(), agent.folder.clone());
             }
         }
 
@@ -161,12 +161,12 @@ impl Default for AgentManager {
 /// cognitive system is dormant (no embedding provider). Re-runs always
 /// hit content-hash dedupe in the cognify pipeline, so frequent writes
 /// only strengthen edges via Hebbian instead of bloating the graph.
-pub fn spawn_soul_ingest(agents_dir: std::path::PathBuf, folder: String) {
+pub fn spawn_soul_ingest(profiles_dir: std::path::PathBuf, folder: String) {
     tokio::spawn(async move {
         let Some(sys) = crate::memory::cognitive::try_get_instance() else {
             return; // cognitive dormant — silent skip
         };
-        match crate::memory::cognitive::ingest_soul_from_disk(&sys, &agents_dir, &folder).await {
+        match crate::memory::cognitive::ingest_soul_from_disk(&sys, &profiles_dir, &folder).await {
             Ok(Some(report)) => {
                 tracing::info!(
                     folder = %folder,

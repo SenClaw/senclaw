@@ -31,7 +31,7 @@ use super::{events::EventBus, hooks::HookManager, state::StateManager, ModelProf
 pub struct EngineStore {
     pub instance_id: String,
     pub working_dir: String,
-    /// Agent 人设/配置目录（SOUL.md、.sema/）。未提供时等于 workingDir。
+    /// Agent 人设/配置目录（SOUL.md、.sen/）。未提供时等于 workingDir。
     pub agent_data_dir: String,
     pub core_config: CoreConfig,
     pub event_bus: EventBus,
@@ -132,7 +132,7 @@ mod tests {
         let store1 = EngineStore {
             instance_id: "engine1".to_string(),
             working_dir: "/dir1".to_string(),
-            agent_data_dir: "/dir1/.sema".to_string(),
+            agent_data_dir: "/dir1/.sen".to_string(),
             core_config: CoreConfig {
                 model_profile: ModelProfile {
                     name: "test1".to_string(),
@@ -160,7 +160,7 @@ mod tests {
         let store2 = EngineStore {
             instance_id: "engine2".to_string(),
             working_dir: "/dir2".to_string(),
-            agent_data_dir: "/dir2/.sema".to_string(),
+            agent_data_dir: "/dir2/.sen".to_string(),
             core_config: CoreConfig {
                 model_profile: ModelProfile {
                     name: "test2".to_string(),
@@ -207,7 +207,7 @@ mod tests {
         let store = EngineStore {
             instance_id: "outer".to_string(),
             working_dir: "/outer".to_string(),
-            agent_data_dir: "/outer/.sema".to_string(),
+            agent_data_dir: "/outer/.sen".to_string(),
             core_config: CoreConfig {
                 model_profile: ModelProfile {
                     name: "test".to_string(),
@@ -257,7 +257,7 @@ mod tests {
         let store = EngineStore {
             instance_id: "test".to_string(),
             working_dir: "/test/dir".to_string(),
-            agent_data_dir: "/test/dir/.sema".to_string(),
+            agent_data_dir: "/test/dir/.sen".to_string(),
             core_config: CoreConfig {
                 model_profile: ModelProfile {
                     name: "test".to_string(),
@@ -295,7 +295,7 @@ mod tests {
             result,
             (
                 Some("/test/dir".to_string()),
-                Some("/test/dir/.sema".to_string()),
+                Some("/test/dir/.sen".to_string()),
                 Some("test".to_string())
             )
         );

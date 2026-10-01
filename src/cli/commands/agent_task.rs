@@ -51,7 +51,7 @@ pub struct AgentTaskCmd {
     /// Working directory (defaults to CWD).
     #[arg(long = "working-dir")]
     pub working_dir: Option<String>,
-    /// Agent data dir (CLAUDE.md, .sema/). Defaults to working-dir.
+    /// Agent data dir (CLAUDE.md, .sen/). Defaults to working-dir.
     #[arg(long = "agent-data-dir")]
     pub agent_data_dir: Option<String>,
     /// Comma-separated tool whitelist. Empty = all tools.

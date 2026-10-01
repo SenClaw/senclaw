@@ -19,7 +19,10 @@ pub use apps::{delete_feishu_app, get_feishu_apps, save_feishu_app};
 pub use browser_agent::save_browser_agent_settings;
 pub use chat::{delete_telegram_bot, get_telegram_bots, get_wechat_accounts, save_telegram_bot};
 pub use control_plane::{load_control_plane_settings, save_control_plane_settings};
-pub use dirs::{ensure_agent_dirs, read_memory_md, read_soul_md, write_memory_md, write_soul_md};
+pub use dirs::{
+    ensure_agent_dirs, migrate_legacy_layout, read_memory_md, read_soul_md, write_memory_md,
+    write_soul_md,
+};
 pub use llm::{
     get_admin_permissions_config, get_after_process_enabled, get_defaults_config,
     get_dispatch_enabled, get_memory_recall_enabled, get_pre_cognitive_enabled,

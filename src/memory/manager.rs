@@ -64,7 +64,7 @@ struct FileRecord {
 
 pub struct MemoryManager {
     db: Arc<Db>,
-    agents_dir: PathBuf,
+    profiles_dir: PathBuf,
     embedding_provider: Option<Box<dyn EmbeddingProvider>>,
     chunker_options: ChunkerOptions,
     /// folder → set of changed absolute paths (None = full resync needed)
@@ -80,7 +80,7 @@ impl MemoryManager {
         let emb = create_embedding_provider(config, Arc::clone(&db));
         Self {
             db,
-            agents_dir: config.paths.agents_dir.clone(),
+            profiles_dir: config.paths.profiles_dir.clone(),
             embedding_provider: emb,
             chunker_options: ChunkerOptions::default(),
             dirty: Mutex::new(HashMap::new()),
@@ -119,7 +119,7 @@ impl MemoryManager {
         if let Some(custom_dir) = dirs.get(folder) {
             custom_dir.clone()
         } else {
-            self.agents_dir.join(folder)
+            self.profiles_dir.join(folder)
         }
     }
 
@@ -529,7 +529,7 @@ impl MemoryManager {
         tokio::spawn(async move {
             // Poll every 1.5s (matches TS fs.watchFile interval)
             let mut interval = tokio::time::interval(Duration::from_millis(1500));
-            let agent_dir = this.agents_dir.join(&folder);
+            let agent_dir = this.profiles_dir.join(&folder);
             let memory_md = agent_dir.join("MEMORY.md");
             let memory_dir = agent_dir.join("memory");
 
@@ -705,7 +705,7 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         let db = test_db();
         let mgr = MemoryManager::new(db, &Config::from_env());
-        // Override agents_dir for test
+        // Override profiles_dir for test
         // read_file should return None for nonexistent path
         let result = mgr.read_file("test-folder", "nonexistent.md", None, None);
         assert!(result.is_none());

@@ -150,7 +150,7 @@ pub trait CoreApi: Send + Sync {
     /// Switch the core's working directory (used by workspace_switch and dispatch).
     fn set_working_dir(&self, jid: &str, dir: &str) {}
 
-    /// Set the agent data dir (`~/.senclaw/agents/<folder>`) so the engine can
+    /// Set the agent data dir (`~/senclaw/profiles/<folder>`) so the engine can
     /// load SOUL.md / plans. Cached for lazily created engines. Default no-op.
     fn set_agent_data_dir(&self, _jid: &str, _dir: &str) {}
 

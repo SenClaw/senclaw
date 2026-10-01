@@ -113,6 +113,9 @@ pub struct SchedulerConfig {
     pub notify_max_delay_minutes: u64,
 }
 
+/// Per-profile state directory inside `profiles_dir/{folder}/` (sessions, plans).
+pub const AGENT_STATE_DIR: &str = ".sen";
+
 #[derive(Debug, Clone)]
 pub struct PathsConfig {
     pub db_path: PathBuf,
@@ -122,13 +125,13 @@ pub struct PathsConfig {
     /// touching irreplaceable data (channel messages, scheduled tasks).
     /// Defaults to a sibling `senclaw_cognitive.db` next to `db_path`.
     pub cognitive_db_path: PathBuf,
-    pub agents_dir: PathBuf,
+    pub profiles_dir: PathBuf,
     pub workspace_dir: PathBuf,
     /// Soul Core — who the *human* is (`~/.senclaw/USER.md`).
     ///
     /// Deliberately under `senclaw_home`, not `senclaw_data` where
-    /// `agents_dir` lives: the profile belongs to the person, not to any one
-    /// agent profile, and keeping it out of `agents_dir` is what stops
+    /// `profiles_dir` lives: the profile belongs to the person, not to any one
+    /// agent profile, and keeping it out of `profiles_dir` is what stops
     /// `spawn_soul_watcher` / persona ingest from ever treating it as an
     /// agent's `SOUL.md`. See [`crate::user_profile`].
     pub user_profile_path: PathBuf,
@@ -600,7 +603,11 @@ impl Config {
                     "COGNITIVE_DB_PATH",
                     senclaw_home.join("senclaw_cognitive.db"),
                 ),
-                agents_dir: env_path("AGENTS_DIR", senclaw_data.join("agents")),
+                // `AGENTS_DIR` is the pre-0.1.3 name, still honoured.
+                profiles_dir: env_path(
+                    "PROFILES_DIR",
+                    env_path("AGENTS_DIR", senclaw_data.join("profiles")),
+                ),
                 workspace_dir: env_path("WORKSPACE_DIR", senclaw_data.join("workspace")),
                 user_profile_path: env_path(
                     "SENCLAW_USER_PROFILE_PATH",

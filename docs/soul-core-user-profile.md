@@ -22,7 +22,7 @@ SenClaw đã có `SOUL.md` và nó đã được nối dây khá sâu — nhưng
 
 | Thành phần | Vị trí | Vai trò |
 |---|---|---|
-| File | `~/senclaw/agents/<folder>/SOUL.md` | **Một file cho mỗi agent profile**, không phải một file chung |
+| File | `~/senclaw/profiles/<folder>/SOUL.md` | **Một file cho mỗi agent profile**, không phải một file chung |
 | Nguồn sự thật song song | Cột `agents.core_prompt` (SQLite) | DB và file được ghi đồng thời — `write_soul_md` gọi từ [`agent_manager.rs:55`](../src/gateway/agent_manager.rs) |
 | Template mặc định | [`group_manager/soul.rs`](../src/gateway/group_manager/soul.rs) `default_soul_md` | H1 tên + `## Identity` / `## Guidelines` / `## Memory Management` / `## Working Directory` |
 | Đọc / ghi | [`group_manager/dirs.rs`](../src/gateway/group_manager/dirs.rs) | `read_soul_md`, `write_soul_md`, `ensure_agent_dirs` |
@@ -308,7 +308,7 @@ sự với cách đặt tên đó, xin nêu ngắn rồi vẫn thiết kế ti�
 `SOUL.md` trong SenClaw **đã bị chiếm** với ngữ nghĩa "persona của agent", và nó
 không chỉ là một cái tên — nó kéo theo bốn cơ chế đang chạy:
 
-1. `spawn_soul_watcher` theo dõi mọi `SOUL.md` dưới `agents_dir` và re-ingest khi đổi.
+1. `spawn_soul_watcher` theo dõi mọi `SOUL.md` dưới `profiles_dir` và re-ingest khi đổi.
 2. `ingest_all_souls` gắn mọi section vào `NodeSet::Persona(folder, …)` — dữ liệu
    người dùng sẽ bị gắn nhãn *persona của agent* trong cognitive graph.
 3. Tool `PersonaUpdate` cho agent quyền patch file đó, mô tả là *"Update your
@@ -338,17 +338,17 @@ Nên đường dẫn thật là:
 
 ```
 ~/.senclaw/USER.md                  ← soul core, tài nguyên chung   (senclaw_home)
-~/senclaw/agents/<folder>/SOUL.md   ← persona, per-agent như cũ     (senclaw_data)
+~/senclaw/profiles/<folder>/SOUL.md   ← persona, per-agent như cũ     (senclaw_data)
 ```
 
 Hai thứ nằm ở **hai cây khác nhau**, không chỉ khác thư mục — mức tách còn mạnh
 hơn dự tính ban đầu.
 
 > ⚠️ Docstring của [`soul_ingest.rs:3`](../src/memory/cognitive/soul_ingest.rs)
-> ghi nhầm là `~/.senclaw/agents/<folder>/SOUL.md`. Thực tế trên máy dev là
-> `~/senclaw/agents/`. Nên sửa comment đó luôn khi đụng vào.
+> ghi nhầm là `~/senclaw/profiles/<folder>/SOUL.md`. Thực tế trên máy dev là
+> `~/senclaw/profiles/`. Nên sửa comment đó luôn khi đụng vào.
 
-Kiểm chứng trên máy hiện tại (15/08): `~/senclaw/agents/` có **34 folder** — `main`,
+Kiểm chứng trên máy hiện tại (15/08): `~/senclaw/profiles/` có **34 folder** — `main`,
 `coder`, `researcher`, `copywriter`, `ssh`, các `schedule_<uuid>`… Mỗi folder một
 `SOUL.md` riêng. Nếu hồ sơ người dùng đi theo agent thì người dùng phải khai tên
 và email **34 lần** và giữ chúng đồng bộ. Đó là lập luận thực nghiệm cho việc để
@@ -359,8 +359,8 @@ Soul core **không nằm trong `agents/`, không thuộc về agent nào, và m�
 khi người dùng chuyển profile, và không việc gì phải khai lại n lần. `SOUL.md`
 giữ nguyên per-agent vì persona *phải* khác nhau giữa các profile.
 
-Một phụ phẩm quan trọng của việc để nó **ngoài** `agents_dir`: `spawn_soul_watcher`
-([`lib.rs:1368`](../src/lib.rs)) chỉ quét dưới `agents_dir`, nên `USER.md` **tự
+Một phụ phẩm quan trọng của việc để nó **ngoài** `profiles_dir`: `spawn_soul_watcher`
+([`lib.rs:1368`](../src/lib.rs)) chỉ quét dưới `profiles_dir`, nên `USER.md` **tự
 động không bị** watcher persona đụng tới, không bị `ingest_all_souls` gắn nhãn
 `NodeSet::Persona`, và không bị tool `PersonaUpdate` ghi đè. Toàn bộ va chạm nêu
 ở §4 tự tan chỉ nhờ chọn đúng chỗ đặt file.

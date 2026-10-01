@@ -39,7 +39,7 @@ pub async fn run(cmd: ChannelCmd) -> Result<()> {
             let cfg = crate::config::Config::from_env();
             println!("Config path: {}", cfg.paths.global_config_path.display());
             println!("DB path:     {}", cfg.paths.db_path.display());
-            println!("Agents dir:  {}", cfg.paths.agents_dir.display());
+            println!("Agents dir:  {}", cfg.paths.profiles_dir.display());
         }
     }
     Ok(())

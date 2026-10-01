@@ -66,7 +66,7 @@ pub(crate) async fn put_files(
         write_soul_md(&s.config, &folder, &agent.name, soul);
         // Re-ingest persona into cognitive graph (fire-and-forget).
         crate::gateway::agent_manager::spawn_soul_ingest(
-            s.config.paths.agents_dir.clone(),
+            s.config.paths.profiles_dir.clone(),
             folder.clone(),
         );
     }

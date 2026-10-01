@@ -22,7 +22,7 @@ async fn serve() -> Harness {
     cfg.paths.db_path = dir.join("test.db");
     cfg.paths.cognitive_db_path = dir.join("test_cognitive.db");
     cfg.paths.global_config_path = dir.join("config.json");
-    cfg.paths.agents_dir = dir.join("agents");
+    cfg.paths.profiles_dir = dir.join("profiles");
     let db = Arc::new(Db::open(&cfg).unwrap());
     let svc = Arc::new(CheckpointService::new(Arc::clone(&db), &dir.join("home")));
     let state = Arc::new(UiState {

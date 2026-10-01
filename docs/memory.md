@@ -415,7 +415,7 @@ MCP stdio server (`memory-server` subprocess) cung cấp 2 tools cho agent:
 | `memory_search` | `query: String`, `maxResults?: usize`, `source?: String` | Hybrid search (FTS5 + vector) trên toàn bộ memory đã index |
 | `memory_get` | `relPath: String`, `startLine?: u32`, `endLine?: u32` | Đọc nội dung file memory theo path + line range |
 
-**Khởi tạo:** Đọc `SENCLAW_DB_PATH`, `SENCLAW_FOLDER`, `SENCLAW_AGENTS_DIR` từ env.
+**Khởi tạo:** Đọc `SENCLAW_DB_PATH`, `SENCLAW_FOLDER`, `SENCLAW_PROFILES_DIR` từ env.
 
 ---
 
