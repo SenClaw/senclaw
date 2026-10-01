@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Clip</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 640px; padding: 16px; }
+    .stage { height: 320px; background: #222; border-radius: 8px; position: relative; overflow: hidden; }
+    .bar { position: absolute; left: 0; bottom: 0; height: 4px; background: #e33; width: 0; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    button { font-size: 15px; padding: 6px 12px; }
+    button[aria-pressed="true"] { background: #fdd; }
+    .note { color: #070; }
+  </style>
+</head>
+<body>
+  <nav><a href="/clips.html">Back to Clips</a></nav>
+  <main id="clip"></main>
+
+  <script>
+    const CLIPS = {
+      1: { by: '@mai', caption: 'Morning market in Hanoi', likes: 12, comments: ['So early!', 'Love the colours', 'Where is this?'] },
+      2: { by: '@linh', caption: 'Street coffee, slow pour', likes: 48, comments: ['Phin forever', 'Looks strong'] },
+      3: { by: '@quan', caption: 'Rain on the old quarter', likes: 7, comments: ['Cozy'] },
+      4: { by: '@thu', caption: 'Lantern workshop in Hoi An', likes: 31, comments: ['Beautiful', 'I want one'] },
+      5: { by: '@nam', caption: 'Sunrise over Ha Long', likes: 90, comments: ['Wow', 'Bucket list'] },
+    };
+    const id = Number(new URLSearchParams(location.search).get('id') || 1);
+    const clip = CLIPS[id] || CLIPS[1];
+    const liked = new Set(JSON.parse(localStorage.getItem('liked') || '[]'));
+    const on = liked.has(id);
+    document.title = 'Clip by ' + clip.by;
+    document.getElementById('clip').innerHTML = `
+      <h1>Clip by ${clip.by}</h1>
+      <p>Now playing: ${clip.caption}</p>
+      <div class="stage" aria-hidden="true"><div class="bar"></div></div>
+      <div class="actions">
+        <button type="button" id="like" aria-pressed="${on}" aria-label="Like clip by ${clip.by}">
+          ${on ? 'Liked' : 'Like'} · <span id="count">${clip.likes + (on ? 1 : 0)}</span>
+        </button>
+      </div>
+      <p class="note" id="note" ${on ? '' : 'hidden'}>You liked the clip by ${clip.by}</p>
+      <h2>Comments</h2>
+      <ul>${clip.comments.map(c => `<li>${c}</li>`).join('')}</ul>`;
+    document.getElementById('like').addEventListener('click', e => {
+      const b = e.currentTarget, now = b.getAttribute('aria-pressed') !== 'true';
+      now ? liked.add(id) : liked.delete(id);
+      localStorage.setItem('liked', JSON.stringify([...liked]));
+      b.setAttribute('aria-pressed', String(now));
+      b.firstChild.textContent = (now ? 'Liked' : 'Like') + ' · ';
+      document.getElementById('count').textContent = clip.likes + (now ? 1 : 0);
+      document.getElementById('note').hidden = !now;
+    });
+    const started = performance.now();
+    const tick = now => {
+      document.querySelector('.bar').style.width = ((now - started) / 80 % 100) + '%';
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>

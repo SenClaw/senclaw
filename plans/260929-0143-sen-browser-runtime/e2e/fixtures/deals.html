@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SkyFinder — deals</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 40px; max-width: 720px; }
+    nav { margin: 12px 0; }
+    nav a { margin-right: 12px; }
+    nav a.on { font-weight: 700; text-decoration: none; color: inherit; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>Deals from Zurich</h1>
+  <nav id="dest" aria-label="Destination"></nav>
+  <nav id="cls" aria-label="Travel class"></nav>
+  <h2 id="summary"></h2>
+  <ul id="deals"></ul>
+  <script>
+    const DEALS = [
+      { dest: 'rome', city: 'Rome', economy: 99, business: 480 },
+      { dest: 'lisbon', city: 'Lisbon', economy: 129, business: 560 },
+      { dest: 'london', city: 'London', economy: 149, business: 690 },
+    ];
+    const q = new URLSearchParams(location.search);
+    const dest = DEALS.some((d) => d.dest === q.get('dest')) ? q.get('dest') : '';
+    const cls = q.get('cls') === 'business' ? 'business' : 'economy';
+    const link = (params) => '/deals.html?' + new URLSearchParams(params).toString();
+    // Filters are links, like the destination and cabin tabs of travel sites.
+    const destNav = document.getElementById('dest');
+    for (const [value, label] of [['', 'All destinations'], ...DEALS.map((d) => [d.dest, d.city])]) {
+      const a = document.createElement('a');
+      a.href = link({ dest: value, cls });
+      a.textContent = label;
+      if (value === dest) a.className = 'on';
+      destNav.appendChild(a);
+    }
+    const clsNav = document.getElementById('cls');
+    for (const [value, label] of [['economy', 'Economy'], ['business', 'Business']]) {
+      const a = document.createElement('a');
+      a.href = link({ dest, cls: value });
+      a.textContent = label;
+      if (value === cls) a.className = 'on';
+      clsNav.appendChild(a);
+    }
+    const className = cls === 'business' ? 'Business class' : 'Economy class';
+    const shown = DEALS.filter((d) => !dest || d.dest === dest);
+    document.getElementById('summary').textContent = dest
+      ? `${className} deals to ${shown[0].city}`
+      : `${className} deals — choose a destination`;
+    const list = document.getElementById('deals');
+    for (const d of shown) {
+      const li = document.createElement('li');
+      li.textContent = dest ? `${d.city} from CHF ${d[cls]}, ${className}` : `Deal from CHF ${d[cls]}`;
+      list.appendChild(li);
+    }
+  </script>
+</body>
+</html>

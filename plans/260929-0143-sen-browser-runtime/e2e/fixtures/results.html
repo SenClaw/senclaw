@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SkyFinder — results</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 40px; max-width: 720px; }
+    form { display: flex; gap: 8px; margin: 16px 0; }
+    input, select, button { font-size: 16px; padding: 8px; }
+    li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1>SkyFinder</h1>
+  <form id="search" action="/results.html" method="get">
+    <label for="to">Destination</label>
+    <input id="to" name="to" type="text" placeholder="City" autocomplete="off">
+    <input id="cls-hidden" name="cls" type="hidden">
+    <button type="submit">Search flights</button>
+  </form>
+  <h2 id="summary">Searching…</h2>
+  <div id="filters" hidden>
+    <label for="cls">Travel class</label>
+    <select id="cls">
+      <option value="economy">Economy</option>
+      <option value="premium">Premium economy</option>
+      <option value="business">Business</option>
+    </select>
+  </div>
+  <ul id="flights"></ul>
+  <script>
+    const q = new URLSearchParams(location.search);
+    const to = (q.get('to') || '').trim();
+    const names = { economy: 'Economy', premium: 'Premium economy', business: 'Business' };
+    const clsKey = names[q.get('cls')] ? q.get('cls') : 'economy';
+    const cls = names[clsKey];
+    document.getElementById('to').value = to;
+    document.getElementById('cls-hidden').value = clsKey;
+    const summary = document.getElementById('summary');
+    if (!to) {
+      summary.textContent = 'Enter a destination to search.';
+    } else {
+      summary.textContent = `3 flights from Zurich to ${to} · ${cls} class`;
+      const filters = document.getElementById('filters');
+      const select = document.getElementById('cls');
+      filters.hidden = false;
+      select.value = clsKey;
+      // The filter applies as soon as it changes, like most flight sites.
+      select.addEventListener('change', () => {
+        location.search = new URLSearchParams({ to, cls: select.value }).toString();
+      });
+      const base = clsKey === 'business' ? 890 : clsKey === 'premium' ? 420 : 180;
+      const list = document.getElementById('flights');
+      for (const [i, time] of ['07:10', '12:45', '18:30'].entries()) {
+        const li = document.createElement('li');
+        li.textContent = `SF${101 + i} Zurich → ${to}, departs ${time}, ${cls}, CHF ${base + i * 35}`;
+        list.appendChild(li);
+      }
+    }
+  </script>
+</body>
+</html>

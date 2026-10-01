@@ -28,6 +28,7 @@ Old monorepo `/Users/benji/Projects/SemaClaw` (read-only reference, commit `f0f3
 | `sen-ocr/` | `src/local_model/ocr`, `ui_server/ocr.rs` | OCR runtime |
 | `sen-whisper/` | `crates/senclaw-media`, `ui_server/whisper.rs` | Whisper ASR runtime |
 | `sen-tts/` | `src/tts`, `ui_server/tts.rs` | VieNeu + macOS TTS runtime |
+| `senclaw-connect/` | `channel_app/` | Flutter mobile remote client (relay pairing) |
 | upstream llama.cpp | ggml-org/llama.cpp releases | GGUF runtime, installed by the daemon |
 
 Contract: [`docs/runtime-protocol.md`](../../docs/runtime-protocol.md) + [`crates/sen-runtime-sdk`](../../crates/sen-runtime-sdk).
@@ -35,7 +36,8 @@ Architecture source: `/Users/benji/Projects/SenClaw/JEV Architecture v2.html` (v
 
 ## Non-goals
 
-- Not migrated: `hub-backend/`, `channel_app/`, `senclaw-extension-chrome/`, `9router/`, `apps/candle`, `apps/drawio`, old `plans/`, `bench-results/`.
+- Not migrated: `hub-backend/`, `senclaw-extension-chrome/`, `9router/`, `apps/candle`, `apps/drawio`, old `plans/`, `bench-results/`.
+- Follow-up 2026-09-27: `channel_app/` is now `senclaw-connect/` (package `senclaw_connect`). Pairing mints `senclaw://connect`, matching desktop and web, and still scans the old `semaclaw://connect` codes.
 - The old repo's uncommitted WIP (`missing_tool` in `zen_core/conversation.rs`, `run_tools.rs`, `tools/task.rs`) — migrated at `f0f31bd` instead; port it once finished.
 - JEV P2–P5 (tiers switched on through G2, Memory/KB/Event bus P3, Learner P4, DAG/delegate P5).
 - Publishing releases, pushing to GitHub, committing (the user reviews first).

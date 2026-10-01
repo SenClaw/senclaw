@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Clips — for you</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0 auto; max-width: 640px; padding: 16px; }
+    header { display: flex; gap: 16px; align-items: baseline; }
+    article { border: 1px solid #ccc; border-radius: 12px; padding: 16px; margin: 16px 0; }
+    .stage { height: 260px; background: #222; border-radius: 8px; position: relative; overflow: hidden; }
+    .bar { position: absolute; left: 0; bottom: 0; height: 4px; background: #e33; width: 0; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+    button, a.open { font-size: 15px; padding: 6px 12px; }
+    button[aria-pressed="true"] { background: #fdd; }
+    .note { color: #070; margin: 8px 0 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Clips</h1>
+    <nav><a href="/clips.html">For you</a> <a href="/help.html">Help</a></nav>
+  </header>
+  <main id="feed" aria-live="off"><p id="loading">Loading clips…</p></main>
+
+  <script>
+    // A feed the way short-video sites build one: cards rendered by script,
+    // a "playing" bar that changes the DOM on every frame, and — with
+    // ?late=<ms> — content that arrives after DOMContentLoaded. ?slow=<ms>
+    // adds a subresource that holds the load event back that long.
+    const CLIPS = [
+      { id: 1, by: '@mai', caption: 'Morning market in Hanoi', likes: 12, comments: 3 },
+      { id: 2, by: '@linh', caption: 'Street coffee, slow pour', likes: 48, comments: 9 },
+      { id: 3, by: '@quan', caption: 'Rain on the old quarter', likes: 7, comments: 1 },
+      { id: 4, by: '@thu', caption: 'Lantern workshop in Hoi An', likes: 31, comments: 5 },
+      { id: 5, by: '@nam', caption: 'Sunrise over Ha Long', likes: 90, comments: 14 },
+    ];
+    const params = new URLSearchParams(location.search);
+    // ?linkdelay=<ms>: the clip page answers that late, like a slow server.
+    const linkDelay = Number(params.get('linkdelay') || 0) > 0 ? '&delay=' + Number(params.get('linkdelay')) : '';
+    // ?reset=1: a run starts with nothing liked.
+    if (params.has('reset')) localStorage.removeItem('liked');
+    const liked = new Set(JSON.parse(localStorage.getItem('liked') || '[]'));
+
+    function card(clip) {
+      const on = liked.has(clip.id);
+      const el = document.createElement('article');
+      el.innerHTML = `
+        <h2>${clip.by}</h2>
+        <p>${clip.caption}</p>
+        <div class="stage" aria-hidden="true"><div class="bar"></div></div>
+        <div class="actions">
+          <button type="button" class="like" aria-pressed="${on}" aria-label="Like clip by ${clip.by}">
+            ${on ? 'Liked' : 'Like'} · <span class="count">${clip.likes + (on ? 1 : 0)}</span>
+          </button>
+          <button type="button" class="comments" aria-label="Comments on clip by ${clip.by}">Comments · ${clip.comments}</button>
+          <a class="open" href="/clip.html?id=${clip.id}${linkDelay}">Open clip by ${clip.by}</a>
+        </div>
+        <p class="note" ${on ? '' : 'hidden'}>You liked the clip by ${clip.by}</p>`;
+      el.querySelector('.like').addEventListener('click', e => {
+        const b = e.currentTarget, now = b.getAttribute('aria-pressed') !== 'true';
+        now ? liked.add(clip.id) : liked.delete(clip.id);
+        localStorage.setItem('liked', JSON.stringify([...liked]));
+        b.setAttribute('aria-pressed', String(now));
+        b.firstChild.textContent = (now ? 'Liked' : 'Like') + ' · ';
+        b.querySelector('.count').textContent = clip.likes + (now ? 1 : 0);
+        el.querySelector('.note').hidden = !now;
+      });
+      return el;
+    }
+
+    function render() {
+      const feed = document.getElementById('feed');
+      feed.replaceChildren(...CLIPS.map(card));
+      // The "video": a progress bar that moves every animation frame.
+      const started = performance.now();
+      const tick = now => {
+        for (const bar of document.querySelectorAll('.bar')) bar.style.width = ((now - started) / 80 % 100) + '%';
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
+
+    // ?late=<ms>: as an app does it — a script of its own brings the clips.
+    const late = Number(params.get('late') || 0);
+    if (late > 0) {
+      window.renderClips = render;
+      const app = document.createElement('script');
+      app.src = '/late.js?ms=' + late;
+      document.head.appendChild(app);
+    } else {
+      render();
+    }
+
+    const slow = Number(params.get('slow') || 0);
+    if (slow > 0) {
+      const pixel = new Image();
+      pixel.alt = '';
+      pixel.src = '/pixel.gif?delay=' + slow;
+      document.body.appendChild(pixel);
+    }
+  </script>
+</body>
+</html>

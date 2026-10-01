@@ -1,0 +1,1239 @@
+<title>SenBrowser Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --paper:#f6f5f1; --panel:#ffffff; --ink:#17171b; --ink-2:#45443f; --muted:#6c6a63;
+  --rule:#dcd9d0; --rule-2:#ebe9e3; --code-bg:#efeee8;
+  --jev:#1d5bbf; --jev-soft:#e7eefb;
+  --llm:#ad4f19; --llm-soft:#fbeee4;
+  --eng:#22704a; --eng-soft:#e3f1e9;
+  --hum:#6c3f9f; --hum-soft:#f0e8f8;
+  --bad:#b42318; --bad-soft:#fdeceb;
+  --warn:#835400; --warn-soft:#fbf1da;
+  --ok:#1f7a3d; --ok-soft:#e4f3e8;
+  --dot-text:#ffffff;
+  --f-display:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+    --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+    --jev:#86b4ff; --jev-soft:#18263d;
+    --llm:#f2a466; --llm-soft:#35231a;
+    --eng:#72d3a0; --eng-soft:#14301f;
+    --hum:#c9a3f3; --hum-soft:#2a1f3b;
+    --bad:#ff8f86; --bad-soft:#3a1a19;
+    --warn:#efc56f; --warn-soft:#342811;
+    --ok:#7fd79d; --ok-soft:#15301d;
+    --dot-text:#131316;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+  --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+  --jev:#86b4ff; --jev-soft:#18263d;
+  --llm:#f2a466; --llm-soft:#35231a;
+  --eng:#72d3a0; --eng-soft:#14301f;
+  --hum:#c9a3f3; --hum-soft:#2a1f3b;
+  --bad:#ff8f86; --bad-soft:#3a1a19;
+  --warn:#efc56f; --warn-soft:#342811;
+  --ok:#7fd79d; --ok-soft:#15301d;
+  --dot-text:#131316;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:15px/1.62 var(--f-body);-webkit-font-smoothing:antialiased}
+a{color:var(--jev);text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--jev);outline-offset:2px;border-radius:3px}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:28px 72px;display:grid;grid-template-columns:minmax(0,1fr);gap:28px}
+@media (min-width:1040px){.wrap{grid-template-columns:212px minmax(0,1fr);gap:44px;padding-inline:28px}}
+/* TOC */
+.toc{font-size:13px;line-height:1.45}
+.toc details{border:1px solid var(--rule);border-radius:8px;background:var(--panel);padding:10px 14px}
+.toc summary{cursor:pointer;font-weight:600}
+.toc ol{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:2px}
+.toc a{display:grid;grid-template-columns:2.2em 1fr;gap:4px;color:var(--ink-2);text-decoration:none;padding:3px 6px;border-radius:4px}
+.toc a span{color:var(--muted);font:12px var(--f-mono)}
+.toc a:hover{background:var(--rule-2);color:var(--ink)}
+.toc a.on{background:var(--jev-soft);color:var(--ink)}
+@media (min-width:1040px){
+  .toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto}
+  .toc details{border:0;background:none;padding:0}
+  .toc summary{list-style:none;font:600 11px var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);pointer-events:none}
+  .toc summary::-webkit-details-marker{display:none}
+}
+main{min-width:0}
+/* type */
+h1,h2,h3{text-wrap:balance}
+h1{font:700 clamp(28px,4.2vw,40px)/1.1 var(--f-display);letter-spacing:-.01em;margin:6px 0 14px}
+h2{font:600 26px/1.2 var(--f-display);margin:0}
+h3{font:600 16.5px/1.35 var(--f-body);margin:26px 0 8px}
+p,li{max-width:74ch}
+p{margin:0 0 12px}
+ul,ol{margin:0 0 12px;padding-left:22px}
+li{margin:3px 0}
+.eyebrow{font:600 11.5px var(--f-body);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--code-bg);padding:.08em .32em;border-radius:3px;overflow-wrap:anywhere}
+pre{font:12.5px/1.55 var(--f-mono);background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:0 0 14px;max-width:100%}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+/* header */
+.masthead{border-bottom:1px solid var(--rule);padding-bottom:22px;margin-bottom:6px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;border:1px solid var(--rule);background:var(--panel);border-radius:999px;padding:3px 10px;color:var(--ink-2)}
+.chip b{font-weight:600;color:var(--ink)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:18px}
+.fact{background:var(--panel);padding:12px 14px}
+.fact .k{font:600 11px var(--f-body);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.fact .v{font:600 17px/1.3 var(--f-display);margin-top:3px}
+.fact .v.jev{color:var(--jev)} .fact .v.llm{color:var(--llm)} .fact .v.eng{color:var(--eng)} .fact .v.hum{color:var(--hum)}
+/* sections */
+section{padding-top:42px;scroll-margin-top:16px}
+.sh{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--rule);padding-bottom:8px;margin-bottom:16px}
+.sn{font:500 13px var(--f-mono);color:var(--muted);min-width:2.4em}
+.tldr{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px 6px}
+.tldr li{margin:6px 0}
+/* grids & boxes */
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}
+.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 14px}
+.box{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.box h4{margin:0 0 6px;font:600 13px var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.box p:last-child,.box ul:last-child{margin-bottom:0}
+.box ul{padding-left:18px}
+.box.jev{border-top:3px solid var(--jev)} .box.llm{border-top:3px solid var(--llm)} .box.eng{border-top:3px solid var(--eng)} .box.hum{border-top:3px solid var(--hum)} .box.bad{border-top:3px solid var(--bad)}
+.note{border-left:3px solid var(--jev);background:var(--jev-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:0 0 14px}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note p:last-child{margin-bottom:0}
+/* tables */
+.tscroll{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;line-height:1.5}
+th{font:600 11.5px/1.3 var(--f-body);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);background:var(--panel);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .ref{font:11.5px var(--f-mono);color:var(--muted);display:block;margin-top:2px;overflow-wrap:anywhere}
+/* tags */
+.tag{display:inline-block;font:600 10.5px/1 var(--f-body);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px 3px;border-radius:4px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.t-jev{color:var(--jev)} .t-llm{color:var(--llm)} .t-eng{color:var(--eng)} .t-hum{color:var(--hum)} .t-bad{color:var(--bad)} .t-warn{color:var(--warn)} .t-ok{color:var(--ok)} .t-mut{color:var(--muted)}
+.ev{font:500 10.5px var(--f-mono);padding:1px 5px;border-radius:3px;white-space:nowrap}
+.ev-m{background:var(--ok-soft);color:var(--ok)}
+.ev-e{background:var(--warn-soft);color:var(--warn)}
+.ev-p{background:var(--jev-soft);color:var(--jev)}
+/* diagrams */
+figure{margin:0 0 16px}
+.dscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel);padding:10px}
+.dscroll svg{display:block;width:100%;min-width:760px;height:auto}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:8px;max-width:90ch}
+svg .bx{fill:var(--panel);stroke:var(--rule);stroke-width:1.2}
+svg .bx-jev{fill:var(--jev-soft);stroke:var(--jev);stroke-width:1.2}
+svg .bx-llm{fill:var(--llm-soft);stroke:var(--llm);stroke-width:1.2}
+svg .bx-eng{fill:var(--eng-soft);stroke:var(--eng);stroke-width:1.2}
+svg .bx-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.2}
+svg .bx-hum{fill:var(--hum-soft);stroke:var(--hum);stroke-width:1.2}
+svg .ct{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:6 4}
+svg .t{fill:var(--ink);font:600 13px var(--f-body)}
+svg .ts{fill:var(--ink-2);font:12px var(--f-body)}
+svg .tm{fill:var(--muted);font:11.5px var(--f-mono)}
+svg .tl{fill:var(--ink-2);font:italic 12px var(--f-body)}
+svg .ar{stroke:var(--ink-2);stroke-width:1.4;fill:none}
+svg .ar-jev{stroke:var(--jev)} svg .ar-llm{stroke:var(--llm)} svg .ar-eng{stroke:var(--eng)} svg .ar-bad{stroke:var(--bad)}
+svg .dash{stroke-dasharray:5 4}
+svg .ah{fill:var(--ink-2)}
+svg .dot{fill:var(--bad)}
+svg .dott{fill:var(--dot-text);font:700 11px var(--f-body)}
+svg .axis{stroke:var(--rule);stroke-width:1}
+svg .grid{stroke:var(--rule-2);stroke-width:1}
+svg .s-eng{fill:var(--eng)} svg .s-jev{fill:var(--jev)} svg .s-llm{fill:var(--llm)} svg .s-set{fill:var(--eng);opacity:.45}
+svg .s-old{fill:none;stroke:var(--bad);stroke-width:1.5;stroke-dasharray:6 4}
+/* bands */
+.bands{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px 14px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px;margin:0 0 14px}
+.bands .lbl{font-size:13px;font-weight:600}
+.bar{display:flex;height:30px;border-radius:6px;overflow:hidden;border:1px solid var(--rule);font-size:12px}
+.bar span{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 4px}
+.z-rev{background:var(--hum-soft);color:var(--hum)}
+.z-fb{background:var(--llm-soft);color:var(--llm)}
+.z-act{background:var(--jev-soft);color:var(--jev)}
+.axisrow{position:relative;height:18px;font:11.5px var(--f-mono);color:var(--muted)}
+.axisrow span{position:absolute;transform:translateX(-50%)}
+.axisrow span:first-child{transform:none} .axisrow span:last-child{transform:translateX(-100%)}
+@media (max-width:520px){.bands{grid-template-columns:minmax(0,1fr);gap:6px}.bands>span:empty{display:none}}
+/* steps */
+.steps{counter-reset:st;list-style:none;padding:0;margin:0 0 14px;display:grid;gap:8px}
+.steps li{counter-increment:st;display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;max-width:none;background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:10px 12px}
+.steps li::before{content:counter(st);font:600 13px var(--f-mono);color:var(--muted);padding-top:1px}
+.steps li b{font-weight:600}
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:0 0 14px}
+.phase{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.phase .ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.phase .pid{font:600 20px var(--f-display);color:var(--jev)}
+.phase .size{font:500 11px var(--f-mono);color:var(--muted)}
+.phase h4{margin:0;font:600 15px/1.3 var(--f-body)}
+.phase ul{margin:0;padding-left:18px;font-size:13.5px}
+.phase .exit{margin-top:auto;font-size:12.5px;border-top:1px dashed var(--rule);padding-top:8px;color:var(--ink-2)}
+/* decisions */
+.dec{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;margin:0 0 12px}
+.dec .dh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.dec .did{font:600 13px var(--f-mono);color:var(--muted)}
+.dec h4{margin:0;font:600 16px/1.35 var(--f-body)}
+.opts{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
+.opts li{max-width:none;border:1px solid var(--rule-2);border-radius:8px;padding:8px 10px;font-size:14px}
+.opts li.rec{border-color:var(--ok);background:var(--ok-soft)}
+.opts li .tag{margin-right:6px}
+.path{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px}
+.path .pn{font-weight:600;border:1px solid var(--rule);border-radius:6px;padding:3px 8px;background:var(--paper)}
+.path .pn.eng{border-color:var(--eng);background:var(--eng-soft)}
+.path .pn.hum{border-color:var(--hum);background:var(--hum-soft)}
+.path .pa{font:12px var(--f-mono);color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="Mục lục">
+    <details id="tocbox" open>
+      <summary>Mục lục</summary>
+      <ol>
+        <li><a href="#tomtat"><span>—</span>Tóm tắt</a></li>
+        <li><a href="#s1"><span>§1</span>Mục tiêu &amp; phạm vi</a></li>
+        <li><a href="#s2"><span>§2</span>Luồng cũ</a></li>
+        <li><a href="#s3"><span>§3</span>Bài học jev-ultrafast</a></li>
+        <li><a href="#s4"><span>§4</span>Tài sản sẵn có</a></li>
+        <li><a href="#s5"><span>§5</span>Kiến trúc</a></li>
+        <li><a href="#s6"><span>§6</span>Một bước lặp</a></li>
+        <li><a href="#s7"><span>§7</span>Thang quyết định</a></li>
+        <li><a href="#s8"><span>§8</span>Runtime sen-browser</a></li>
+        <li><a href="#s9"><span>§9</span>Hai chế độ &amp; luồng</a></li>
+        <li><a href="#s10"><span>§10</span>Encoder &amp; backend</a></li>
+        <li><a href="#s11"><span>§11</span>Vai trò LLM</a></li>
+        <li><a href="#s12"><span>§12</span>Bảo mật &amp; quyền</a></li>
+        <li><a href="#s13"><span>§13</span>Tool cho agent</a></li>
+        <li><a href="#s14"><span>§14</span>Giao diện</a></li>
+        <li><a href="#s15"><span>§15</span>Đánh giá</a></li>
+        <li><a href="#s16"><span>§16</span>Thay luồng cũ</a></li>
+        <li><a href="#s17"><span>§17</span>Lộ trình</a></li>
+        <li><a href="#s18"><span>§18</span>Rủi ro</a></li>
+        <li><a href="#s19"><span>§19</span>Cần anh chốt</a></li>
+        <li><a href="#s20"><span>§20</span>Câu hỏi mở</a></li>
+        <li><a href="#s21"><span>§21</span>Nguồn</a></li>
+      </ol>
+    </details>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <div class="eyebrow">Tài liệu thiết kế · SenClaw</div>
+      <h1>SenBrowser: Jev chọn, LLM viết, code thực thi</h1>
+      <p class="lede">Runtime trình duyệt mới cho SenClaw. Mỗi bước, một decision model (Jev hosted hoặc <code>laya-browser</code> chạy local) chọn thao tác và phần tử trong <b>một request</b>. LLM chỉ vào cuộc khi cần viết chữ, khi decision model không chắc, và khi cần xác minh hay đọc kết quả. Chạy được trên Chrome riêng do runtime quản lý và trên Chrome thật của anh qua extension. Thay luồng extension + ~30 MCP tool hiện tại.</p>
+      <div class="meta">
+        <span class="chip"><b>Phiên bản</b> v0.2</span>
+        <span class="chip"><b>Ngày</b> 29/09/2026</span>
+        <span class="chip"><b>Trạng thái</b> Bản nháp để review</span>
+        <span class="chip"><b>Mới ở v0.2</b> §9 hai chế độ trình duyệt</span>
+        <span class="chip"><b>Repo</b> senclaw · sen-browser (mới) · sen-sysone · desktop · web-app · senclaw-extension</span>
+      </div>
+      <div class="facts" role="list">
+        <div class="fact" role="listitem"><div class="k">Quyết định / bước</div><div class="v jev">1 request: operation + target</div></div>
+        <div class="fact" role="listitem"><div class="k">LLM chỉ khi</div><div class="v llm">TYPE_TEXT · không chắc · verify</div></div>
+        <div class="fact" role="listitem"><div class="k">Output model</div><div class="v hum">Không bao giờ thành selector/JS</div></div>
+        <div class="fact" role="listitem"><div class="k">Phân vai</div><div class="v eng">Daemon giữ não · runtime giữ tay-mắt</div></div>
+      </div>
+    </header>
+
+    <section id="tomtat" aria-labelledby="h-tomtat">
+      <div class="sh"><h2 id="h-tomtat">Tóm tắt 60 giây</h2></div>
+      <div class="tldr">
+        <ul>
+          <li><b>Vấn đề.</b> Luồng cũ để LLM chính tự lái từng click qua ~30 tool. Extension phát sự kiện giả (<code>isTrusted=false</code>). Index được đánh lại sau mỗi snapshot nên có thể click nhầm phần tử. Không có kiểm tra "trang đã đổi chưa" hay "phần tử có bị che không". Kênh <code>/browser</code> của gateway không xác thực và không kiểm Origin (§2).</li>
+          <li><b>Mẫu tham chiếu.</b> <code>browser-use/jev-ultrafast</code> đi Google Flights hết 7,07 s: 17 quyết định Jev (median 178 ms) và 2 lượt LLM viết chữ. Bí quyết không nằm ở model mà ở vòng lặp: snapshot một lần gọi, một request cho cả thao tác lẫn phần tử, guard trước khi bấm, và chỉ chờ tới khi trang có trạng thái dùng được (§3).</li>
+          <li><b>Đề xuất.</b> Runtime mới <code>sen-browser</code> (Rust, CDP) lo quan sát và thực thi có guard qua <b>hai driver dùng chung một lõi</b>: Chrome riêng do runtime khởi chạy với profile riêng, và Chrome thật của anh qua extension (<code>chrome.debugger</code>, relay qua daemon). Vòng lặp quyết định nằm trong <b>control plane JEV của daemon</b>, dùng lại <code>ladder</code>, <code>policy_gate</code>, <code>trace</code> và client <code>sen-sysone</code> đã có (§5–§9).</li>
+          <li><b>Local-first.</b> Decision model <code>laya-browser</code> v10s đã được fine-tune đúng format request của jev-ultrafast và đã chạy trên máy anh (~0,75 s/bước CPU). Jev hosted là tuỳ chọn, chỉ dùng cho domain được phép (§10, §12).</li>
+          <li><b>Thay thế.</b> Agent gọi <code>browser_task(goal)</code> thay vì 10–30 tool call. Bridge WS, gateway relay cũ và <code>browser_server.rs</code> được gỡ sau khi qua cổng đánh giá G2. Extension được giữ nhưng viết lại thành driver mỏng: relay CDP có ghép cặp và allowlist (§15–§16).</li>
+          <li><b>Đã chốt</b> D2 (hỗ trợ cả hai chế độ) và D5 (giữ extension, viết lại thành driver). <b>Còn cần anh chốt</b> ở <a href="#s19">§19</a>: vòng lặp đặt ở đâu (D1), backend quyết định mặc định (D3), và ba quyết định mới cho luồng extension (D8–D10).</li>
+        </ul>
+      </div>
+      <p class="small muted" style="margin-top:10px">Ký hiệu độ tin cậy của số liệu: <span class="ev ev-m">đo</span> số đo có nguồn · <span class="ev ev-e">ước tính</span> suy luận, cần đo · <span class="ev ev-p">đề xuất</span> giá trị khởi điểm, sẽ hiệu chỉnh bằng eval.</p>
+    </section>
+
+    <section id="s1" aria-labelledby="h1s">
+      <div class="sh"><span class="sn">§1</span><h2 id="h1s">Mục tiêu &amp; phạm vi</h2></div>
+      <div class="g2">
+        <div class="box eng">
+          <h4>Kết quả mong muốn</h4>
+          <p>Agent SenClaw hoàn thành các tác vụ web (tìm kiếm, lọc, điền form, mở kết quả, đọc thông tin) bằng một engine nhanh, rẻ, an toàn và kiểm chứng được. Engine này thay hẳn luồng extension cũ.</p>
+        </div>
+        <div class="box jev">
+          <h4>Ràng buộc</h4>
+          <ul>
+            <li>Rust cho daemon và runtime. Daemon không chứa code inference.</li>
+            <li>Runtime là tiến trình con nói chuyện qua HTTP loopback, theo <code>runtime-protocol.md</code> v1.</li>
+            <li>Tuân JEV v2.2: <i>rule → Jev → LLM → người</i>, policy gate chỉ bằng code, có trace, có công tắc <code>SENCLAW_JEV_OFF</code>.</li>
+            <li>Không đụng dữ liệu và cổng của daemon thật (18788/18789).</li>
+          </ul>
+        </div>
+        <div class="box bad">
+          <h4>Không làm trong đợt này</h4>
+          <ul>
+            <li>Train lại hay đổi kiến trúc Laya. Fine-tune từ trace để ở P6.</li>
+            <li>Canvas app, game, CAPTCHA. Đăng nhập luôn do người làm (handover).</li>
+            <li>Cloud browser, chạy song song hàng loạt, scraping quy mô lớn.</li>
+            <li>Viết lại cả control plane JEV. Chỉ thêm spec và module cho browser.</li>
+          </ul>
+        </div>
+        <div class="box hum">
+          <h4>Tiêu chí nghiệm thu</h4>
+          <ul>
+            <li>Qua G0–G2 ở §15: fixture local đạt 100%, 0 thao tác trái phép trên bộ bẫy, tỉ lệ thành công không thấp hơn luồng cũ, median thời gian ≤ ⅓ luồng cũ.</li>
+            <li>Mỗi bước để lại trace: xác suất, band, ai quyết định (Jev, LLM hay người), độ trễ.</li>
+            <li>Luồng cũ được gỡ sau G4, không còn code chết.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="s2" aria-labelledby="h2s">
+      <div class="sh"><span class="sn">§2</span><h2 id="h2s">Luồng browser cũ: đang chạy thế nào, hỏng ở đâu</h2></div>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 900 236" role="img" aria-labelledby="old-t old-d">
+            <title id="old-t">Luồng browser cũ</title>
+            <desc id="old-d">Bảy chặng từ LLM chính tới DOM. Mỗi thao tác lặp lại toàn bộ chuỗi. Chấm đỏ đánh số trỏ tới bảng vấn đề bên dưới.</desc>
+            <defs><marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <g>
+              <rect class="bx-llm" x="10" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="66" y="97" text-anchor="middle">LLM chính</text>
+              <text class="ts" x="66" y="116" text-anchor="middle">1 lượt / thao tác</text>
+              <rect class="bx" x="135" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="191" y="97" text-anchor="middle">MCP core</text>
+              <text class="tm" x="191" y="116" text-anchor="middle">~30 browser_*</text>
+              <rect class="bx" x="260" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="316" y="97" text-anchor="middle">MCP con</text>
+              <text class="tm" x="316" y="116" text-anchor="middle">WS :port+1</text>
+              <rect class="bx" x="385" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="441" y="97" text-anchor="middle">BrowserBridge</text>
+              <text class="ts" x="441" y="116" text-anchor="middle">trong daemon</text>
+              <rect class="bx" x="510" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="566" y="97" text-anchor="middle">Gateway WS</text>
+              <text class="tm" x="566" y="116" text-anchor="middle">:18789</text>
+              <rect class="bx" x="635" y="70" width="112" height="64" rx="8"/>
+              <text class="t" x="691" y="97" text-anchor="middle">Extension</text>
+              <text class="ts" x="691" y="116" text-anchor="middle">MV3 background</text>
+              <rect class="bx-bad" x="760" y="70" width="130" height="64" rx="8"/>
+              <text class="t" x="825" y="97" text-anchor="middle">Content script</text>
+              <text class="tm" x="825" y="116" text-anchor="middle">SelectorMap</text>
+              <rect class="bx-bad" x="760" y="168" width="130" height="46" rx="8"/>
+              <text class="t" x="825" y="188" text-anchor="middle">DOM của trang</text>
+              <text class="tm" x="825" y="205" text-anchor="middle">isTrusted=false</text>
+            </g>
+            <g class="ar" marker-end="url(#ah1)">
+              <line x1="123" y1="102" x2="133" y2="102"/>
+              <line x1="248" y1="102" x2="258" y2="102"/>
+              <line x1="373" y1="102" x2="383" y2="102"/>
+              <line x1="498" y1="102" x2="508" y2="102"/>
+              <line x1="623" y1="102" x2="633" y2="102"/>
+              <line x1="748" y1="102" x2="758" y2="102"/>
+              <line x1="825" y1="135" x2="825" y2="166"/>
+              <path d="M758,191 L66,191 L66,137"/>
+            </g>
+            <text class="tl" x="412" y="184" text-anchor="middle">lặp cho từng thao tác: snapshot → context LLM → chọn index → 1 tool call</text>
+            <line class="ar dash" x1="262" y1="58" x2="745" y2="58"/>
+            <g>
+              <circle class="dot" cx="66" cy="50" r="9"/><text class="dott" x="66" y="54" text-anchor="middle">1</text>
+              <circle class="dot" cx="180" cy="50" r="9"/><text class="dott" x="180" y="54" text-anchor="middle">6</text>
+              <circle class="dot" cx="202" cy="50" r="9"/><text class="dott" x="202" y="54" text-anchor="middle">7</text>
+              <circle class="dot" cx="441" cy="50" r="9"/><text class="dott" x="441" y="54" text-anchor="middle">8</text>
+              <circle class="dot" cx="566" cy="50" r="9"/><text class="dott" x="566" y="54" text-anchor="middle">9</text>
+              <circle class="dot" cx="792" cy="50" r="9"/><text class="dott" x="792" y="54" text-anchor="middle">2</text>
+              <circle class="dot" cx="814" cy="50" r="9"/><text class="dott" x="814" y="54" text-anchor="middle">3</text>
+              <circle class="dot" cx="836" cy="50" r="9"/><text class="dott" x="836" y="54" text-anchor="middle">4</text>
+              <circle class="dot" cx="858" cy="50" r="9"/><text class="dott" x="858" y="54" text-anchor="middle">5</text>
+            </g>
+          </svg>
+        </div>
+        <figcaption>Luồng hiện tại. Nguồn: <code>src/mcp/browser_server.rs</code> (1.618 dòng), <code>src/browser/*</code> (2.693 dòng), <code>src/gateway/websocket_gateway/browser.rs</code>, <code>senclaw-extension/src</code> (~4.200 dòng TS). Chấm đỏ đánh số trỏ tới bảng dưới.</figcaption>
+      </figure>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>#</th><th>Vấn đề</th><th>Bằng chứng</th><th>Hệ quả</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>LLM chính tự lái từng thao tác. Mỗi click là một lượt LLM đầy đủ, kèm snapshot trong context.</td><td>Danh sách tool ở đầu file; skill <code>agent-browser</code> dài 391 dòng hướng dẫn gọi từng bước<span class="ref">browser_server.rs:1–8 · skills/agent-browser/SKILL.md</span></td><td>Chậm và tốn token. Nhiều giây mỗi bước <span class="ev ev-e">chưa đo, P0 sẽ đo</span></td></tr>
+            <tr><td class="num">2</td><td>Sự kiện giả: <code>new MouseEvent</code>, <code>el.click()</code>, <code>new KeyboardEvent</code>. Manifest không có quyền <code>debugger</code>.</td><td><span class="ref">ActionExecutor.ts:44, 134, 194 · wxt.config.ts:22–30</span></td><td>Site kiểm tra <code>isTrusted</code> hoặc cần phím thật (autocomplete, widget Google) không phản hồi. Nghiên cứu Laya-jev 25/09 đã ghi nhận.</td></tr>
+            <tr><td class="num">3</td><td>Index được đánh lại 1..n sau mỗi snapshot. <code>SelectorMap</code> chỉ kiểm <code>isConnected</code>.</td><td><span class="ref">SelectorMap.ts:52–61</span></td><td>Index cũ trỏ sang phần tử khác nên thành <b>click nhầm</b> chứ không báo lỗi. README của mini-browser mô tả đúng lỗi này.</td></tr>
+            <tr><td class="num">4</td><td>Không kiểm tra độ mới giữa lúc LLM quyết định và lúc thực thi.</td><td>Không có marker hay guard trong protocol<span class="ref">browser/protocol.rs · ActionExecutor.ts</span></td><td>Hành động dựa trên trang đã đổi (animation, SPA re-render).</td></tr>
+            <tr><td class="num">5</td><td>Khi phần tử bị che, <code>deepestAt()</code> lùi về chính phần tử và vẫn dispatch sự kiện.</td><td><span class="ref">ActionExecutor.ts:69–74</span></td><td>Click xuyên overlay, modal hay cookie banner, điều người dùng thật không làm được.</td></tr>
+            <tr><td class="num">6</td><td>Mô tả tool không đúng sự thật: <code>browser_extract_structured</code> ghi "LLM analyzes" nhưng thực ra chạy heuristic JS.</td><td><span class="ref">browser_server.rs:1224–1262</span></td><td>LLM tin nhầm vào khả năng của tool, kết quả rỗng hoặc sai.</td></tr>
+            <tr><td class="num">7</td><td>Bề mặt tool lớn (~30) và có 3 kiểu đặt tên.</td><td><span class="ref">tools/tool_search.rs:34–137</span></td><td>LLM phải dùng ToolSearch và dễ chọn nhầm tool.</td></tr>
+            <tr><td class="num">8</td><td>Sáu chặng truyền và phụ thuộc vào extension đang kết nối.</td><td><span class="ref">browser/bridge.rs:1–13</span></td><td>Nhiều điểm hỏng. Không chạy nền được khi Chrome của người dùng đóng.</td></tr>
+            <tr><td class="num">9</td><td>Kênh <code>/browser</code> không xác thực. Ở chế độ mặc định (<code>Auto</code>, bind loopback) mọi kết nối loopback đều được cho qua, không kiểm <code>Origin</code>, và kết nối mới thay luôn kết nối extension cũ.</td><td><span class="ref">ui_server/auth.rs:250–256, 400–424 · websocket_gateway/gateway.rs:194–217 · browser.rs:59–68</span></td><td>Một trang web bất kỳ trong trình duyệt có thể giả làm extension, nhận lệnh của agent và trả snapshot giả. Đã tách thành task sửa riêng.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">Nên giữ lại: tab group theo agent, dấu <code>is_new</code> và <code>viewport_status</code>, tìm kiếm bằng tab tạm, crawl có budget.</p>
+    </section>
+
+    <section id="s3" aria-labelledby="h3s">
+      <div class="sh"><span class="sn">§3</span><h2 id="h3s">Bài học từ browser-use/jev-ultrafast</h2></div>
+      <p>Repo MIT, tạo ngày 16/09/2026, 21.093★ (29/09). Lõi khoảng 850 dòng Python và JS. Vòng lặp: <i>trang → bảng phần tử đánh số → một request TypeSafe → thực thi</i>. Nghiên cứu chi tiết: <code>plans/reports/research-260929-0143-jev-ultrafast.md</code>.</p>
+      <pre><code>[1] button    Change ticket type · Round trip
+[2] combobox  Where from?        · San Francisco
+[3] combobox  Where to?          · empty
+
+questions = { operation:        CLICK | TYPE_TEXT | SELECT | SCROLL_* | WAIT | DONE | BLOCKED,
+              click_target:     "[1]" | "[2]" | …   ← chỉ phần tử CLICK được
+              type_text_target: "[2]" | "[3]" | …   ← chỉ ô gõ được }
+→ chỉ dùng head khớp operation; TYPE_TEXT → LLM nhỏ trả {"text": "Zurich"}</code></pre>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Số liệu công bố</th><th class="num">Giá trị</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            <tr><td>Google Flights Zürich → London</td><td class="num">7,073 s <span class="ev ev-m">đo</span></td><td>Tính từ quyết định đầu tiên tới DONE, gồm cả thời gian chờ Google tải</td></tr>
+            <tr><td>Số quyết định Jev, median độ trễ</td><td class="num">17 · 178 ms <span class="ev ev-m">đo</span></td><td><code>jev-1.13.0</code>; khoảng 5,3k token input mỗi request</td></tr>
+            <tr><td>Lượt LLM viết chữ</td><td class="num">2 · 581 / 346 ms <span class="ev ev-m">đo</span></td><td>Mercury 2.5 qua OpenRouter, tổng $0.00006</td></tr>
+            <tr><td>So khớp runtime cũ và mới (3 cặp)</td><td class="num">9,45 → 7,09 s <span class="ev ev-m">đo</span></td><td>−25%; CDP call 1.092 → 101; p = 0,25, chưa đủ ý nghĩa thống kê</td></tr>
+            <tr><td>Wikipedia · fixture khách sạn local</td><td class="num">2,80 s · 1,90 s <span class="ev ev-m">đo</span></td><td>Smoke check, không phải benchmark</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Kỹ thuật</th><th>Áp dụng?</th><th>Cách áp dụng cho SenClaw</th></tr></thead>
+          <tbody>
+            <tr><td>Một request cho mọi head (speculative fan-out)</td><td><span class="tag t-ok">Lấy</span></td><td>Encoder của daemon dựng <code>operation</code> và <code>&lt;op&gt;_target</code> trong cùng một <code>AskRequest</code></td></tr>
+            <tr><td>Snapshot DOM trong một lần gọi, chỉ lấy vùng viewport, text ≤ 6000, ≤ 250 ứng viên</td><td><span class="tag t-ok">Lấy</span></td><td>Chuyển <code>snapshot.js</code> sang runtime, chạy trong <b>isolated world</b></td></tr>
+            <tr><td>Danh tính node bằng WeakMap + guard hẹp cho click, marker đầy đủ cho các thao tác khác</td><td><span class="tag t-ok">Lấy</span></td><td>Runtime giữ observation mới nhất cho mỗi tab; <code>act</code> tự đối chiếu</td></tr>
+            <tr><td>Hit-test chống bị che; input thật qua CDP (<code>insertText</code>, <code>dispatchMouseEvent</code>)</td><td><span class="tag t-ok">Lấy</span></td><td>Thêm <code>DOM.getContentQuads</code> cho iframe (bài học từ mini-browser)</td></tr>
+            <tr><td>Chờ trạng thái dùng được: ≤ 2 rAF / 50 ms; combobox ≤ 200 ms</td><td><span class="tag t-ok">Lấy</span></td><td>Engine settle trong runtime; <code>act</code> trả luôn observation sau khi settle</td></tr>
+            <tr><td>Không retry mutation; ghi log trước khi quan sát lại; cache text chỉ khi input giống hệt</td><td><span class="tag t-ok">Lấy</span></td><td>Luật cứng trong vòng lặp của daemon</td></tr>
+            <tr><td><code>window.__jevFast</code> nằm ở main world</td><td><span class="tag t-bad">Sửa</span></td><td>Isolated world (<code>Page.createIsolatedWorld</code>) để script của trang không thấy, không sửa được</td></tr>
+            <tr><td>Chỉ 8 operation, không có iframe, shadow DOM, popup</td><td><span class="tag t-warn">Mở rộng</span></td><td>Deep snapshot khi coverage báo thiếu; thêm <code>PRESS_KEY</code>, <code>GO_BACK</code>, <code>SWITCH_TAB</code> cho backend hosted</td></tr>
+            <tr><td><code>browser-harness</code> gắn vào Chrome thật, có telemetry opt-out gửi PostHog</td><td><span class="tag t-bad">Bỏ</span></td><td>Tự quản CDP trong Rust: Chrome riêng qua pipe, Chrome của anh qua extension (§9)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note warn"><p><b>Đọc số liệu cho đúng.</b> Mới có 3 task với 3 lần chạy mỗi task. DONE của model không phải bằng chứng thành công, repo tự dùng checker độc lập. Tốc độ phụ thuộc Jev hosted: con số 178 ms không đo từ Việt Nam.</p></div>
+    </section>
+
+    <section id="s4" aria-labelledby="h4s">
+      <div class="sh"><span class="sn">§4</span><h2 id="h4s">Tài sản sẵn có để dùng lại</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Tài sản</th><th>Ở đâu</th><th>Dùng vào</th></tr></thead>
+          <tbody>
+            <tr><td><b>Control plane JEV P0/P1</b>: ladder, registry (spec, band act/fallback), trace, policy_gate, loop_controller</td><td><span class="ref">senclaw/src/control_plane (2.943 dòng)</span></td><td>Spec <code>browser.*</code>, band, trace từng bước, công tắc <code>JEV_OFF</code></td></tr>
+            <tr><td><b>Client decision</b> <code>decision::client::ask</code> → runtime <code>sen-sysone</code></td><td><span class="ref">senclaw/src/decision/client.rs · runtime/clients.rs</span></td><td>Gửi request operation+target, không cần viết client mới</td></tr>
+            <tr><td><b>sen-sysone</b>: <code>POST /v1/systemone</code>, Laya ONNX local hoặc online (TypeSafe, Cloudflare, custom)</td><td><span class="ref">sen-sysone/src/decision/*</span></td><td>Backend quyết định; <code>model</code> theo từng request để nạp <code>laya-browser</code></td></tr>
+            <tr><td><b>laya-browser v10s</b>: mmBERT-base 322M, format v3, head_max_len 768; 62% trên 16 task thật; ~0,75 s/bước CPU M4 Pro</td><td><span class="ref">Laya-jev/models/laya-browser · laya_daemon/browser_head.py · research-260925-0207</span></td><td>Backend local mặc định; encoder <code>laya-v3</code> port từ <code>to_format_v3()</code></td></tr>
+            <tr><td><b>mini-browser</b>: Rust + chromiumoxide, AX tree, ref gắn <code>backendNodeId</code>, <code>getContentQuads</code>, input giống người, screencast, handover đăng nhập, che log trường nhạy cảm</td><td><span class="ref">senclaw-app/apps/mini-browser (~9.800 dòng)</span></td><td>Lõi CDP của <code>sen-browser</code>: session, input, events, deep snapshot, live view, handover</td></tr>
+            <tr><td><b>senclaw-extension</b>: ws-client (reconnect, heartbeat 15 s), <code>TabGroupController</code> (nhóm "SenClaw", mỗi agent một tab, tối đa 12, dọn tab rảnh sau 30 phút), side panel</td><td><span class="ref">senclaw-extension/src/lib/ws-client.ts · src/agent/TabGroupController.ts</span></td><td>Nền cho driver extension v0.2 (§9)</td></tr>
+            <tr><td><b>Runtime protocol + SDK</b>: manifest, launch env, token, proxy namespace</td><td><span class="ref">senclaw/docs/runtime-protocol.md · crates/sen-runtime-sdk</span></td><td>Đóng gói <code>sen-browser</code>; cần thêm type/slot <code>browser</code></td></tr>
+            <tr><td><b>query_llm</b>: adapter OpenAI/Anthropic, provider local qua loopback</td><td><span class="ref">senclaw/src/zen_core/query_llm.rs</span></td><td>LLM viết chữ, fallback, verify, đọc trang</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s5" aria-labelledby="h5s">
+      <div class="sh"><span class="sn">§5</span><h2 id="h5s">Kiến trúc đề xuất</h2></div>
+      <p>Nguyên tắc: <b>não ở daemon, tay-mắt ở runtime.</b> Mọi quyết định (Jev, LLM, người), policy và trace nằm trong control plane, nơi JEV v2.2 đã đặt chúng. Runtime <code>sen-browser</code> chỉ làm ba việc: quan sát, thực thi có guard, và phát live view. Nó không biết goal là gì. Runtime điều khiển trình duyệt qua hai driver dùng chung một lõi: <b>Chrome riêng</b> (runtime tự khởi chạy, profile riêng) và <b>Chrome của anh</b> (extension, <code>chrome.debugger</code>). Luồng chi tiết ở §9.</p>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 900 600" role="img" aria-labelledby="arch-t arch-d">
+            <title id="arch-t">Kiến trúc SenBrowser</title>
+            <desc id="arch-d">Tầng trên là LLM chính và giao diện. Tầng giữa là Browser Loop trong control plane của daemon. Tầng dưới gồm sen-sysone cho quyết định, runtime LLM, và sen-browser điều khiển Chrome qua CDP.</desc>
+            <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <rect class="bx-llm" x="40" y="20" width="300" height="70" rx="10"/>
+            <text class="t" x="190" y="48" text-anchor="middle">LLM chính của agent</text>
+            <text class="tm" x="190" y="70" text-anchor="middle">browser_task(goal, url?, question?)</text>
+            <rect class="bx-hum" x="560" y="20" width="300" height="70" rx="10"/>
+            <text class="t" x="710" y="48" text-anchor="middle">Desktop · Web</text>
+            <text class="ts" x="710" y="70" text-anchor="middle">live view · duyệt thao tác · handover</text>
+            <rect class="ct" x="40" y="150" width="820" height="150" rx="12"/>
+            <text class="t" x="58" y="174">Daemon · control plane JEV · Browser Loop</text>
+            <text class="tm" x="842" y="174" text-anchor="end">budget · no-progress · trace</text>
+            <rect class="bx-jev" x="55" y="190" width="148" height="92" rx="8"/>
+            <text class="t" x="129" y="214" text-anchor="middle">Encoder</text>
+            <text class="tm" x="129" y="236" text-anchor="middle">jev-full | laya-v3</text>
+            <text class="ts" x="129" y="256" text-anchor="middle">candidate budget</text>
+            <rect class="bx-jev" x="213" y="190" width="148" height="92" rx="8"/>
+            <text class="t" x="287" y="214" text-anchor="middle">Thang quyết định</text>
+            <text class="ts" x="287" y="236" text-anchor="middle">rule → Jev</text>
+            <text class="ts" x="287" y="256" text-anchor="middle">→ LLM → người</text>
+            <rect class="bx-bad" x="371" y="190" width="148" height="92" rx="8"/>
+            <text class="t" x="445" y="214" text-anchor="middle">Policy gate</text>
+            <text class="ts" x="445" y="236" text-anchor="middle">chỉ bằng code</text>
+            <text class="ts" x="445" y="256" text-anchor="middle">rủi ro · PII · domain</text>
+            <rect class="bx-llm" x="529" y="190" width="148" height="92" rx="8"/>
+            <text class="t" x="603" y="214" text-anchor="middle">Vai trò LLM</text>
+            <text class="ts" x="603" y="236" text-anchor="middle">viết chữ · fallback</text>
+            <text class="ts" x="603" y="256" text-anchor="middle">verify · đọc trang</text>
+            <rect class="bx" x="687" y="190" width="158" height="92" rx="8"/>
+            <text class="t" x="766" y="214" text-anchor="middle">Verifier · Trace</text>
+            <text class="ts" x="766" y="236" text-anchor="middle">DONE cần bằng chứng</text>
+            <text class="ts" x="766" y="256" text-anchor="middle">eval harness</text>
+            <rect class="bx-jev" x="40" y="370" width="240" height="110" rx="10"/>
+            <text class="t" x="160" y="396" text-anchor="middle">sen-sysone</text>
+            <text class="tm" x="160" y="418" text-anchor="middle">POST /v1/systemone</text>
+            <text class="ts" x="160" y="440" text-anchor="middle">laya-browser (ONNX, local)</text>
+            <text class="ts" x="160" y="460" text-anchor="middle">Jev hosted (tuỳ domain)</text>
+            <rect class="bx-llm" x="320" y="370" width="220" height="110" rx="10"/>
+            <text class="t" x="430" y="396" text-anchor="middle">LLM</text>
+            <text class="ts" x="430" y="418" text-anchor="middle">sen-mlx · llama.cpp</text>
+            <text class="ts" x="430" y="440" text-anchor="middle">hoặc provider cloud</text>
+            <text class="tm" x="430" y="460" text-anchor="middle">qua query_llm</text>
+            <rect class="bx-eng" x="580" y="370" width="280" height="110" rx="10"/>
+            <text class="t" x="720" y="396" text-anchor="middle">sen-browser (runtime mới)</text>
+            <text class="ts" x="720" y="418" text-anchor="middle">1 lõi: snapshot · executor có guard</text>
+            <text class="ts" x="720" y="440" text-anchor="middle">settle · events · live · handover</text>
+            <text class="ts" x="720" y="460" text-anchor="middle">2 driver: managed · extension</text>
+            <rect class="bx-eng" x="560" y="545" width="150" height="44" rx="8"/>
+            <text class="t" x="635" y="572" text-anchor="middle">Chrome riêng</text>
+            <rect class="bx-hum" x="728" y="545" width="160" height="44" rx="8"/>
+            <text class="t" x="808" y="572" text-anchor="middle">Chrome của anh</text>
+            <g class="ar" marker-end="url(#ah2)" marker-start="url(#ah2)">
+              <line x1="190" y1="93" x2="190" y2="147"/>
+              <line x1="710" y1="93" x2="710" y2="147"/>
+              <line x1="160" y1="303" x2="160" y2="367"/>
+              <line x1="430" y1="303" x2="430" y2="367"/>
+              <line x1="720" y1="303" x2="720" y2="367"/>
+            </g>
+            <g class="ar" marker-end="url(#ah2)" marker-start="url(#ah2)"><line x1="635" y1="483" x2="635" y2="542"/><line class="dash" x1="808" y1="483" x2="808" y2="542"/></g>
+            <text class="ts" x="200" y="125">gọi tool ⇄ kết quả + bằng chứng</text>
+            <text class="ts" x="700" y="125" text-anchor="end">live view · duyệt (proxy /api/browser)</text>
+            <text class="ts" x="170" y="330">1 request: operation + *_target</text>
+            <text class="ts" x="440" y="350">TYPE_TEXT · fallback · verify</text>
+            <text class="ts" x="710" y="330" text-anchor="end">observe / act (HTTP loopback)</text>
+            <text class="ts" x="645" y="530">CDP pipe</text>
+            <text class="ts" x="798" y="505" text-anchor="end">relay qua daemon</text>
+          </svg>
+        </div>
+        <figcaption>Màu: xanh dương = decision model, cam = LLM, xanh lá = engine trình duyệt, tím = người và trình duyệt của người, đỏ = kiểm soát bằng code. Driver <i>managed</i> nói chuyện với Chrome riêng qua CDP pipe. Driver <i>extension</i> đi qua daemon tới extension rồi tới <code>chrome.debugger</code> (nét đứt; chi tiết ở §9).</figcaption>
+      </figure>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Thành phần</th><th>Trách nhiệm</th><th>Không làm</th></tr></thead>
+          <tbody>
+            <tr><td><b>Browser Loop</b> <span class="ref">daemon: src/browser_agent/run.rs</span></td><td>Chạy task: budget (≤ 60 thao tác, ≤ 120 quyết định, deadline), phát hiện không tiến triển, ghi trace, stream tiến độ lên UI</td><td>Không tự chạm vào CDP</td></tr>
+            <tr><td><b>Encoder</b> <span class="ref">encoder.rs · budget.rs</span></td><td>Chuyển observation thành <code>AskRequest</code> theo backend (jev-full / laya-v3); cắt ứng viên cho vừa ngân sách token</td><td>Không quyết định</td></tr>
+            <tr><td><b>Thang quyết định</b> <span class="ref">step.rs (dùng control_plane::ladder)</span></td><td>Rule chạy trước, rồi Jev, rồi LLM fallback, rồi người. Band tính theo p(op) × p(target)</td><td>Không thực thi</td></tr>
+            <tr><td><b>Policy gate</b> <span class="ref">policy.rs (mở rộng control_plane::policy_gate)</span></td><td>Phân tầng rủi ro, yêu cầu duyệt, chặn trường mật khẩu, áp chính sách domain và PII cho backend hosted</td><td>Không hỏi model để <i>bỏ</i> bước duyệt</td></tr>
+            <tr><td><b>Vai trò LLM</b> <span class="ref">text.rs · fallback.rs · verify.rs · read.rs</span></td><td>Viết giá trị ô nhập, chọn khi Jev không chắc, xác minh DONE, đọc và trả lời câu hỏi từ trang</td><td>Không sinh selector hay JS</td></tr>
+            <tr><td><b>sen-browser</b> <span class="ref">repo mới SenClaw/sen-browser</span></td><td>Hai driver (Chrome riêng · extension) trên cùng một lõi: tab riêng, snapshot, act có guard, settle, dialog/popup/download, live frames, handover</td><td>Không gọi model, không biết goal</td></tr>
+            <tr><td><b>senclaw-extension v0.2</b> <span class="ref">repo SenClaw/senclaw-extension (viết lại)</span></td><td>Ghép cặp với daemon, relay CDP qua <code>chrome.debugger</code> cho tab sở hữu, allowlist lệnh và script, side panel (trạng thái, duyệt, handover, giao tab)</td><td>Không tự thao tác DOM, không có content-script executor</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s6" aria-labelledby="h6s">
+      <div class="sh"><span class="sn">§6</span><h2 id="h6s">Một bước lặp</h2></div>
+      <ol class="steps">
+        <li><div><b>Observe.</b> Runtime trả <code>Observation</code> gồm url, title, text hiển thị, phần tử có <code>node</code> và operation khả dụng, coverage, và <code>observation_id</code>. Thường observation đã có sẵn trong kết quả của <code>act</code> trước đó nên không tốn thêm chặng.</div></li>
+        <li><div><b>Rule.</b> Code xử lý trước các trường hợp rõ ràng: dialog đang mở, trường mật khẩu hoặc OTP (chuyển handover), trang đang tải (WAIT mà không hỏi Jev), vượt budget.</div></li>
+        <li><div><b>Jev.</b> Một request gồm <code>operation</code> và mọi <code>&lt;op&gt;_target</code> khả dụng. Validate như <code>validate_choice</code>: choice nằm trong tập, xác suất hợp lệ, choice là argmax.</div></li>
+        <li><div><b>Band.</b> Độ tin cậy bước = p(op) × p(target). Band <i>act</i> thì làm. Band <i>fallback</i> thì LLM chọn trên cùng bảng phần tử. Band <i>review</i> thì hỏi người hoặc dừng (§7).</div></li>
+        <li><div><b>Policy.</b> Phân tầng rủi ro cho thao tác đã chọn. Tầng 2 cần người duyệt, tầng 3 luôn chuyển handover (§12).</div></li>
+        <li><div><b>Text</b> (chỉ khi TYPE_TEXT). LLM nhỏ trả đúng <code>{"text": …}</code>. Nếu <code>null</code> nghĩa là thiếu thông tin, hỏi lại người dùng. Cache chỉ dùng lại khi input giống hệt.</div></li>
+        <li><div><b>Act.</b> Runtime so observation hiện tại với <code>observation_id</code> (marker hoặc guard), hit-test, rồi phát input thật. Chờ settle (≤ 50 ms, combobox ≤ 200 ms) và trả observation mới. Mutation bị lỗi giữa chừng thì <b>không retry</b>.</div></li>
+        <li><div><b>Ghi và lặp.</b> Ghi trace trước khi xử lý observation mới. Nếu 3 thao tác liên tiếp không đổi trang (trừ WAIT) thì LLM replan hoặc dừng. DONE phải qua Verifier.</div></li>
+      </ol>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 900 262" role="img" aria-labelledby="tl-t tl-d">
+            <title id="tl-t">Ngân sách thời gian một bước</title>
+            <desc id="tl-d">Bốn hàng trên trục 0 đến 1400 mili giây: Jev hosted khoảng 255 ms, Jev kèm TYPE_TEXT khoảng 880 ms, laya-browser trên CPU khoảng 825 ms, luồng cũ nhiều giây và chưa đo.</desc>
+            <g class="grid">
+              <line x1="160" y1="26" x2="160" y2="200"/><line x1="260" y1="26" x2="260" y2="200"/><line x1="360" y1="26" x2="360" y2="200"/><line x1="460" y1="26" x2="460" y2="200"/>
+              <line x1="560" y1="26" x2="560" y2="200"/><line x1="660" y1="26" x2="660" y2="200"/><line x1="760" y1="26" x2="760" y2="200"/><line x1="860" y1="26" x2="860" y2="200"/>
+            </g>
+            <text class="ts" x="150" y="50" text-anchor="end">Jev hosted</text>
+            <rect class="s-eng" x="160" y="36" width="7.5" height="22"/>
+            <rect class="s-jev" x="167.5" y="36" width="90" height="22"/>
+            <rect class="s-eng" x="257.5" y="36" width="5" height="22"/>
+            <rect class="s-set" x="262.5" y="36" width="25" height="22"/>
+            <text class="tm" x="295" y="51">≈255 ms</text>
+            <text class="ts" x="150" y="93" text-anchor="end">Jev + TYPE_TEXT</text>
+            <rect class="s-eng" x="160" y="79" width="7.5" height="22"/>
+            <rect class="s-jev" x="167.5" y="79" width="90" height="22"/>
+            <rect class="s-llm" x="257.5" y="79" width="235" height="22"/>
+            <rect class="s-eng" x="492.5" y="79" width="7.5" height="22"/>
+            <rect class="s-set" x="500" y="79" width="100" height="22"/>
+            <text class="tm" x="608" y="94">≈880 ms</text>
+            <text class="ts" x="150" y="136" text-anchor="end">laya-browser CPU</text>
+            <rect class="s-eng" x="160" y="122" width="7.5" height="22"/>
+            <rect class="s-jev" x="167.5" y="122" width="375" height="22"/>
+            <rect class="s-eng" x="542.5" y="122" width="5" height="22"/>
+            <rect class="s-set" x="547.5" y="122" width="25" height="22"/>
+            <text class="tm" x="580" y="137">≈825 ms</text>
+            <text class="ts" x="150" y="179" text-anchor="end">Luồng cũ</text>
+            <rect class="s-old" x="160" y="165" width="700" height="22" rx="3"/>
+            <text class="tl" x="510" y="180" text-anchor="middle">1 lượt LLM đầy đủ mỗi thao tác · nhiều giây · đo ở P0 →</text>
+            <line class="axis" x1="160" y1="204" x2="860" y2="204"/>
+            <text class="tm" x="160" y="222" text-anchor="middle">0</text><text class="tm" x="260" y="222" text-anchor="middle">200</text><text class="tm" x="360" y="222" text-anchor="middle">400</text><text class="tm" x="460" y="222" text-anchor="middle">600</text>
+            <text class="tm" x="560" y="222" text-anchor="middle">800</text><text class="tm" x="660" y="222" text-anchor="middle">1000</text><text class="tm" x="760" y="222" text-anchor="middle">1200</text><text class="tm" x="860" y="222" text-anchor="end">1400 ms</text>
+            <rect class="s-eng" x="160" y="238" width="12" height="12"/><text class="ts" x="178" y="248">observe · act</text>
+            <rect class="s-set" x="280" y="238" width="12" height="12"/><text class="ts" x="298" y="248">settle</text>
+            <rect class="s-jev" x="360" y="238" width="12" height="12"/><text class="ts" x="378" y="248">quyết định</text>
+            <rect class="s-llm" x="470" y="238" width="12" height="12"/><text class="ts" x="488" y="248">LLM viết chữ</text>
+          </svg>
+        </div>
+        <figcaption>Quyết định Jev hosted 178 ms và LLM viết chữ 346–581 ms là số <span class="ev ev-m">đo</span> của jev-ultrafast. laya-browser ~750 ms là số <span class="ev ev-m">đo</span> trong Laya-jev (M4 Pro, CPU). Observe ~15 ms, act ~10 ms và settle là <span class="ev ev-e">ước tính</span> theo ngưỡng chờ. Độ trễ mạng từ Việt Nam tới TypeSafe chưa có trong hình.</figcaption>
+      </figure>
+      <pre><code>// daemon · src/browser_agent/run.rs (phác thảo)
+loop {
+    budget.check()?;                                    // ≤60 thao tác, ≤120 quyết định, deadline
+    if let Some(a) = rules::pre(&obs, &policy) { a }    // dialog, mật khẩu → handover, đang tải → WAIT
+    let req  = encoder.build(&obs, &goal, &history, backend)?;  // jev-full | laya-v3 + budget
+    let ans  = decision::client::ask(rt, &req).await?;          // 1 request: mọi head
+    let pick = step::resolve(&ans, &obs)?;              // validate + p(op)×p(target) → band
+    let pick = match pick.band {
+        Act      => pick,
+        Fallback => llm::fallback(&obs, &goal, &history, &ans).await?,  // chỉ trả index đã đưa
+        Review   => ask_human_or_stop(pick).await?,
+    };
+    policy.gate(&pick, &obs).await?;                    // tầng 2: chờ duyệt · tầng 3: handover
+    let text = if pick.op == TypeText { text::write(&ctx, &mut cache).await? } else { None };
+    let out  = browser.act(tab, obs.id, &pick, text).await;  // guard + input thật + settle + observe
+    trace.record(&pick, &out);                          // ghi trước khi dùng observation mới
+    obs = match out { Ok(o) => o.observation, Err(Stale) => browser.observe(tab).await?,
+                      Err(Uncertain) => return stop_and_ask() };
+    if pick.op == Done { if verify(&goal, &obs).await?.passed { break } else { history.note_rejected_done() } }
+}</code></pre>
+    </section>
+
+    <section id="s7" aria-labelledby="h7s">
+      <div class="sh"><span class="sn">§7</span><h2 id="h7s">Thang quyết định &amp; băng tin cậy</h2></div>
+      <p>Dùng lại <code>registry::Bands { act, fallback }</code>. Mỗi backend có ngưỡng riêng vì thang xác suất khác nhau: Jev hosted và Laya được hiệu chỉnh theo cách khác. Giá trị dưới đây là điểm khởi đầu <span class="ev ev-p">đề xuất</span>, sẽ chỉnh theo đường cong Pass^k trên dữ liệu P0/P2.</p>
+      <div class="bands" role="img" aria-label="Băng tin cậy khởi điểm: Jev hosted duyệt dưới 0,25, LLM từ 0,25 đến 0,5, làm từ 0,5. laya-browser duyệt dưới 0,2, LLM từ 0,2 đến 0,6, làm từ 0,6.">
+        <span class="lbl">Jev hosted</span>
+        <div class="bar"><span class="z-rev" style="width:25%">người / dừng</span><span class="z-fb" style="width:25%">LLM chọn</span><span class="z-act" style="width:50%">làm ngay</span></div>
+        <span class="lbl">laya-browser</span>
+        <div class="bar"><span class="z-rev" style="width:20%">người</span><span class="z-fb" style="width:40%">LLM chọn</span><span class="z-act" style="width:40%">làm ngay</span></div>
+        <span></span>
+        <div class="axisrow"><span style="left:0">0</span><span style="left:20%">0,2</span><span style="left:40%">0,4</span><span style="left:60%">0,6</span><span style="left:80%">0,8</span><span style="left:100%">1</span></div>
+      </div>
+      <div class="g3">
+        <div class="box jev"><h4>Spec mới (registry)</h4>
+          <ul class="small">
+            <li><code>browser.operation</code>: choice</li>
+            <li><code>browser.&lt;op&gt;_target</code>: choice, ≤ 255 (hosted) hoặc theo ngân sách (laya)</li>
+            <li><code>browser.done</code>: noul theo từng tiêu chí, state là bằng chứng từ trang</li>
+            <li><code>browser.risk</code>: noul "thao tác có không đảo ngược được không?", <b>chỉ được thêm</b> bước duyệt</li>
+            <li>Các spec này chỉ chạy bên trong <code>browser_task</code> khi đã bật <code>browser.engine = v2</code>, không chạy ở lượt chat thường. Nhờ vậy không phá quy tắc "spec mới ở chế độ shadow, và shadow phải tự bật" trong <code>docs/control-plane.md</code>.</li>
+          </ul></div>
+        <div class="box llm"><h4>Hợp đồng LLM fallback</h4>
+          <p class="small">Input gồm bảng phần tử đã rút gọn, goal, 10 thao tác gần nhất, và top-3 của Jev kèm xác suất. Output là JSON <code>{operation, target, reason}</code>. <code>target</code> phải nằm trong các index đã đưa, sai thì bỏ. Câu trả lời này được lưu làm nhãn để học sau.</p></div>
+        <div class="box hum"><h4>Khi nào hỏi người</h4>
+          <p class="small">Band review. LLM cũng trả BLOCKED. Thao tác tầng 2. Cần đăng nhập, OTP, CAPTCHA. Text helper trả <code>null</code> vì thiếu thông tin. Ở chế độ "step", mọi bước đều chờ người bấm, giống nút "Choose next" trong inspector của jev.</p></div>
+      </div>
+      <div class="note"><p><b>DONE không phải bằng chứng.</b> Khi operation là DONE, Verifier hỏi <code>browser.done</code> cho từng tiêu chí (do agent truyền vào hoặc LLM tách từ goal) trên observation cuối. Nếu có tiêu chí không đạt, bước DONE bị huỷ, ghi vào lịch sử "DONE bị từ chối: thiếu X", và vòng lặp chạy tiếp. Cách này đúng với nguyên tắc "kiểm tra khách quan thắng judge" của JEV.</p></div>
+    </section>
+
+    <section id="s8" aria-labelledby="h8s">
+      <div class="sh"><span class="sn">§8</span><h2 id="h8s">Runtime <code>sen-browser</code></h2></div>
+      <div class="g2">
+        <div class="box eng"><h4>Module</h4>
+<pre><code>src/main.rs      serve (sen-runtime-sdk)
+src/http.rs      /v1/* routes
+src/driver/      trait Driver + CdpTransport (lõi chung)
+  managed.rs     tìm · khởi Chrome riêng · CDP pipe
+  extension.rs   relay CDP qua extension (WS từ daemon)
+src/cdp/         session/tab, isolated world
+src/snapshot/    fast.js (port snapshot.js)
+                 deep.rs (AX + frame, port mini-browser)
+src/exec/        guard · hit-test · Input · select · key
+src/settle.rs    ≤2 rAF/50 ms · combobox ≤200 ms
+src/events.rs    dialog · popup · download · console
+src/live.rs      screencast → SSE
+src/handover.rs  trao quyền theo driver · khoá đọc/ghi
+src/scripts/     hàm JS đã duyệt + hash (chung với extension)</code></pre></div>
+        <div class="box"><h4>Manifest (cần SDK nhận type <code>browser</code>)</h4>
+<pre><code>{ "schemaVersion": 1, "id": "sen-browser",
+  "name": "SenClaw Browser Engine",
+  "type": "browser", "slots": ["browser"],
+  "capabilities": ["browser"], "mode": "service",
+  "platforms": ["darwin-arm64","darwin-x64",
+                "linux-x64","windows-x64"],
+  "entry": { "command": "bin/sen-browser",
+    "args": ["serve","--host","{host}",
+             "--port","{port}","--data-dir","{data_dir}"] },
+  "health": { "path": "/health", "startupTimeoutSecs": 30 },
+  "idleTimeoutSecs": 1800 }</code></pre></div>
+      </div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Route (bearer)</th><th>Mục đích</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            <tr><td><code>POST /v1/sessions</code></td><td>Mở session <code>{driver: managed|extension, profile?, headless?, viewport}</code></td><td>managed: khởi Chrome với <code>--user-data-dir</code> riêng · extension: cần pipe từ daemon đang mở. Viewport mặc định 1120×780</td></tr>
+            <tr><td><code>POST /v1/sessions/{sid}/tabs</code></td><td>Mở tab riêng chạy nền <code>{url}</code></td><td>Bật focus emulation để rAF không bị throttle</td></tr>
+            <tr><td><code>POST /v1/tabs/{tid}/observe</code></td><td>Snapshot → <code>Observation</code></td><td><code>{text_chars, max_candidates, deep: auto|off|force}</code></td></tr>
+            <tr><td><code>POST /v1/tabs/{tid}/act</code></td><td>Thực thi 1 thao tác có guard, settle, trả observation mới</td><td>Body gồm <code>observation_id</code>, <code>{kind, node, value?, key?}</code>, <code>text?</code></td></tr>
+            <tr><td><code>POST /v1/tabs/{tid}/navigate</code> · <code>/read</code> · <code>/screenshot</code></td><td>Điều hướng · markdown/text/AX cho LLM đọc · ảnh cho model vision</td><td>Policy domain kiểm ở daemon trước khi gọi</td></tr>
+            <tr><td><code>GET /v1/tabs/{tid}/live</code></td><td>SSE khung JPEG + meta (url, title, dialog)</td><td>Đi qua proxy stream sẵn có của daemon</td></tr>
+            <tr><td><code>POST|DELETE /v1/sessions/{sid}/handover</code></td><td>Trao quyền cho người, rồi nhận lại</td><td>Khi đang handover, runtime từ chối cả đọc lẫn ghi</td></tr>
+            <tr><td><code>GET /v1/drivers/extension</code> (WS)</td><td>Pipe relay tới extension</td><td>Chỉ daemon mở, khi có task cần driver extension; frame <code>drv</code> đi nguyên văn (§9)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Observation (ví dụ rút gọn)</h3>
+<pre><code>{ "observation_id": 42, "tab_id": "t1",
+  "url": "https://www.google.com/travel/flights?hl=en", "title": "Google Flights",
+  "viewport": { "w": 1120, "h": 780, "scroll_y": 0, "doc_h": 2140 },
+  "text": "Flights\nRound trip\n1\nEconomy\nWhere from?\n…",            // ≤ 6000 ký tự, chỉ phần đang hiển thị
+  "elements": [
+    { "node": 17, "role": "combobox", "label": "Where from?", "value": "San Francisco", "ops": ["TYPE_TEXT","CLICK"] },
+    { "node": 23, "role": "button",   "label": "Search",                                 "ops": ["CLICK"] } ],
+  "controls": ["SCROLL_DOWN", "WAIT"],
+  "coverage": { "frames": 0, "open_shadow_roots": 0, "canvas": false, "omitted": 0 },
+  "timing_ms": { "snapshot": 14 } }</code></pre>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Lỗi của <code>act</code></th><th>Nghĩa</th><th>Daemon làm gì</th></tr></thead>
+          <tbody>
+            <tr><td><code>409 stale_page</code></td><td>Trang đã đổi so với <code>observation_id</code>; chưa có input nào được gửi</td><td>Quan sát lại, quyết định lại. An toàn</td></tr>
+            <tr><td><code>409 target_covered</code></td><td>Hit-test thấy phần tử khác nằm đè lên</td><td>Quan sát lại. Nếu lặp lại thì LLM fallback (đóng overlay)</td></tr>
+            <tr><td><code>422 invalid_target</code></td><td>Node không còn tồn tại, bị disabled, readonly hoặc ẩn</td><td>Quan sát lại</td></tr>
+            <tr><td><code>423 dialog_open</code> · <code>handover_active</code></td><td>Trang đang bị chặn</td><td>Rule xử lý dialog; chờ người</td></tr>
+            <tr><td><code>500 uncertain_mutation</code></td><td>Bị ngắt sau khi có thể đã thay đổi trang (ví dụ <code>&lt;select&gt;</code> đã fire change)</td><td><b>Không retry.</b> Dừng và báo người dùng</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Snapshot hai tầng</h3>
+      <p><b>Nhanh (mặc định):</b> port <code>snapshot.js</code>, chạy trong <code>Page.createIsolatedWorld</code> nên cùng DOM với trang nhưng khác JS heap, và WeakMap danh tính không lộ ra. Tốn 1 CDP call, cỡ ~10–40 ms <span class="ev ev-e">ước tính</span>. Bổ sung thêm việc đi vào shadow root mở, và trả <code>coverage</code> để biết còn thiếu gì.</p>
+      <p><b>Sâu (khi coverage báo có iframe/shadow liên quan, hoặc khi LLM đọc trang):</b> port <code>snapshot.rs</code> của mini-browser, gồm AX tree, ref theo <code>backendNodeId</code>, <code>DOM.getNodesForSubtreeByStyle</code> cho phần tử có <code>cursor:pointer</code>, và gộp theo frame. Chi phí 110–140 ms trên trang nặng <span class="ev ev-m">đo</span>. Chỉ bật khi thật sự cần.</p>
+    </section>
+
+    <section id="s9" aria-labelledby="h9s">
+      <div class="sh"><span class="sn">§9</span><h2 id="h9s">Hai chế độ trình duyệt &amp; các luồng</h2></div>
+      <p>Anh đã chốt (D2): <code>sen-browser</code> chạy được cả trên <b>Chrome riêng</b> do runtime khởi chạy với profile riêng, lẫn trên <b>Chrome của anh</b> qua extension. Hai chế độ là hai <i>driver</i> cắm vào cùng một lõi. Snapshot, guard, executor, settle, events và live view chỉ viết một lần trên <code>CdpTransport</code>. Khác biệt chỉ nằm ở mở tab, attach, handover và dọn dẹp.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th></th><th>Chrome riêng (managed)</th><th>Chrome của anh (extension)</th></tr></thead>
+          <tbody>
+            <tr><td><b>Dùng khi</b></td><td>Việc nền, trang công khai, tài khoản dành riêng cho agent</td><td>Cần phiên đăng nhập của anh, hoặc làm tiếp trên tab anh đang mở</td></tr>
+            <tr><td><b>Profile</b></td><td><code>~/.senclaw/runtime-data/sen-browser/profiles/&lt;tên&gt;</code></td><td>Profile Chrome thật của anh</td></tr>
+            <tr><td><b>Chrome của anh đang đóng</b></td><td>Vẫn chạy (headless)</td><td>Không chạy được</td></tr>
+            <tr><td><b>Kênh CDP</b></td><td>Pipe tới Chrome con (hoặc cổng loopback ngẫu nhiên)</td><td><code>chrome.debugger</code> trong extension, relay qua daemon</td></tr>
+            <tr><td><b>Input</b></td><td colspan="2">Giống nhau: CDP <code>Input.*</code>, là input thật. Không còn sự kiện giả</td></tr>
+            <tr><td><b>Tab của agent</b></td><td>Target nền, focus emulation</td><td>Tab nền trong nhóm "SenClaw" (D9), focus emulation</td></tr>
+            <tr><td><b>Anh thấy gì</b></td><td>Live view SSE trong desktop/web</td><td>Tab trong nhóm SenClaw và thanh "đang được debug" của Chrome; live view tuỳ chọn</td></tr>
+            <tr><td><b>Handover</b></td><td>Mở lại Chrome có cửa sổ, cùng profile</td><td>Detach debugger, đưa tab lên trước; password manager và passkey dùng bình thường</td></tr>
+            <tr><td><b>Rủi ro</b></td><td><span class="tag t-ok">Thấp</span> tách khỏi dữ liệu cá nhân</td><td><span class="tag t-warn">Cao hơn</span> có phiên đăng nhập thật nên policy chặt hơn</td></tr>
+            <tr><td><b>Backend quyết định</b></td><td>Theo <code>auto</code> (§10)</td><td>Mặc định local, coi như domain nhạy cảm</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>9.1 Chọn chế độ cho một task</h3>
+      <ol>
+        <li>Tham số <code>browser</code> của <code>browser_task</code> là <code>managed</code> hoặc <code>extension</code> thì dùng đúng như vậy. Nếu extension chưa kết nối, trả lỗi <code>extension_not_connected</code> kèm hướng dẫn; <b>không</b> tự chuyển sang Chrome riêng vì trạng thái đăng nhập của hai bên khác nhau.</li>
+        <li>Nếu domain có luật riêng (<code>browser.domains</code>, ví dụ <code>mail.google.com → extension</code>) thì theo luật.</li>
+        <li>Còn lại dùng <code>browser.defaultDriver</code> (D10, khuyến nghị: Chrome riêng).</li>
+        <li>Chrome riêng gặp tường đăng nhập: hiện thẻ hỏi "Đăng nhập vào Chrome riêng (một lần)" hoặc "Chạy lại trên Chrome của anh" (khi extension đang kết nối).</li>
+      </ol>
+      <p class="small muted">LLM chính đặt <code>browser: "extension"</code> khi anh nói kiểu "trên Chrome của tôi", "bằng tài khoản của tôi". Skill mới ghi rõ quy tắc này.</p>
+
+      <h3>9.2 Luồng A: Chrome riêng</h3>
+      <ol class="steps">
+        <li><div><b>Mở session.</b> Daemon gọi <code>POST /v1/sessions {driver:"managed", profile:"default", headless:true}</code>.</div></li>
+        <li><div><b>Khởi Chrome.</b> Runtime tìm trình duyệt theo thứ tự: setting <code>browser.chromePath</code>, Chrome hệ thống, Chromium/Edge; không có thì báo thiếu. Mỗi profile chỉ một tiến trình Chrome (Chrome khoá user-data-dir). Cờ: <code>--user-data-dir</code>, <code>--remote-debugging-pipe</code>, <code>--headless=new</code>, không thêm cờ automation (bài học <code>stealth.rs</code> của mini-browser).</div></li>
+        <li><div><b>Mở tab.</b> <code>Target.createTarget {background:true}</code>, attach dạng flatten, tạo isolated world, bật focus emulation, viewport 1120×780, rồi điều hướng.</div></li>
+        <li><div><b>Vòng lặp.</b> Như §6.</div></li>
+        <li><div><b>Kết thúc.</b> Đóng target. Chrome tự tắt sau 10 phút không có task. Cookie và phiên đăng nhập ở lại trong profile cho lần sau.</div></li>
+      </ol>
+
+      <h3>9.3 Luồng B: Chrome của anh qua extension</h3>
+      <div class="path" role="img" aria-label="Đường đi của lệnh CDP ở chế độ extension: sen-browser, daemon, extension, tab trong Chrome của anh">
+        <span class="pn eng">sen-browser</span><span class="pa">⇄ WS /v1/drivers/extension</span>
+        <span class="pn">daemon</span><span class="pa">⇄ WS /browser/ext · Origin + token</span>
+        <span class="pn hum">extension (service worker)</span><span class="pa">⇄ chrome.debugger</span>
+        <span class="pn hum">tab trong Chrome của anh</span>
+      </div>
+      <p><b>Ghép cặp lần đầu</b></p>
+      <ol class="steps">
+        <li><div>Anh cài extension (zip trên GitHub release), mở side panel, bấm "Kết nối SenClaw".</div></li>
+        <li><div>Extension mở <code>ws://127.0.0.1:18789/browser/ext</code>. Chrome tự gắn <code>Origin: chrome-extension://&lt;id&gt;</code>; trang web không giả được header này.</div></li>
+        <li><div>Daemon thấy id chưa ghép cặp thì sinh mã 6 số, hiện <b>cả</b> trên side panel <b>và</b> trong desktop/web: "Extension &lt;id&gt; muốn điều khiển Chrome của anh. Mã 482913. [Cho phép] [Từ chối]".</div></li>
+        <li><div>Anh so hai mã rồi bấm Cho phép. Daemon lưu <code>{ext_id, hash(token)}</code> và gửi token; extension cất token trong <code>chrome.storage.local</code>.</div></li>
+        <li><div>Các lần sau extension gửi <code>hello {ext_id, token, version, scripts_hash, chrome}</code>. Daemon kiểm Origin, token và phiên bản bộ script; khớp thì báo "Chrome của anh: đã kết nối". Daemon giữ kết nối này; runtime chỉ được nối pipe khi có task, nên vẫn tự dừng khi rảnh.</div></li>
+      </ol>
+      <p><b>Một task</b></p>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 900 556" role="img" aria-labelledby="ext-t ext-d">
+            <title id="ext-t">Một task chạy qua extension</title>
+            <desc id="ext-d">Bốn đường đời: daemon, sen-browser, extension và tab trong Chrome của anh. Mở session, mở tab trong nhóm SenClaw, attach debugger, lặp observe và act qua allowlist, rồi detach và báo side panel.</desc>
+            <defs><marker id="ah4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <rect class="bx" x="25" y="12" width="170" height="40" rx="8"/><text class="t" x="110" y="37" text-anchor="middle">Daemon · Browser Loop</text>
+            <rect class="bx-eng" x="245" y="12" width="170" height="40" rx="8"/><text class="t" x="330" y="37" text-anchor="middle">sen-browser</text>
+            <rect class="bx-hum" x="475" y="12" width="170" height="40" rx="8"/><text class="t" x="560" y="37" text-anchor="middle">Extension (SW)</text>
+            <rect class="bx-hum" x="705" y="12" width="170" height="40" rx="8"/><text class="t" x="790" y="37" text-anchor="middle">Tab · Chrome của anh</text>
+            <g class="ct"><line x1="110" y1="52" x2="110" y2="548"/><line x1="330" y1="52" x2="330" y2="548"/><line x1="560" y1="52" x2="560" y2="548"/><line x1="790" y1="52" x2="790" y2="548"/></g>
+            <rect class="ct" x="18" y="240" width="864" height="190" rx="6"/>
+            <text class="tm" x="28" y="256">mỗi bước</text>
+            <g class="ar" marker-end="url(#ah4)">
+              <line x1="110" y1="86" x2="328" y2="86"/>
+              <line x1="330" y1="120" x2="558" y2="120"/>
+              <line x1="560" y1="154" x2="788" y2="154"/>
+              <line x1="560" y1="188" x2="788" y2="188"/>
+              <line x1="330" y1="222" x2="558" y2="222"/>
+              <line x1="110" y1="276" x2="328" y2="276"/>
+              <line x1="330" y1="310" x2="558" y2="310"/>
+              <line x1="560" y1="344" x2="788" y2="344"/>
+              <line class="dash" x1="560" y1="378" x2="332" y2="378"/>
+              <line class="dash" x1="330" y1="412" x2="112" y2="412"/>
+              <line x1="330" y1="462" x2="558" y2="462"/>
+              <line x1="560" y1="496" x2="788" y2="496"/>
+              <line x1="110" y1="530" x2="558" y2="530"/>
+            </g>
+            <text class="ts" x="220" y="79" text-anchor="middle">POST /v1/sessions (extension)</text>
+            <text class="ts" x="445" y="113" text-anchor="middle">open_tab {url} (qua daemon)</text>
+            <text class="ts" x="675" y="147" text-anchor="middle">tabs.create · nhóm SenClaw</text>
+            <text class="ts" x="675" y="181" text-anchor="middle">debugger.attach (hiện thanh debug)</text>
+            <text class="ts" x="445" y="215" text-anchor="middle">cdp: isolated world · focus</text>
+            <text class="ts" x="220" y="269" text-anchor="middle">act {obs_id, op, node, text?}</text>
+            <text class="ts" x="445" y="303" text-anchor="middle">cdp: guard · Input.* · snapshot</text>
+            <text class="ts" x="675" y="337" text-anchor="middle">allowlist ✓ → sendCommand</text>
+            <text class="ts" x="445" y="371" text-anchor="middle">kết quả · sự kiện</text>
+            <text class="ts" x="220" y="405" text-anchor="middle">Observation mới (sau settle)</text>
+            <text class="ts" x="445" y="455" text-anchor="middle">detach {tab}</text>
+            <text class="ts" x="675" y="489" text-anchor="middle">debugger.detach · tab giữ lại</text>
+            <text class="ts" x="220" y="523" text-anchor="middle">ctl: task_done → side panel</text>
+          </svg>
+        </div>
+        <figcaption>Frame <code>drv</code> đi qua daemon nguyên văn; daemon chỉ kiểm quyền và chuyển tiếp. Extension kiểm allowlist trước mọi <code>sendCommand</code>. Sau task, tab được giữ lại để anh xem kết quả; tab rảnh 30 phút thì bị đóng.</figcaption>
+      </figure>
+      <p><b>Giao tab của anh cho agent.</b> Trong side panel (hoặc menu chuột phải) chọn "Giao tab này cho SenClaw": tab chuyển vào nhóm SenClaw và được đánh dấu là tab sở hữu. Agent thấy nó qua <code>browser_tabs</code> và chạy <code>browser_task {tab_id}</code>. Thu hồi bằng nút "Thu hồi" hoặc kéo tab ra khỏi nhóm; extension detach ngay và bỏ tab khỏi danh sách.</p>
+
+      <h3>9.4 Handover (đăng nhập, OTP, CAPTCHA)</h3>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th></th><th>Chrome riêng</th><th>Chrome của anh</th></tr></thead>
+          <tbody>
+            <tr><td><b>Trao quyền</b></td><td>Tắt Chrome headless, mở lại có cửa sổ cùng profile, đúng URL</td><td><code>debugger.detach</code> (thanh debug tắt), đưa tab và cửa sổ lên trước</td></tr>
+            <tr><td><b>Agent trong lúc chờ</b></td><td>Runtime từ chối đọc/ghi, live view dừng</td><td>Không còn quyền CDP vào tab vì đã detach</td></tr>
+            <tr><td><b>Anh báo xong</b></td><td>Nút "Xong" trong desktop/web</td><td>Nút "Xong" trong side panel</td></tr>
+            <tr><td><b>Tiếp tục</b></td><td>Quan sát lại (observation mới)</td><td>Attach lại, tạo isolated world mới, quan sát lại</td></tr>
+            <tr><td><b>Hết hạn</b></td><td colspan="2">15 phút, tự gia hạn khi thẻ chờ còn hiện; hết hạn thì trả quyền và báo (bài học mini-browser)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>9.5 Anh và agent dùng chung trình duyệt</h3>
+      <ul>
+        <li>Agent chỉ attach vào tab nó tạo hoặc tab anh giao. Luật này nằm <b>trong extension</b>: mọi lệnh tới tab khác bị từ chối, dù runtime có gửi.</li>
+        <li>Anh bấm vào tab agent đang chạy: agent nhường, tạm dừng, side panel hiện [Tiếp tục] [Huỷ]. Guard freshness bắt nốt mọi thay đổi còn lại.</li>
+        <li>Anh bấm "Cancel" trên thanh debug: nhận <code>onDetach(canceled_by_user)</code>, tạm dừng và hỏi. Không bao giờ tự attach lại.</li>
+        <li>Anh đóng tab agent: task kết thúc với <code>cancelled_by_user</code>.</li>
+        <li>Mỗi agent một tab, tối đa 12, tab rảnh 30 phút bị đóng (giữ nguyên <code>TabGroupController</code>).</li>
+      </ul>
+
+      <h3>9.6 Sự cố &amp; khôi phục</h3>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Sự cố</th><th>Chế độ</th><th>Phát hiện</th><th>Xử lý</th></tr></thead>
+          <tbody>
+            <tr><td>Extension mất kết nối (Chrome đóng, service worker khởi động lại)</td><td>extension</td><td>WS đóng, hoặc lỡ 3 heartbeat 15 s</td><td>Đang thao tác thì coi là <code>uncertain_mutation</code> và dừng. Nếu không, chờ kết nối lại 30 s rồi dừng với <code>extension_disconnected</code></td></tr>
+            <tr><td>Anh bấm Cancel trên thanh debug</td><td>extension</td><td><code>onDetach: canceled_by_user</code></td><td>Tạm dừng, hỏi có tiếp tục không</td></tr>
+            <tr><td>Anh đóng tab agent</td><td>extension</td><td><code>tabs.onRemoved</code></td><td>Kết thúc task, ghi trace</td></tr>
+            <tr><td>Chrome riêng crash</td><td>managed</td><td>Pipe EOF</td><td>Khởi động lại và mở lại URL cuối. Mutation đang dở thì dừng, không làm lại</td></tr>
+            <tr><td>Profile đang bị khoá</td><td>managed</td><td>Lỗi khởi chạy (SingletonLock)</td><td>Báo rõ tiến trình đang giữ khoá; không tự xoá khoá</td></tr>
+            <tr><td>Không attach được (trang <code>chrome://</code>, Web Store, chính sách doanh nghiệp)</td><td>extension</td><td><code>debugger.attach</code> báo lỗi</td><td>BLOCKED kèm lý do, gợi ý chạy bằng Chrome riêng</td></tr>
+            <tr><td>Bộ script của extension lệch phiên bản runtime</td><td>extension</td><td><code>scripts_hash</code> trong <code>hello</code></td><td>Từ chối driver, nhắc cập nhật extension</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>9.7 Giao thức relay &amp; allowlist</h3>
+<pre><code>// mọi frame trên /browser/ext: { "ch": "ctl" | "drv", … }
+
+// ctl: daemon ⇄ extension (ghép cặp, trạng thái, duyệt, side panel)
+{ "ch":"ctl", "t":"hello", "ext":"&lt;id&gt;", "token":"…", "v":"0.2.0", "scripts":"sha256:9f…", "chrome":"154.0" }
+{ "ch":"ctl", "t":"approval", "task":"brw_…", "step":7, "action":"CLICK [12] Thanh toán" }
+
+// drv: runtime ⇄ extension (daemon chuyển tiếp nguyên văn)
+{ "ch":"drv", "id":41, "t":"open_tab", "url":"https://…", "agent":"a1" }    →  { "ch":"drv", "id":41, "ok":{ "tab":1873 } }
+{ "ch":"drv", "id":42, "t":"attach", "tab":1873 }
+{ "ch":"drv", "id":43, "t":"cdp", "tab":1873, "session":null, "method":"Runtime.callFunctionOn",
+  "params":{ "functionDeclaration":"…", "executionContextId":7, "arguments":[…], "returnByValue":true } }
+                                                                              →  { "ch":"drv", "id":43, "err":"blocked_method" }   // nếu ngoài allowlist
+{ "ch":"drv", "t":"event", "tab":1873, "method":"Page.javascriptDialogOpening", "params":{…} }
+{ "ch":"drv", "t":"detached", "tab":1873, "reason":"canceled_by_user" }
+{ "ch":"drv", "t":"user_active", "tab":1873 }      { "ch":"drv", "t":"tab_closed", "tab":1873 }
+{ "ch":"drv", "t":"shared_tab", "tab":2210, "url":"https://…" }      // anh giao tab</code></pre>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Domain CDP</th><th>Cho phép</th><th>Chặn</th></tr></thead>
+          <tbody>
+            <tr><td><code>Page</code></td><td>enable, navigate, reload, getFrameTree, createIsolatedWorld, handleJavaScriptDialog, captureScreenshot, startScreencast, stopScreencast, screencastFrameAck</td><td>addScriptToEvaluateOnNewDocument và phần còn lại</td></tr>
+            <tr><td><code>Runtime</code></td><td>enable; callFunctionOn trong isolated world của SenClaw, với hàm có hash nằm trong danh sách build</td><td>evaluate, compileScript, runScript, mọi hàm lạ</td></tr>
+            <tr><td><code>Input</code></td><td>dispatchMouseEvent, dispatchKeyEvent, insertText</td><td>—</td></tr>
+            <tr><td><code>DOM</code> · <code>Accessibility</code> · <code>DOMSnapshot</code></td><td>getContentQuads, describeNode, resolveNode, getNodesForSubtreeByStyle, getFullAXTree, captureSnapshot</td><td>setFileInputFiles (MVP chưa có upload), setAttributeValue, setOuterHTML…</td></tr>
+            <tr><td><code>Emulation</code></td><td>setFocusEmulationEnabled</td><td>Các lệnh còn lại</td></tr>
+            <tr><td><code>Target</code></td><td>setAutoAttach {flatten:true} cho iframe OOPIF (Chrome ≥ 125)</td><td>createTarget, attachToTarget ra ngoài tab sở hữu</td></tr>
+            <tr><td><code>Network</code> · <code>Storage</code> · <code>Fetch</code> · <code>Debugger</code> · <code>IO</code> …</td><td>—</td><td>Tất cả: cookie, storage, chặn hoặc sửa request</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note bad"><p><b>Vì sao allowlist phải nằm trong extension.</b> <code>chrome.debugger</code> mở cả domain <code>Network</code> và <code>Storage</code>, tức là đọc được cookie của tab. Chặn ngay trong extension (không chỉ trong runtime) nghĩa là dù daemon hay runtime bị chiếm quyền, cũng không đọc được cookie hay chạy JS tuỳ ý trên trang đang đăng nhập. Script chỉ chạy qua <code>Runtime.callFunctionOn</code> trong isolated world của SenClaw, và extension so SHA-256 của <code>functionDeclaration</code> với danh sách build sẵn. Runtime áp cùng allowlist cho Chrome riêng để hai driver hành xử giống nhau.</p></div>
+      <p class="small muted">Manifest v0.2: thêm quyền <code>debugger</code>; bỏ content-script executor; không xin <code>cookies</code>, <code>history</code>, <code>bookmarks</code>. Yêu cầu tối thiểu Chrome 125 (session phẳng cho iframe OOPIF).</p>
+    </section>
+
+    <section id="s10" aria-labelledby="h10s">
+      <div class="sh"><span class="sn">§10</span><h2 id="h10s">Encoder &amp; backend quyết định</h2></div>
+      <div class="g2">
+        <div class="box jev"><h4>jev-full (TypeSafe Jev hosted)</h4>
+<pre><code>state: { page:{url,title,text≤6000},
+         elements:[…], recent_actions:[-10:] }
+questions.click_target.criteria["7"] =
+  { element: "[7] Search", role: "button",
+    current_value: "" }
+instructions: { goal, operation, rules }</code></pre>
+          <p class="small">Giới hạn: choice ≤ 255 lựa chọn; state + câu hỏi dài nhất ≤ 32K. Đo ~5,3k token/request trên Flights.</p></div>
+        <div class="box jev"><h4>laya-v3 (laya-browser local)</h4>
+<pre><code>state: { page:{url,title,text≤1200},
+         recent_actions:[…] }        // bỏ elements
+criteria["7"] = "[7] Search (button)"
+criteria["2"] = "[2] Where from? (combobox)
+               = 'San Francisco'"</code></pre>
+          <p class="small">Giới hạn: head_max_len 768 token chứa tất cả lựa chọn; mỗi lựa chọn ≤ 48 token; ≤ 64 hàng (câu hỏi) mỗi request. Nhãn cắt 50 ký tự, value cắt 30 ký tự, đúng như lúc train.</p></div>
+      </div>
+      <h3>Candidate budget (chủ yếu cho laya)</h3>
+      <p>Trang như Google Flights có ít nhất 56 ứng viên CLICK trong viewport (bước bấm "Done" của jev-ultrafast chọn phần tử [56]), vượt ngân sách khoảng 40–60 dòng của laya-v3 <span class="ev ev-e">ước tính</span>. Budgeter xếp hạng rồi cắt:</p>
+      <ol>
+        <li>Phần tử trong dialog/popup đang mở, và phần tử vừa xuất hiện sau thao tác trước (dấu <code>is_new</code>).</li>
+        <li>Ô nhập, combobox, nút submit của form đang được điền.</li>
+        <li>Mức khớp từ vựng giữa goal và nhãn/giá trị (BM25 nhẹ, có hỗ trợ tiếng Việt không dấu).</li>
+        <li>Bỏ trùng (cùng role + nhãn), bỏ link điều hướng chung (footer, menu) khi goal không nhắc tới.</li>
+      </ol>
+      <p>Nếu đã cắt bớt (<code>omitted &gt; 0</code>) mà Jev trả BLOCKED hoặc độ tin cậy thấp: gửi thêm request với trang ứng viên kế tiếp, hoặc chuyển LLM tier vì LLM thấy được toàn bảng. Phương án "giải đấu" (chia 200 ứng viên thành 4 câu hỏi trong 1 request, tận dụng giới hạn 64 hàng) cần đo latency CPU ở P0 trước khi chọn.</p>
+      <h3>Chọn backend theo request</h3>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Chế độ <code>browser.decision.backend</code></th><th>Hành vi</th></tr></thead>
+          <tbody>
+            <tr><td><code>auto</code> <span class="tag t-ok">mặc định</span></td><td>Domain nhạy cảm (mail, ngân hàng, y tế, chính phủ, IP nội bộ, localhost) dùng laya local. Domain khác dùng Jev hosted <i>nếu</i> đã có key và domain nằm trong allowlist; nếu không thì dùng local.</td></tr>
+            <tr><td><code>local</code></td><td>Luôn dùng <code>laya-browser</code> qua <code>sen-sysone</code> (<code>model: "laya-browser"</code>, nạp khi cần).</td></tr>
+            <tr><td><code>hosted</code></td><td>Luôn dùng Jev hosted. Vẫn áp dụng che PII (§12).</td></tr>
+            <tr><td><code>llm-only</code> / <code>SENCLAW_JEV_OFF=1</code></td><td>Không gọi decision model. LLM chọn trên cùng bảng phần tử. Đây là baseline để ablation.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">Tập operation được version theo từng backend. laya-browser được train với 8 operation nên giữ nguyên 8. <code>PRESS_KEY</code>, <code>GO_BACK</code>, <code>SWITCH_TAB</code> chỉ bật cho hosted và LLM tier cho tới khi laya được fine-tune lại (P6).</p>
+    </section>
+
+    <section id="s11" aria-labelledby="h11s">
+      <div class="sh"><span class="sn">§11</span><h2 id="h11s">Bốn vai trò của LLM</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Vai trò</th><th>Khi nào</th><th>Model gợi ý</th><th>Hợp đồng output</th></tr></thead>
+          <tbody>
+            <tr><td><span class="tag t-llm">Viết chữ</span></td><td>Operation là TYPE_TEXT</td><td>Model nhỏ và nhanh: local qua sen-mlx/llama.cpp, hoặc Mercury 2.5 / Gemini Flash Lite. Setting <code>browser.textModel</code></td><td><code>{"text": string|null}</code>, ≤ 2000 ký tự, không kèm lời bình. <code>null</code> nghĩa là hỏi người dùng. Không bao giờ bịa thông tin cá nhân</td></tr>
+            <tr><td><span class="tag t-llm">Fallback</span></td><td>Band fallback, BLOCKED, không tiến triển, bị che lặp lại</td><td>Model chat của agent. Setting <code>browser.fallbackModel</code></td><td><code>{operation, target, reason}</code>; target phải là index đã đưa</td></tr>
+            <tr><td><span class="tag t-llm">Xác minh</span></td><td>DONE có tiêu chí khó kiểm bằng Jev noul</td><td>Nên khác họ với model fallback (JEV B16)</td><td>Chỉ được <i>hạ</i> kết quả, không được nâng</td></tr>
+            <tr><td><span class="tag t-llm">Đọc trang</span></td><td><code>browser_task</code> có <code>question</code>, hoặc agent gọi <code>browser_read</code></td><td>Model chat của agent, hoặc model rẻ nếu chỉ trích xuất</td><td>Câu trả lời kèm trích dẫn đoạn text của trang; số liệu phải tìm lại được trong text</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Chưa có setting "fast model" trong daemon (đã kiểm <code>src/</code>). Cần thêm hai key <code>browser.textModel</code> và <code>browser.fallbackModel</code>. Mặc định: dùng model local đầu tiên có khả năng chat nếu có, nếu không thì dùng model chat hiện tại.</p>
+    </section>
+
+    <section id="s12" aria-labelledby="h12s">
+      <div class="sh"><span class="sn">§12</span><h2 id="h12s">Bảo mật &amp; quyền</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Tầng</th><th>Ví dụ</th><th>Xử lý</th></tr></thead>
+          <tbody>
+            <tr><td><span class="tag t-ok">0 · tự làm</span></td><td>Cuộn, chờ, mở tab/bộ lọc/link cùng domain, gõ vào ô tìm kiếm</td><td>Làm ngay, ghi trace</td></tr>
+            <tr><td><span class="tag t-jev">1 · tự làm, ghi rõ</span></td><td>Gõ vào ô form thường, chọn option, submit form GET/tìm kiếm</td><td>Làm, hiện trên live view</td></tr>
+            <tr><td><span class="tag t-warn">2 · cần duyệt</span></td><td>Submit form POST không phải tìm kiếm; nút có nhãn kiểu mua, thanh toán, đặt, gửi, đăng, xoá, huỷ, xác nhận, đăng ký (có bản tiếng Việt); upload; download; mở domain khác bằng popup</td><td>Dừng, hiện thẻ duyệt kèm ảnh vùng phần tử. Hết hạn thì huỷ</td></tr>
+            <tr><td><span class="tag t-bad">3 · không bao giờ</span></td><td>Trường mật khẩu, OTP, CVV, số thẻ; đăng nhập, 2FA, CAPTCHA</td><td>Handover cho người. Agent không đọc và không ghi trong lúc đó (bài học mini-browser)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="g2">
+        <div class="box bad"><h4>Luật cứng</h4>
+          <ul class="small">
+            <li>Text của trang là dữ liệu không tin cậy. Prompt nói rõ điều này, và bộ bẫy S4 kiểm prompt injection.</li>
+            <li>Output của model không bao giờ trở thành selector, toạ độ, JS hay lệnh shell. <code>execute_js</code> bị gỡ khỏi bề mặt của agent.</li>
+            <li>Tầng rủi ro do code quyết định. <code>browser.risk</code> chỉ được <i>thêm</i> bước duyệt.</li>
+            <li>Không retry mutation. Chỉ thao tác trên tab mà session tự tạo ra.</li>
+          </ul></div>
+        <div class="box jev"><h4>Quyền riêng tư khi dùng Jev hosted</h4>
+          <ul class="small">
+            <li>Mặc định dùng local. Hosted chỉ khi đã có key và domain nằm trong allowlist.</li>
+            <li>Trước khi gửi: che email, số điện thoại, dãy số dài (thẻ, CCCD) trong text và value. Snapshot đã bỏ sẵn <code>password/file/hidden</code>.</li>
+            <li>Trace chỉ lưu metadata. Input của decision chỉ ghi khi bật <code>recordDecisionInputs</code>. Trường nhạy cảm ghi dạng "đã gõ (6 ký tự, ẩn)".</li>
+          </ul></div>
+        <div class="box eng"><h4>Cô lập trình duyệt</h4>
+          <ul class="small">
+            <li>Profile riêng ở <code>~/.senclaw/runtime-data/sen-browser/profiles/&lt;tên&gt;</code>. Chrome ≥ 136 bắt buộc user-data-dir riêng khi bật remote debugging.</li>
+            <li>Ưu tiên <code>--remote-debugging-pipe</code> (không mở cổng TCP). Nếu thư viện CDP không hỗ trợ thì dùng cổng loopback ngẫu nhiên. Cổng CDP không bao giờ lộ ra client.</li>
+            <li>Chạy nền headless; khi handover mới mở cửa sổ thật, cùng profile.</li>
+            <li>Chế độ extension có phiên đăng nhập thật nên chặt hơn: ghép cặp và kiểm Origin, chỉ tab sở hữu, allowlist lệnh CDP và script nằm ngay trong extension, backend quyết định mặc định là local (§9).</li>
+          </ul></div>
+        <div class="box hum"><h4>Tuân thủ điều khoản site</h4>
+          <p class="small">Giữ nguyên chính sách mini-browser: X/Twitter và Meta cấm tự động hoá khi đã đăng nhập, nên mặc định chặn thao tác tầng ≥ 1 trên các domain này nếu người dùng chưa bật riêng. Không giả mạo fingerprint bằng JS.</p></div>
+      </div>
+    </section>
+
+    <section id="s13" aria-labelledby="h13s">
+      <div class="sh"><span class="sn">§13</span><h2 id="h13s">Bề mặt tool cho agent</h2></div>
+      <p>Từ ~30 tool xuống 9. Agent làm việc ở mức <i>mục tiêu</i>. Các tool mức bước chỉ để LLM xử lý thủ công khi cần.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Tool</th><th>Làm gì</th><th>Thay cho</th></tr></thead>
+          <tbody>
+            <tr><td><code>browser_task</code></td><td>Chạy vòng lặp tới khi DONE (đã xác minh), BLOCKED, cần người, hoặc hết budget. Tham số <code>browser: auto | managed | extension</code> và <code>tab_id?</code> (tab anh đã giao). Trả kết quả, câu trả lời, bằng chứng, thống kê, trace_id</td><td>click, type, select, scroll, wait, fill_form, click_and_wait…</td></tr>
+            <tr><td><code>browser_open</code></td><td>Mở URL trong tab riêng, trả tóm tắt trang</td><td>navigate, new_tab</td></tr>
+            <tr><td><code>browser_read</code></td><td>Markdown/text/links/table, hoặc trả lời <code>question</code> dựa trên trang</td><td>extract_text/links/table/structured</td></tr>
+            <tr><td><code>browser_look</code></td><td>Bảng phần tử rút gọn (giống bảng Jev nhìn thấy)</td><td>snapshot</td></tr>
+            <tr><td><code>browser_do</code></td><td>Một bước có guard <code>{operation, target, text?}</code>, trả bảng mới</td><td>click, type, hover, press_key</td></tr>
+            <tr><td><code>browser_tabs</code></td><td>Liệt kê, chuyển, đóng tab của agent ở cả hai chế độ, gồm tab anh giao qua extension</td><td>list/switch/close_tab</td></tr>
+            <tr><td><code>browser_screenshot</code></td><td>Ảnh chụp cho model vision (canvas, biểu đồ)</td><td>screenshot</td></tr>
+            <tr><td><code>browser_handover</code></td><td>Trao quyền cho người (đăng nhập, CAPTCHA), chờ xong</td><td>mới</td></tr>
+            <tr><td><code>browser_search</code></td><td>Tìm kiếm bằng tab tạm, trả kết quả có cấu trúc</td><td>search (giữ lại)</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre><code>// gọi
+{ "goal": "Tìm vé một chiều Zürich → London ngày 20/09/2026, 1 người lớn, hạng phổ thông. Dừng khi thấy danh sách chuyến.",
+  "url": "https://www.google.com/travel/flights?hl=en",
+  "question": "Chuyến bay thẳng rẻ nhất là chuyến nào, giá bao nhiêu?",
+  "done_criteria": ["Đang ở trang kết quả", "Đi Zürich, đến London", "Ngày 20/09"],
+  "browser": "auto", "max_steps": 40 }
+// trả về (ví dụ minh hoạ)
+{ "status": "done", "driver": "managed", "url": "https://www.google.com/travel/flights/search?tfs=…",
+  "answer": "easyJet ZRH → LGW 16:45–17:35, bay thẳng, từ 216 USD",
+  "evidence": [ { "criterion": "Đi Zürich, đến London", "verdict": true, "p": 0.97 } ],
+  "stats": { "steps": 11, "elapsed_ms": 7400, "decisions": 17, "llm_calls": 3, "fallbacks": 0, "approvals": 0 },
+  "trace_id": "brw_01J…" }</code></pre>
+      <p class="small muted">Crawl sâu (<code>browser_crawl</code>) tạm giữ implementation cũ qua HTTP fetch và chuyển sang runtime ở P6. Skill <code>agent-browser</code> (391 dòng) được viết lại ngắn: khi nào dùng <code>browser_task</code>, khi nào dùng <code>look/do</code>.</p>
+    </section>
+
+    <section id="s14" aria-labelledby="h14s">
+      <div class="sh"><span class="sn">§14</span><h2 id="h14s">Giao diện (desktop &amp; web)</h2></div>
+      <div class="g3">
+        <div class="box"><h4>Live view</h4><p class="small">Khung SSE từ <code>/api/browser/tabs/{id}/live</code>. Screencast chỉ phát khi trang render (~10 fps khi có chuyển động, 0 khi đứng yên), như mini-browser.</p></div>
+        <div class="box"><h4>Dòng bước</h4><p class="small">Mỗi bước hiện: operation, phần tử, p(op) × p(target), band, ai quyết định (Jev/LLM/người), độ trễ. Bấm vào một bước để xem top-3 lựa chọn.</p></div>
+        <div class="box"><h4>Duyệt &amp; bàn giao</h4><p class="small">Thẻ duyệt cho thao tác tầng 2 kèm ảnh vùng phần tử. Nút "Tôi làm" để handover, "Tạm dừng", "Từng bước".</p></div>
+        <div class="box"><h4>Cài đặt</h4><p class="small">Chế độ mặc định và luật domain → chế độ, backend quyết định, model viết chữ và model fallback, ngưỡng band theo backend, allowlist hosted, domain nhạy cảm, profile, headless.</p></div>
+        <div class="box"><h4>Side panel extension</h4><p class="small">Trạng thái kết nối và ghép cặp, tab agent đang chạy, duyệt thao tác tầng 2 ngay trong Chrome, nút "Xong" khi handover, "Giao tab này cho SenClaw" và "Thu hồi".</p></div>
+      </div>
+    </section>
+
+    <section id="s15" aria-labelledby="h15s">
+      <div class="sh"><span class="sn">§15</span><h2 id="h15s">Đánh giá</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Bộ</th><th>Nội dung</th><th>Mục đích</th></tr></thead>
+          <tbody>
+            <tr><td><b>S1</b> laya-browser 16</td><td>16 task thật của cklxx/laya-browser (books.toscrape, quotes, HN, the-internet, Wikipedia, arXiv, phân trang, Google Flights), 3 lần/task</td><td>So sánh với 62% đã công bố; gồm các ca khó (autocomplete, phân trang)</td></tr>
+            <tr><td><b>S2</b> fixture local</td><td>Fixture khách sạn/research của jev (MIT) + trang bẫy tự viết: phần tử bị thay, overlay, animation, combobox chậm, <code>&lt;select&gt;</code> gây điều hướng, iframe, shadow DOM</td><td>Kiểm guard và settle một cách tất định, chạy trong CI</td></tr>
+            <tr><td><b>S3</b> tiếng Việt, chỉ đọc</td><td>10–15 task: tỷ giá Vietcombank, giá vàng SJC, thời tiết, Wikipedia tiếng Việt, mở bài VnExpress theo chủ đề, lọc sách Tiki (không mua)…</td><td>Đo trên site thật mà người dùng SenClaw hay dùng</td></tr>
+            <tr><td><b>S4</b> an toàn</td><td>Prompt injection trong text trang, nút "Mua ngay"/"Xoá" giả, form thanh toán, trường mật khẩu, dialog confirm</td><td>Yêu cầu 0 thao tác trái phép</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><b>Chỉ số:</b> Pass@1, Pass^3, median/p95 thời gian (đo từ Việt Nam), số bước, số request quyết định, số lượt LLM, token, chi phí cho mỗi task thành công, số lần fallback/duyệt/handover, tỉ lệ stale, số thao tác trái phép. Checker độc lập với DONE, viết thành predicate trên observation cuối (URL, giá trị trường, text).</p>
+      <p>S1–S4 chạy trên <b>cả hai driver</b>. Ở chế độ extension dùng một profile Chrome thử nghiệm có cài extension, không dùng profile thật của anh. S2 thêm các ca riêng của extension: bấm Cancel trên thanh debug, đóng tab giữa chừng, mất kết nối service worker, người dùng bấm vào tab đang chạy.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Cổng</th><th>Điều kiện qua</th></tr></thead>
+          <tbody>
+            <tr><td><b>G0</b></td><td>Test offline: contract encoder, validate, guard, policy, không retry mutation; guard check trên fixture. 100%</td></tr>
+            <tr><td><b>G1</b></td><td>S2 đạt 100%; S4 có 0 thao tác trái phép</td></tr>
+            <tr><td><b>G2</b></td><td>So ghép cặp với luồng cũ trên S1 + S3 (McNemar): tỉ lệ thành công không thấp hơn, median thời gian ≤ ⅓ <span class="ev ev-p">đề xuất</span></td></tr>
+            <tr><td><b>G3</b></td><td>Dùng thật 1 tuần sau flag, không có sự cố an toàn</td></tr>
+            <tr><td><b>G4</b></td><td>Đổi mặc định sang engine mới; bản kế tiếp gỡ legacy</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s16" aria-labelledby="h16s">
+      <div class="sh"><span class="sn">§16</span><h2 id="h16s">Thay luồng cũ</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Thành phần cũ</th><th>Số phận</th><th>Thay bằng</th></tr></thead>
+          <tbody>
+            <tr><td><code>src/mcp/browser_server.rs</code> (~30 tool)</td><td><span class="tag t-bad">Gỡ</span></td><td>9 tool trong core server (§13), gọi Browser Loop</td></tr>
+            <tr><td><code>src/browser/{bridge,protocol,types,tab_registry}.rs</code></td><td><span class="tag t-bad">Gỡ</span></td><td>Client HTTP tới runtime <code>browser</code> + proxy <code>/api/browser/*</code></td></tr>
+            <tr><td><code>src/browser/{crawl_engine,html_compressor}.rs</code></td><td><span class="tag t-warn">Chuyển</span></td><td><code>browser_read</code> (markdown) · crawl chuyển sang runtime ở P6</td></tr>
+            <tr><td><code>src/gateway/websocket_gateway/browser.rs</code></td><td><span class="tag t-warn">Thay</span></td><td>Route <code>/browser/ext</code>: ghép cặp, kiểm Origin + token; daemon giữ kết nối và nối pipe vào runtime khi có task</td></tr>
+            <tr><td>Repo <code>senclaw-extension</code></td><td><span class="tag t-warn">Viết lại</span></td><td>v0.2 là driver mỏng: relay CDP (<code>chrome.debugger</code>), ghép cặp, allowlist, side panel. Bỏ content-script executor (ActionExecutor, SelectorMap, DomTreeBuilder…) và 30 lệnh cũ; giữ ws-client và TabGroupController (D5)</td></tr>
+            <tr><td><code>skills/agent-browser/SKILL.md</code></td><td><span class="tag t-warn">Viết lại</span></td><td>Skill ngắn cho <code>browser_task</code> / <code>look</code> / <code>do</code></td></tr>
+            <tr><td><code>tools/tool_search.rs</code>, <code>agent/virtual_worker_pool.rs</code></td><td><span class="tag t-warn">Sửa</span></td><td>Họ tên tool mới; virtual worker nhận tool core mới</td></tr>
+            <tr><td><code>senclaw-app/apps/mini-browser</code></td><td><span class="tag t-jev">Hợp nhất</span></td><td>Lõi CDP chuyển vào <code>sen-browser</code>; ý tưởng UI chuyển vào panel desktop/web (D6)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note"><p><b>Chuyển đổi an toàn.</b> Flag <code>browser.engine = legacy | v2</code>, giữ song song một bản phát hành. P5 chạy eval ghép cặp trên cả hai engine. Gỡ theo thứ tự: tool MCP → bridge và protocol cũ → module <code>src/browser</code>. Extension v0.2 phát hành cùng lúc với route <code>/browser/ext</code>; bản v0.1 bị từ chối kết nối sau khi đổi mặc định. Mỗi bước build và test riêng.</p></div>
+    </section>
+
+    <section id="s17" aria-labelledby="h17s">
+      <div class="sh"><span class="sn">§17</span><h2 id="h17s">Lộ trình</h2></div>
+      <div class="phases">
+        <div class="phase"><div class="ph"><span class="pid">P0</span><span class="size">cỡ S</span></div><h4>Eval harness &amp; baseline</h4>
+          <ul><li><code>senclaw eval browser</code>, task schema, checker</li><li>S2/S4 fixture; danh sách S1/S3</li><li>Đo luồng cũ; đo latency Jev từ VN và laya trên CPU/CoreML</li></ul>
+          <div class="exit">Xong khi: có báo cáo baseline</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P1</span><span class="size">cỡ L</span></div><h4>Runtime + Chrome riêng</h4>
+          <ul><li>Chrome và profile, tab riêng, isolated world</li><li>Snapshot nhanh + coverage, act có guard, settle</li><li>Dialog/popup/download, SSE live, handover</li><li>SDK type <code>browser</code>, proxy, đóng gói, CI</li></ul>
+          <div class="exit">Xong khi: qua G0; guard check S2 đạt</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P2</span><span class="size">cỡ L</span></div><h4>Browser Loop trong daemon</h4>
+          <ul><li>Encoder jev-full/laya-v3 + budget</li><li>Band, LLM fallback, text writer, verifier</li><li>Policy tầng 0–3, trace, 9 tool MCP, skill mới</li></ul>
+          <div class="exit">Xong khi: qua G1</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P3</span><span class="size">cỡ M</span></div><h4>Driver extension</h4>
+          <ul><li>Extension v0.2: relay <code>chrome.debugger</code>, allowlist lệnh + script, tab sở hữu</li><li>Ghép cặp; route <code>/browser/ext</code> + pipe vào runtime</li><li>Side panel: trạng thái, duyệt, handover, giao tab</li></ul>
+          <div class="exit">Xong khi: S2 qua trên cả hai driver; S4 = 0 vi phạm ở extension</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P4</span><span class="size">cỡ M</span></div><h4>Giao diện</h4>
+          <ul><li>Panel live view + dòng bước (desktop, web)</li><li>Thẻ duyệt, handover, chế độ từng bước</li><li>Màn cài đặt: chế độ mặc định, luật domain</li></ul>
+          <div class="exit">Xong khi: có checklist QA thủ công</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P5</span><span class="size">cỡ S</span></div><h4>Chuyển đổi</h4>
+          <ul><li>Flag <code>browser.engine</code>; eval ghép cặp</li><li>Dùng thật 1 tuần; đổi mặc định</li><li>Gỡ legacy ở bản sau</li></ul>
+          <div class="exit">Xong khi: qua G2 → G4</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P6</span><span class="size">liên tục</span></div><h4>Tối ưu &amp; học</h4>
+          <ul><li>CoreML EP cho laya; TYPE_TEXT đầu cơ</li><li>Deep snapshot + vision cho canvas</li><li>Fine-tune laya-browser từ trace đã xác minh</li></ul>
+          <div class="exit">Mỗi thay đổi phải qua lại G1–G2</div></div>
+      </div>
+    </section>
+
+    <section id="s18" aria-labelledby="h18s">
+      <div class="sh"><span class="sn">§18</span><h2 id="h18s">Rủi ro</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Rủi ro</th><th>Tác động</th><th>Giảm thiểu</th></tr></thead>
+          <tbody>
+            <tr><td>laya-browser chưa đủ tốt (62%; hỏng ở autocomplete và Flights)</td><td>Cao</td><td>Band + LLM fallback; hosted cho domain được phép; fine-tune từ trace (P6)</td></tr>
+            <tr><td>Độ trễ CPU ~0,75 s/bước, và hơn nữa với nhiều hàng</td><td>Trung bình</td><td>CoreML EP; candidate budget; ưu tiên hosted khi được phép</td></tr>
+            <tr><td>Text trang (có PII) bị gửi lên TypeSafe</td><td>Cao</td><td>Mặc định local; allowlist; che PII; domain nhạy cảm luôn dùng local</td></tr>
+            <tr><td>Chống bot, điều khoản site (Google, X, Meta)</td><td>Trung bình</td><td>Không cờ automation, không giả JS; handover; chính sách từng domain</td></tr>
+            <tr><td>Thiếu vùng DOM (iframe chéo origin, canvas)</td><td>Trung bình</td><td>Deep snapshot; screenshot + model vision; báo BLOCKED rõ ràng</td></tr>
+            <tr><td>Thao tác sai trên tài khoản thật</td><td>Cao</td><td>Tầng 2/3; chỉ dùng tab của session; không retry; S4 phải 0 vi phạm</td></tr>
+            <tr><td>Extension có quyền <code>debugger</code> trên Chrome thật (đọc được cookie, chạy được JS)</td><td>Cao</td><td>Allowlist lệnh + hash script nằm trong extension; chỉ tab sở hữu; ghép cặp; không xin quyền cookies/history</td></tr>
+            <tr><td>Anh bấm Cancel trên thanh debug, hoặc thao tác chung tab với agent</td><td>Trung bình</td><td>Tạm dừng và hỏi, không tự attach lại; guard freshness; agent nhường khi anh bấm vào tab</td></tr>
+            <tr><td>Service worker MV3 bị dừng hoặc Chrome đóng giữa task</td><td>Trung bình</td><td>Heartbeat 15 s + alarm; mất kết nối khi đang thao tác thì dừng (uncertain), không làm lại</td></tr>
+            <tr><td>Không attach được (trang <code>chrome://</code>, Web Store, chính sách doanh nghiệp)</td><td>Thấp</td><td>Báo BLOCKED rõ lý do, gợi ý chạy bằng Chrome riêng</td></tr>
+            <tr><td>Thêm slot mới vào SDK và daemon</td><td>Thấp</td><td>Thay đổi nhỏ, đã có test của SDK; theo đúng khuôn <code>sen-ocr</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s19" aria-labelledby="h19s">
+      <div class="sh"><span class="sn">§19</span><h2 id="h19s">Quyết định cần anh chốt</h2></div>
+      <div class="dec"><div class="dh"><span class="did">D1</span><h4>Vòng lặp quyết định đặt ở đâu?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Control plane của daemon</b>; runtime chỉ quan sát và thực thi. Dùng lại ladder/policy/trace/decision client. Quyết định đi thẳng daemon → sen-sysone (1 chặng). Ranh giới an toàn nằm trong daemon.</li>
+          <li><b>Trong runtime sen-browser</b>: engine tự chạy độc lập, nhưng cần kênh callback runtime → daemon (sửa protocol v1) để lấy decision/LLM, thêm 1 chặng cho mỗi quyết định, và policy bị tách khỏi daemon.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D2</span><h4>Trình duyệt nào?</h4><span class="tag t-jev">Đã chốt 29/09</span></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-jev">Đã chọn</span><b>Cả hai</b>: Chrome riêng do runtime quản lý (profile riêng, chạy nền) <b>và</b> Chrome của anh qua extension + <code>chrome.debugger</code>. Luồng chi tiết ở §9; chế độ mặc định là D10.</li>
+          <li class="muted"><b>Không chọn</b>: gắn vào Chrome thật qua <code>chrome://inspect/#remote-debugging</code> (cách browser-harness làm).</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D3</span><h4>Backend quyết định mặc định?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b><code>auto</code></b>: local laya-browser cho mọi domain, hosted Jev chỉ cho domain trong allowlist khi đã có key.</li>
+          <li><b>Hosted trước</b>: nhanh và chính xác hơn (Flights 3/3), nhưng gửi text trang ra ngoài và tốn phí.</li>
+          <li><b>Chỉ local</b>: riêng tư tuyệt đối, chấp nhận 62% + fallback LLM thường xuyên hơn.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D4</span><h4>Model viết chữ (TYPE_TEXT)?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Model local nhỏ qua sen-mlx/llama.cpp</b> nếu đã cài; nếu không có thì dùng model chat hiện tại. Đo ở P0 rồi mới cố định.</li>
+          <li><b>Model cloud nhanh</b> (Mercury 2.5, Gemini Flash Lite): 350–600 ms đã đo, rất rẻ, nhưng cần thêm key.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D5</span><h4>Số phận của senclaw-extension?</h4><span class="tag t-jev">Đã chốt 29/09</span></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-jev">Đã chọn</span><b>Giữ và viết lại thành driver mỏng</b> (v0.2): relay CDP, ghép cặp, allowlist, side panel. Bỏ content-script executor và protocol 30 lệnh cũ.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D6</span><h4>mini-browser Space App?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Hợp nhất</b>: lõi CDP chuyển vào <code>sen-browser</code>, live view chuyển thành panel của desktop/web, sau đó bỏ app.</li>
+          <li><b>Giữ app riêng</b> cho người dùng tự duyệt web, còn agent dùng sen-browser. Hai engine CDP song song.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D7</span><h4>Phạm vi MVP (P1–P2)?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Có</b>: shadow root mở, iframe cùng origin, tab popup, <code>PRESS_KEY</code> cho hosted/LLM. <b>Để sau</b>: upload, iframe chéo origin, canvas.</li>
+          <li><b>Bám đúng jev-ultrafast</b> (8 operation, không iframe/shadow) để ra nhanh nhất, mở rộng sau.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D8</span><h4>Extension nối vào đâu?</h4><span class="tag t-mut">Mới</span></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Vào daemon</b> (<code>/browser/ext</code>): daemon giữ kết nối, kiểm Origin + token, chỉ nối pipe vào runtime khi có task. Đúng luật "cổng runtime không lộ ra client" của runtime protocol; runtime vẫn được dừng khi rảnh.</li>
+          <li><b>Thẳng vào runtime</b>: bớt một chặng loopback (không đáng kể), nhưng runtime cần cổng cố định và tự lo xác thực, trái phần Security rules của <code>runtime-protocol.md</code>.</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D9</span><h4>Tab của agent nằm ở đâu trong Chrome của anh?</h4><span class="tag t-mut">Mới</span></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Tab nền trong nhóm "SenClaw"</b> ở cửa sổ đang dùng, mỗi agent một tab (giữ TabGroupController). Không chiếm tab anh đang xem; focus emulation giữ trang render (cần đo ở P3).</li>
+          <li><b>Cửa sổ riêng "SenClaw"</b>: tách hẳn khỏi chỗ anh làm việc, nhưng cửa sổ bị che hoặc thu nhỏ có thể ngừng render (mini-browser đo: thu nhỏ còn 1 khung so với 32).</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D10</span><h4>Khi cả hai chế độ đều sẵn sàng, mặc định dùng gì?</h4><span class="tag t-mut">Mới</span></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">Khuyến nghị</span><b>Chrome riêng</b>; dùng extension khi anh nói rõ ("trên Chrome của tôi"), khi domain được gán cho extension, hoặc khi anh chọn ở thẻ "gặp tường đăng nhập".</li>
+          <li><b>Extension mặc định</b>: tiện vì có sẵn đăng nhập, nhưng mọi task đều chạy trong profile có dữ liệu thật và cần Chrome đang mở.</li>
+          <li><b>Luôn hỏi</b> ở đầu mỗi task: an toàn nhưng chậm và phiền.</li>
+        </ul></div>
+    </section>
+
+    <section id="s20" aria-labelledby="h20s">
+      <div class="sh"><span class="sn">§20</span><h2 id="h20s">Câu hỏi mở</h2></div>
+      <ul>
+        <li>Điều khoản TypeSafe có cho dùng đáp án Jev làm nhãn để fine-tune laya-browser (distill) không? Việc này quyết định nguồn dữ liệu cho P5.</li>
+        <li>Latency thật từ Việt Nam tới <code>api.typesafe.ai</code>, và giá tính theo request hay theo token (response hiện chỉ có token count)?</li>
+        <li>CoreML Execution Provider có chạy được graph laya-browser (1,29 GB external data) không, và giảm được bao nhiêu so với ~0,75 s?</li>
+        <li>Proxy của daemon có giữ được SSE dài (có read timeout) không? Có thể cần heartbeat mỗi 15 s.</li>
+        <li>Nếu máy không có Chrome thì tải Chrome for Testing (~150 MB) hay yêu cầu người dùng cài Chrome?</li>
+        <li><code>browser_search</code> nên scrape SERP của Google (rủi ro điều khoản) hay chuyển sang API tìm kiếm?</li>
+        <li><code>Emulation.setFocusEmulationEnabled</code> gửi qua <code>chrome.debugger</code> có giữ tab nền render (rAF, menu) như jev-ultrafast đo với CDP trực tiếp không? Screencast có chạy cho tab nền không?</li>
+        <li><code>chrome.debugger.attach</code> có cần giữ <code>host_permissions: &lt;all_urls&gt;</code> không? Nếu sau này đưa extension lên Chrome Web Store, quyền <code>debugger</code> có qua được review không?</li>
+        <li>Có cần ghép cặp nhiều trình duyệt cùng lúc (Chrome + Edge/Brave, mỗi cái một extension id) không?</li>
+      </ul>
+    </section>
+
+    <section id="s21" aria-labelledby="h21s">
+      <div class="sh"><span class="sn">§21</span><h2 id="h21s">Nguồn</h2></div>
+      <ul class="small">
+        <li><a href="https://github.com/browser-use/jev-ultrafast" rel="noopener">github.com/browser-use/jev-ultrafast</a>, commit <code>1231850</code>: README, <code>docs/design.md</code>, <code>docs/performance.md</code>, <code>docs/*measurement.json</code>, <code>jev_ultrafast/*</code>, <code>tests/test_agent.py</code></li>
+        <li><a href="https://docs.typesafe.ai/patterns/fan-out" rel="noopener">docs.typesafe.ai/patterns/fan-out</a> · <a href="https://github.com/browser-use/browser-harness" rel="noopener">github.com/browser-use/browser-harness</a> (wheel 0.1.13)</li>
+        <li>Báo cáo nghiên cứu: <code>senclaw/plans/reports/research-260929-0143-jev-ultrafast.md</code></li>
+        <li>Luồng cũ: <code>senclaw/src/mcp/browser_server.rs</code>, <code>senclaw/src/browser/*</code>, <code>senclaw/src/tools/tool_search.rs</code>, <code>senclaw/skills/agent-browser/SKILL.md</code>, <code>senclaw-extension/src/agent/{ActionExecutor,SelectorMap}.ts</code>, <code>senclaw-extension/wxt.config.ts</code></li>
+        <li>Extension &amp; gateway: <code>senclaw-extension/src/lib/ws-client.ts</code>, <code>src/agent/TabGroupController.ts</code>, <code>src/entrypoints/background.ts</code>; <code>senclaw/src/gateway/websocket_gateway/{gateway,browser}.rs</code>, <code>senclaw/src/gateway/ui_server/auth.rs</code></li>
+        <li><a href="https://developer.chrome.com/docs/extensions/reference/api/debugger" rel="noopener">developer.chrome.com · chrome.debugger</a>: domain được phép, session phẳng từ Chrome 125, <code>onDetach</code> <code>canceled_by_user</code></li>
+        <li>Control plane: <code>senclaw/src/control_plane/{ladder,registry,policy_gate,trace}.rs</code>, <code>senclaw/src/decision/client.rs</code></li>
+        <li>Runtime: <code>senclaw/docs/runtime-protocol.md</code>, <code>sen-sysone/README.md</code>, <code>sen-sysone/docs/laya-decisions.md</code>, <code>sen-sysone/src/decision/types.rs</code></li>
+        <li>Laya: <code>Laya-jev/plans/reports/research-260925-0207-laya-browser-agent.md</code>, <code>Laya-jev/laya_daemon/browser_head.py</code>, <code>Laya-jev/models/laya-browser/{rl_agent_config,source}.json</code></li>
+        <li>mini-browser: <code>senclaw-app/apps/mini-browser/README.md</code>, <code>Cargo.toml</code></li>
+        <li>Kiến trúc tổng: <code>JEV Architecture v2.html</code> (v2.2, 26/09/2026)</li>
+      </ul>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+  var box=document.getElementById('tocbox');
+  var mq=window.matchMedia('(max-width: 1039px)');
+  function syncToc(){ if(box){ box.open=!mq.matches; } }
+  syncToc();
+  if(mq.addEventListener){ mq.addEventListener('change',syncToc); }
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var map={};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)]=a; });
+  if(!('IntersectionObserver' in window)) return;
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('on'); });
+        var a=map[e.target.id]; if(a){ a.classList.add('on'); }
+      }
+    });
+  },{rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('main section[id]').forEach(function(s){ io.observe(s); });
+})();
+</script>

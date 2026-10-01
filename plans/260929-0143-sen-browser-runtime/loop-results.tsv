@@ -1,0 +1,9 @@
+iter	timestamp	metric	delta	kept	commit	description
+0	2026-09-28T20:20:18	0	+0	baseline	-	nothing implemented
+1	2026-09-28T20:20:41	15	+15	yes	sen-browser@7730b94	sen-browser runtime: managed + extension drivers, guarded trusted input, 19 tests
+2	2026-09-29T04:07:10	29	+14	yes	senclaw@d76346d	daemon browser engine: loop, REST, MCP v2, /browser/ext pairing, per-call browser_approve
+3	2026-09-29T04:19:18	34	+5	yes	senclaw-extension@6b6a5ea	extension v0.2: chrome.debugger relay, /browser/ext pairing, allowlist + pinned scripts, side panel, 29 vitest
+4	2026-09-29T05:46:38	36	+2	yes	senclaw@ba9ca4b sen-browser@67822c6 senclaw-extension@e3dd99d	E2E: managed + extension tasks verified via MCP; fixes found by E2E (mock keychain, cycles, focus-click typing, quoted criteria, LLM parsing/timeout)
+5	2026-09-29T07:26:00	46	+10	yes	senclaw@2733669,8576572,aafd840,312760d,c079151 sen-browser@372779a,fd28872,9556287,7539992 senclaw-extension@e9d9ecc,4434ed1	security review fixes (+10 checks: S1-S9, E3 purchase waits for approval); first run 44/46 — the yes/no risk check paused every click, fixed by asking a view/adjust/commit choice
+6	2026-09-29T08:42:00	50	+4	yes	senclaw@8503d3f,6444d3b,f717adc,6ec91eb,666fb50 sen-browser@f983a21,3e85547 senclaw-extension@a2686b5,732c90c	second security pass (+4 checks: S10 local trust needs local Host/no foreign Origin incl. cross-site WebSocket, S11 no clipboard keys, S12 landing/cross-chat, U1 sen-browser in the runtime catalog + clean runtime logs); desktop runtime install/manage checked live
+7	2026-09-30T23:05:00	59	+9	yes	sen-browser@d1aa0ff,b43c1f3,6fdb15d senclaw-extension@ab52375 senclaw@b61285a,4fdcb57,307370c,8be7508 web-app@d30ade7 desktop@a9b7fbd	action latency (+9 checks: L1-L8, E4): page readiness instead of the load event, loop model calls overlapped or dropped, v2 skill texts and one-call tools, toggle state, missing decision model surfaced

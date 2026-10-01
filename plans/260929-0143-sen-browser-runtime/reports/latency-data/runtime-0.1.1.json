@@ -1,0 +1,501 @@
+{
+  "session_open_ms": 363,
+  "first_tab_open_ms": 94,
+  "navigate": {
+    "plain": [
+      {
+        "wall_ms": 18,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 2
+        }
+      },
+      {
+        "wall_ms": 12,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 2
+        }
+      },
+      {
+        "wall_ms": 9,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 3
+        }
+      }
+    ],
+    "static_no_script": [
+      {
+        "wall_ms": 7,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 2
+        }
+      },
+      {
+        "wall_ms": 6,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 1
+        }
+      },
+      {
+        "wall_ms": 8,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 1
+        }
+      }
+    ],
+    "rich": [
+      {
+        "wall_ms": 15,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 5
+        }
+      },
+      {
+        "wall_ms": 9,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 2
+        }
+      },
+      {
+        "wall_ms": 11,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 2
+        }
+      }
+    ],
+    "slow_load_3000": [
+      {
+        "wall_ms": 3020,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 7
+        }
+      },
+      {
+        "wall_ms": 3024,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 4
+        }
+      },
+      {
+        "wall_ms": 3022,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 5
+        }
+      }
+    ],
+    "late_content_600": [
+      {
+        "wall_ms": 19,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 3
+        }
+      },
+      {
+        "wall_ms": 11,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 2
+        }
+      },
+      {
+        "wall_ms": 9,
+        "clips_seen": 0,
+        "timing": {
+          "snapshot": 1
+        }
+      }
+    ],
+    "late_600_slow_3000": [
+      {
+        "wall_ms": 3015,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 3
+        }
+      },
+      {
+        "wall_ms": 3020,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 4
+        }
+      },
+      {
+        "wall_ms": 3026,
+        "clips_seen": 1,
+        "timing": {
+          "snapshot": 7
+        }
+      }
+    ]
+  },
+  "observe": {
+    "wall_ms": {
+      "n": 20,
+      "median": 1.3,
+      "p90": 1.8,
+      "min": 1.0,
+      "max": 2.0
+    },
+    "snapshot_ms": {
+      "n": 20,
+      "median": 0.0,
+      "p90": 1,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "click_toggle": {
+    "wall_ms": {
+      "n": 10,
+      "median": 49.9,
+      "p90": 52.1,
+      "min": 37.9,
+      "max": 52.1
+    },
+    "input_ms": {
+      "n": 10,
+      "median": 14.0,
+      "p90": 15,
+      "min": 3,
+      "max": 15
+    },
+    "settle_ms": {
+      "n": 10,
+      "median": 31.0,
+      "p90": 32,
+      "min": 29,
+      "max": 32
+    },
+    "snapshot_ms": {
+      "n": 10,
+      "median": 2.0,
+      "p90": 4,
+      "min": 1,
+      "max": 4
+    }
+  },
+  "click_navigates": [
+    {
+      "wall_ms": 59,
+      "input_ms": 16,
+      "settle_ms": 40,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5009,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 66,
+      "input_ms": 17,
+      "settle_ms": 45,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5012,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 68,
+      "input_ms": 18,
+      "settle_ms": 45,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5011,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 71,
+      "input_ms": 20,
+      "settle_ms": 47,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5011,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    }
+  ],
+  "click_navigates_slow_800": [
+    {
+      "wall_ms": 864,
+      "input_ms": 12,
+      "settle_ms": 848,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5012,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 878,
+      "input_ms": 19,
+      "settle_ms": 854,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5012,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 879,
+      "input_ms": 23,
+      "settle_ms": 851,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5012,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    },
+    {
+      "wall_ms": 880,
+      "input_ms": 20,
+      "settle_ms": 854,
+      "ready_ms": null,
+      "ready_by": null,
+      "landed": "Clip by @mai",
+      "back_wall_ms": 5012,
+      "back_ready_by": null,
+      "back_landed": "Clips \u2014 for you"
+    }
+  ],
+  "scroll": {
+    "wall_ms": {
+      "n": 6,
+      "median": 66.5,
+      "p90": 83.6,
+      "min": 53.8,
+      "max": 83.6
+    }
+  },
+  "sites": {
+    "https://www.tiktok.com/explore": [
+      {
+        "wall_ms": 3309,
+        "status": 200,
+        "actions": 15,
+        "text_chars": 95,
+        "timing": {
+          "snapshot": 3
+        },
+        "title": "Explore - Find your favorite videos on TikTok",
+        "actions_later": 65,
+        "text_chars_later": 346
+      },
+      {
+        "wall_ms": 1255,
+        "status": 200,
+        "actions": 15,
+        "text_chars": 95,
+        "timing": {
+          "snapshot": 6
+        },
+        "title": "Explore - Find your favorite videos on TikTok",
+        "actions_later": 65,
+        "text_chars_later": 349
+      }
+    ],
+    "https://www.youtube.com/": [
+      {
+        "wall_ms": 2744,
+        "status": 200,
+        "actions": 14,
+        "text_chars": 138,
+        "timing": {
+          "snapshot": 11
+        },
+        "title": "YouTube",
+        "actions_later": 14,
+        "text_chars_later": 138
+      },
+      {
+        "wall_ms": 792,
+        "status": 200,
+        "actions": 10,
+        "text_chars": 108,
+        "timing": {
+          "snapshot": 50
+        },
+        "title": "YouTube",
+        "actions_later": 14,
+        "text_chars_later": 138
+      }
+    ],
+    "https://en.wikipedia.org/wiki/Hanoi": [
+      {
+        "wall_ms": 972,
+        "status": 200,
+        "actions": 70,
+        "text_chars": 1575,
+        "timing": {
+          "snapshot": 63
+        },
+        "title": "Hanoi - Wikipedia",
+        "actions_later": 70,
+        "text_chars_later": 1575
+      },
+      {
+        "wall_ms": 307,
+        "status": 200,
+        "actions": 70,
+        "text_chars": 1502,
+        "timing": {
+          "snapshot": 65
+        },
+        "title": "Hanoi - Wikipedia",
+        "actions_later": 70,
+        "text_chars_later": 1575
+      }
+    ],
+    "https://www.bbc.com/news": [
+      {
+        "wall_ms": 1305,
+        "status": 200,
+        "actions": 31,
+        "text_chars": 597,
+        "timing": {
+          "snapshot": 72
+        },
+        "title": "BBC News - Breaking news, video and the latest top stories f",
+        "actions_later": 35,
+        "text_chars_later": 614
+      },
+      {
+        "wall_ms": 907,
+        "status": 200,
+        "actions": 35,
+        "text_chars": 614,
+        "timing": {
+          "snapshot": 9
+        },
+        "title": "BBC News - Breaking news, video and the latest top stories f",
+        "actions_later": 35,
+        "text_chars_later": 614
+      }
+    ],
+    "https://shopee.vn/": [
+      {
+        "wall_ms": 4374,
+        "status": 200,
+        "actions": 2,
+        "text_chars": 0,
+        "timing": {
+          "snapshot": 7
+        },
+        "title": "Shopee Vi\u1ec7t Nam | Mua S\u1eafm Online",
+        "actions_later": 5,
+        "text_chars_later": 73
+      },
+      {
+        "wall_ms": 2338,
+        "status": 200,
+        "actions": 3,
+        "text_chars": 10,
+        "timing": {
+          "snapshot": 5
+        },
+        "title": "Shopee Vi\u1ec7t Nam | Hot Deals, Best Prices",
+        "actions_later": 5,
+        "text_chars_later": 125
+      }
+    ],
+    "https://duckduckgo.com/": [
+      {
+        "wall_ms": 982,
+        "status": 200,
+        "actions": 14,
+        "text_chars": 218,
+        "timing": {
+          "snapshot": 6
+        },
+        "title": "DuckDuckGo - Protection. Privacy. Peace of mind.",
+        "actions_later": 14,
+        "text_chars_later": 218
+      },
+      {
+        "wall_ms": 169,
+        "status": 200,
+        "actions": 14,
+        "text_chars": 218,
+        "timing": {
+          "snapshot": 66
+        },
+        "title": "DuckDuckGo - Protection. Privacy. Peace of mind.",
+        "actions_later": 14,
+        "text_chars_later": 218
+      }
+    ],
+    "https://html.duckduckgo.com/html/?q=gia+vang+hom+nay": [
+      {
+        "wall_ms": 3702,
+        "status": 200,
+        "actions": 94,
+        "text_chars": 1510,
+        "timing": {
+          "snapshot": 19
+        },
+        "title": "gia vang hom nay at DuckDuckGo",
+        "actions_later": 94,
+        "text_chars_later": 1510
+      },
+      {
+        "wall_ms": 3082,
+        "status": 200,
+        "actions": 94,
+        "text_chars": 1537,
+        "timing": {
+          "snapshot": 12
+        },
+        "title": "gia vang hom nay at DuckDuckGo",
+        "actions_later": 94,
+        "text_chars_later": 1537
+      }
+    ],
+    "https://github.com/trending": [
+      {
+        "wall_ms": 2553,
+        "status": 200,
+        "actions": 56,
+        "text_chars": 879,
+        "timing": {
+          "snapshot": 35
+        },
+        "title": "Trending repositories on GitHub today \u00b7 GitHub",
+        "actions_later": 56,
+        "text_chars_later": 879
+      },
+      {
+        "wall_ms": 252,
+        "status": 200,
+        "actions": 56,
+        "text_chars": 879,
+        "timing": {
+          "snapshot": 19
+        },
+        "title": "Trending repositories on GitHub today \u00b7 GitHub",
+        "actions_later": 56,
+        "text_chars_later": 879
+      }
+    ]
+  }
+}

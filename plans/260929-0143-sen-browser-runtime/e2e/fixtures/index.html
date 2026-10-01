@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SkyFinder — search flights</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 40px; max-width: 720px; }
+    nav a { margin-right: 12px; }
+    form { display: flex; gap: 8px; margin-top: 24px; }
+    input, button { font-size: 16px; padding: 8px; }
+  </style>
+</head>
+<body>
+  <h1>SkyFinder</h1>
+  <nav><a href="/deals.html">Deals</a><a href="/help.html">Help</a></nav>
+  <p>Flights from Zurich.</p>
+  <form action="/results.html" method="get">
+    <label for="to">Destination</label>
+    <input id="to" name="to" type="text" placeholder="City" autocomplete="off">
+    <button type="submit">Search flights</button>
+  </form>
+</body>
+</html>

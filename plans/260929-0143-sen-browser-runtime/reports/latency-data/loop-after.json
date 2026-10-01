@@ -1,0 +1,536 @@
+{
+  "runs": 3,
+  "tasks": {
+    "like": [
+      {
+        "wall_ms": 748,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 290,
+            "act_ms": 43,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 732,
+        "timing": {
+          "act": 43,
+          "answer": 0,
+          "decide": 594,
+          "llm": 0,
+          "open": 15,
+          "page": 41,
+          "risk": 46,
+          "text": 0,
+          "verify": 45
+        }
+      },
+      {
+        "wall_ms": 718,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 276,
+            "act_ms": 43,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 702,
+        "timing": {
+          "act": 43,
+          "answer": 0,
+          "decide": 569,
+          "llm": 0,
+          "open": 14,
+          "page": 41,
+          "risk": 43,
+          "text": 0,
+          "verify": 44
+        }
+      },
+      {
+        "wall_ms": 747,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 275,
+            "act_ms": 43,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 732,
+        "timing": {
+          "act": 43,
+          "answer": 0,
+          "decide": 590,
+          "llm": 0,
+          "open": 14,
+          "page": 40,
+          "risk": 47,
+          "text": 0,
+          "verify": 50
+        }
+      }
+    ],
+    "open": [
+      {
+        "wall_ms": 705,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Open clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 277,
+            "act_ms": 62,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 683,
+        "timing": {
+          "act": 62,
+          "answer": 0,
+          "decide": 533,
+          "llm": 0,
+          "open": 20,
+          "page": 59,
+          "risk": 42,
+          "text": 0,
+          "verify": 41
+        }
+      },
+      {
+        "wall_ms": 688,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Open clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 276,
+            "act_ms": 52,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 673,
+        "timing": {
+          "act": 52,
+          "answer": 0,
+          "decide": 536,
+          "llm": 0,
+          "open": 13,
+          "page": 48,
+          "risk": 42,
+          "text": 0,
+          "verify": 40
+        }
+      },
+      {
+        "wall_ms": 708,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Open clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 288,
+            "act_ms": 55,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 0,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 693,
+        "timing": {
+          "act": 55,
+          "answer": 0,
+          "decide": 553,
+          "llm": 0,
+          "open": 13,
+          "page": 51,
+          "risk": 42,
+          "text": 0,
+          "verify": 40
+        }
+      }
+    ],
+    "open+like": [
+      {
+        "wall_ms": 3714,
+        "status": "unverified",
+        "message": "The page does not prove the goal was reached",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 286,
+            "act_ms": 48,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 1,
+          "stale": 0
+        },
+        "elapsed_ms": 3697,
+        "timing": {
+          "act": 48,
+          "answer": 0,
+          "decide": 938,
+          "llm": 2664,
+          "open": 14,
+          "page": 46,
+          "risk": 43,
+          "text": 0,
+          "verify": 0
+        }
+      },
+      {
+        "wall_ms": 1863,
+        "status": "unverified",
+        "message": "The page does not prove the goal was reached",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 292,
+            "act_ms": 39,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 1,
+          "stale": 0
+        },
+        "elapsed_ms": 1844,
+        "timing": {
+          "act": 39,
+          "answer": 0,
+          "decide": 934,
+          "llm": 822,
+          "open": 17,
+          "page": 38,
+          "risk": 46,
+          "text": 0,
+          "verify": 0
+        }
+      },
+      {
+        "wall_ms": 1828,
+        "status": "unverified",
+        "message": "The page does not prove the goal was reached",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 289,
+            "act_ms": 49,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 1,
+          "stale": 0
+        },
+        "elapsed_ms": 1811,
+        "timing": {
+          "act": 49,
+          "answer": 0,
+          "decide": 920,
+          "llm": 796,
+          "open": 15,
+          "page": 48,
+          "risk": 43,
+          "text": 0,
+          "verify": 0
+        }
+      }
+    ],
+    "like, no criteria": [
+      {
+        "wall_ms": 3234,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 322,
+            "act_ms": 54,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 3216,
+        "timing": {
+          "act": 54,
+          "answer": 0,
+          "decide": 676,
+          "llm": 0,
+          "open": 16,
+          "page": 52,
+          "risk": 53,
+          "text": 0,
+          "verify": 2430
+        }
+      },
+      {
+        "wall_ms": 1929,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 317,
+            "act_ms": 45,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 1910,
+        "timing": {
+          "act": 45,
+          "answer": 0,
+          "decide": 675,
+          "llm": 0,
+          "open": 17,
+          "page": 42,
+          "risk": 49,
+          "text": 0,
+          "verify": 1137
+        }
+      },
+      {
+        "wall_ms": 2498,
+        "status": "done",
+        "message": "Verified on the page",
+        "steps": [
+          {
+            "op": "CLICK",
+            "label": "Like clip by @mai",
+            "by": "jev",
+            "band": "act",
+            "decision_ms": 329,
+            "act_ms": 50,
+            "outcome": "executed"
+          }
+        ],
+        "counts": {
+          "steps": 1,
+          "decisions": 4,
+          "llm_calls": 1,
+          "fallbacks": 0,
+          "stale": 0
+        },
+        "elapsed_ms": 2481,
+        "timing": {
+          "act": 50,
+          "answer": 0,
+          "decide": 692,
+          "llm": 0,
+          "open": 15,
+          "page": 47,
+          "risk": 52,
+          "text": 0,
+          "verify": 1686
+        }
+      }
+    ]
+  },
+  "manual": [
+    [
+      {
+        "call": "open feed",
+        "wall_ms": 13,
+        "result_chars": 911
+      },
+      {
+        "call": "like",
+        "wall_ms": 98,
+        "result_chars": 944
+      },
+      {
+        "call": "open clip",
+        "wall_ms": 108,
+        "result_chars": 625
+      },
+      {
+        "call": "read",
+        "wall_ms": 3,
+        "result_chars": 361
+      }
+    ],
+    [
+      {
+        "call": "open feed",
+        "wall_ms": 13,
+        "result_chars": 911
+      },
+      {
+        "call": "like",
+        "wall_ms": 98,
+        "result_chars": 944
+      },
+      {
+        "call": "open clip",
+        "wall_ms": 109,
+        "result_chars": 625
+      },
+      {
+        "call": "read",
+        "wall_ms": 3,
+        "result_chars": 361
+      }
+    ],
+    [
+      {
+        "call": "open feed",
+        "wall_ms": 15,
+        "result_chars": 911
+      },
+      {
+        "call": "like",
+        "wall_ms": 97,
+        "result_chars": 944
+      },
+      {
+        "call": "open clip",
+        "wall_ms": 92,
+        "result_chars": 625
+      },
+      {
+        "call": "read",
+        "wall_ms": 2,
+        "result_chars": 361
+      }
+    ]
+  ],
+  "cold_start": {
+    "wall_ms": 3937,
+    "status": "done",
+    "message": "Verified on the page",
+    "steps": [
+      {
+        "op": "CLICK",
+        "label": "Help",
+        "by": "jev",
+        "band": "act",
+        "decision_ms": 1878,
+        "act_ms": 51,
+        "outcome": "executed"
+      }
+    ],
+    "counts": {
+      "steps": 1,
+      "decisions": 4,
+      "llm_calls": 0,
+      "fallbacks": 0,
+      "stale": 0
+    },
+    "elapsed_ms": 3153,
+    "timing": {
+      "act": 51,
+      "answer": 0,
+      "decide": 1971,
+      "llm": 0,
+      "open": 766,
+      "page": 47,
+      "risk": 1087,
+      "text": 0,
+      "verify": 40
+    }
+  }
+}
