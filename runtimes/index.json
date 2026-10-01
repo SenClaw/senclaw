@@ -108,8 +108,12 @@
       "capabilities": ["chat", "vision"],
       "accelerator": "metal",
       "platforms": ["darwin-arm64"],
-      "channels": { "stable": "0.1.0", "beta": "0.1.0" },
+      "channels": { "stable": "0.1.1", "beta": "0.1.1" },
       "releases": [
+        { "version": "0.1.1", "notesUrl": "https://github.com/SenClaw/sen-mlx/releases/tag/v0.1.1",
+          "packages": [
+            {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-mlx/releases/download/v0.1.1/sen-mlx-0.1.1-darwin-arm64.tar.gz", "sha256": "9f02fb5de3567ce3b2681575b966ef0648716a8b936bc013191ce00156658722", "size": 32259257}
+          ] },
         { "version": "0.1.0", "notesUrl": "https://github.com/SenClaw/sen-mlx/releases/tag/v0.1.0",
           "packages": [
             {"platform": "darwin-arm64", "url": "https://github.com/SenClaw/sen-mlx/releases/download/v0.1.0/sen-mlx-0.1.0-darwin-arm64.tar.gz", "sha256": "408107e1136aa1bf866534bd6e42cd0ff3dabef4b1f95e34c531a60711c277a3", "size": 32257060}
