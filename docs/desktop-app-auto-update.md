@@ -27,7 +27,7 @@
 
 | Thành phần | Hiện trạng |
 |---|---|
-| CLI update | **Đã có**: `senclaw update [--version]` → [`run_update`](../src/cli/commands/distrib.rs) cập nhật binary + web dist + desktop app. Chưa có UI nào gọi tới. |
+| CLI update | **Đã có**: `senclaw update [VERSION] [--list] [--select]` → [`update::run`](../src/cli/commands/update.rs) cập nhật binary (kiểm sha256) + web dist; từ chối thay daemon nằm trong bundle desktop. Chưa có UI nào gọi tới. |
 | Cài desktop | **Đã có**: `install_desktop()` tải `SenClaw-<triple>.app.zip|.zip|.tar.gz` từ `releases/latest/download/`, giải nén (`ditto`/`zip`/`tar`), đặt vào thư mục app của OS. |
 | Release assets | [`desktop.yml`](../.github/workflows/desktop.yml) job `release` đẩy toàn bộ `release-artifacts/*` lên GitHub Release theo tag `v*`. Tag có `-` ⇒ đánh dấu prerelease. |
 | Version hiển thị | [`app_config.dart:2`](../desktop_app/lib/core/config/app_config.dart) — `const kAppVersion = '1.0.0'` **hard-code**, hiện ở nav rail [`shell.dart:111`](../desktop_app/lib/app/shell.dart). |

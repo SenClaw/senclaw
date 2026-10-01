@@ -122,6 +122,17 @@ senclaw uninstall desktop # remove the desktop app
 - `senclaw web` stores the UI bundle in `~/.senclaw/web/dist` and serves it at `http://127.0.0.1:18788`. Use `--force` to re-download, `--version v0.3.0` to pin a release.
 - `senclaw install desktop` downloads the bundle from the [`desktop`](https://github.com/SenClaw/desktop/releases) repository's releases, checks its sha256, and installs into `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` with Desktop + Start Menu shortcuts (Windows), or `~/.senclaw/desktop` with a launcher entry (Linux). Prebuilt for macOS (Apple Silicon), Windows x64 and Linux x64; `--version v0.3.0` pins a release. Once installed, the app updates itself.
 
+### Updating
+
+```bash
+senclaw update            # the latest release (says so when you already have it)
+senclaw update 0.1.0      # a version you name — older ones too, after a confirmation
+senclaw update --list     # releases, newest first, marking the installed and the latest
+senclaw update --select   # pick the version from a numbered list
+```
+
+The binary is checked against the sha256 GitHub publishes for it before it replaces the running one; a Web UI bundle in `~/.senclaw/web/dist` moves to the web-app's latest release. `--pre` includes prereleases, `--yes` downgrades without asking, `--force` reinstalls the same version. A `senclaw` inside the desktop app is left alone — the app updates daemon and UI together.
+
 ---
 
 ## Quick Start (from source)

@@ -1,5 +1,6 @@
-//! `senclaw web`, `senclaw update` — the daemon's own binary and Web UI
-//! bundle, downloaded from GitHub Releases on demand.
+//! `senclaw web` — the Web UI bundle, downloaded from GitHub Releases on
+//! demand — and the download helpers `senclaw update` (`update.rs`) and
+//! `senclaw install desktop` (`desktop.rs`) share.
 //!
 //! The desktop app bundle is a release of the `desktop` repo: installing it
 //! from the CLI is `senclaw install desktop` (see `desktop.rs`, which shares
@@ -17,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use futures::StreamExt;
 
 /// The daemon binary + release archives: `SenClaw/senclaw`.
-const REPO: &str = "SenClaw/senclaw";
+pub(super) const REPO: &str = "SenClaw/senclaw";
 /// The Web UI bundle's own repo and release asset.
 const WEB_APP_REPO: &str = "SenClaw/web-app";
 const WEB_DIST_ASSET: &str = "senclaw-web-dist.tar.gz";
@@ -35,62 +36,6 @@ pub async fn run_web(force: bool, version: Option<String>) -> Result<()> {
     let port = cfg.ui_server.port;
     println!("Web UI: http://127.0.0.1:{port}");
     crate::run_daemon(cfg).await
-}
-
-// ===== Update =====
-
-/// `senclaw update` — update the binary, and the Web UI bundle if one was
-/// previously downloaded.
-pub async fn run_update(version: Option<String>) -> Result<()> {
-    println!("Updating SenClaw…");
-    update_binary(version.as_deref()).await?;
-
-    let web_dist = home().join(".senclaw").join("web").join("dist");
-    if web_dist.join("index.html").exists() {
-        println!("\nUpdating Web UI…");
-        ensure_web_dist(true, version).await?;
-    }
-
-    println!("\nAll components updated successfully.");
-    Ok(())
-}
-
-/// Download the latest senclaw binary and replace the current one.
-async fn update_binary(version: Option<&str>) -> Result<()> {
-    let target = binary_target()?;
-    let asset = format!("senclaw-{target}{}", std::env::consts::EXE_SUFFIX);
-    let url = asset_url(REPO, &asset, version);
-    let tmp = tmp_dir()?;
-    let tmp_bin = tmp.join("senclaw-update");
-
-    download(&url, &tmp_bin).await?;
-    make_executable(&tmp_bin)?;
-
-    let current_exe = std::env::current_exe().context("cannot determine current binary path")?;
-    let current_exe = current_exe.canonicalize().unwrap_or_else(|_| current_exe.clone());
-
-    // On Unix we can atomically rename over the running binary.
-    // On Windows the running exe is locked, so we rename-away first.
-    #[cfg(windows)]
-    {
-        let bak = current_exe.with_extension("exe.bak");
-        let _ = std::fs::remove_file(&bak);
-        std::fs::rename(&current_exe, &bak)
-            .context("cannot move current binary aside — try running from an elevated prompt")?;
-    }
-
-    std::fs::rename(&tmp_bin, &current_exe).with_context(|| {
-        format!(
-            "cannot replace {} — you may need to run with sudo or adjust permissions",
-            current_exe.display()
-        )
-    })?;
-
-    println!("Binary updated: {}", current_exe.display());
-    if let Ok(out) = std::process::Command::new(&current_exe).arg("--version").output() {
-        print!("{}", String::from_utf8_lossy(&out.stdout));
-    }
-    Ok(())
 }
 
 /// Rust target triple matching this repo's release asset names.
@@ -112,7 +57,7 @@ pub(super) fn binary_target() -> Result<&'static str> {
 
 /// Return the local Web UI dist directory, downloading and extracting the
 /// release bundle on first use (or when `force` is set).
-async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf> {
+pub(super) async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf> {
     let dist = home().join(".senclaw").join("web").join("dist");
     if !force && dist.join("index.html").exists() {
         return Ok(dist);
@@ -141,7 +86,7 @@ async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf
 // ===== Shared helpers =====
 
 /// Give `path` the executable bit. No-op on Windows, where the extension decides.
-fn make_executable(path: &Path) -> Result<()> {
+pub(super) fn make_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

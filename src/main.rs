@@ -88,11 +88,30 @@ enum Command {
         #[command(subcommand)]
         cmd: senclaw::cli::commands::desktop::UninstallCmd,
     },
-    /// Update SenClaw to the latest version (binary + Web UI bundle if present)
+    /// Update SenClaw — to the latest release, a version you name, or one you
+    /// pick from the list (binary + Web UI bundle if present)
     Update {
-        /// Release tag to update to (e.g. v0.3.0). Default: latest.
-        #[arg(long)]
+        /// Version to install (e.g. 0.1.1 or v0.1.1). Default: the latest release.
+        #[arg(value_name = "VERSION", conflicts_with = "version")]
+        target: Option<String>,
+        /// Same as VERSION, kept for older scripts.
+        #[arg(long, value_name = "VERSION")]
         version: Option<String>,
+        /// List the releases (newest first) and exit.
+        #[arg(long, conflicts_with_all = ["target", "version", "select"])]
+        list: bool,
+        /// Choose the version from a numbered list.
+        #[arg(long, short = 's', conflicts_with_all = ["target", "version"])]
+        select: bool,
+        /// Include prereleases in the latest, --list and --select.
+        #[arg(long)]
+        pre: bool,
+        /// Downgrade without asking.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Reinstall even when that version is already installed.
+        #[arg(long)]
+        force: bool,
     },
     /// Manage engine runtimes (GGUF/MLX, decision, OCR, Whisper, TTS) — install,
     /// select, inspect. See docs/runtime-protocol.md.
@@ -255,7 +274,17 @@ async fn main() -> Result<()> {
         }
         Command::Install { cmd } => senclaw::cli::commands::desktop::run_install(cmd).await,
         Command::Uninstall { cmd } => senclaw::cli::commands::desktop::run_uninstall(cmd).await,
-        Command::Update { version } => senclaw::cli::commands::distrib::run_update(version).await,
+        Command::Update { target, version, list, select, pre, yes, force } => {
+            let opts = senclaw::cli::commands::update::UpdateOptions {
+                version: target.or(version),
+                list,
+                select,
+                pre,
+                yes,
+                force,
+            };
+            senclaw::cli::commands::update::run(opts).await
+        }
         Command::Runtime { cmd } => senclaw::cli::commands::runtime::run(cmd).await,
 
         // MCP servers

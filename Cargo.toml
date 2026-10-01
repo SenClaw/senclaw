@@ -152,6 +152,9 @@ dirs = "5"
 sha2 = "0.10"
 hex = "0.4"
 
+# Release version ordering for `senclaw update`
+semver = "1"
+
 # Unified diff generation
 similar = "2"
 

@@ -110,6 +110,17 @@ senclaw uninstall desktop # gỡ app desktop
 - `senclaw web` lưu bundle UI tại `~/.senclaw/web/dist` và phục vụ tại `http://127.0.0.1:18788`. Dùng `--force` để tải lại, `--version v0.3.0` để chọn phiên bản.
 - `senclaw install desktop` tải bundle từ release của repo [`desktop`](https://github.com/SenClaw/desktop/releases), kiểm tra sha256, rồi cài vào `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` kèm shortcut Desktop + Start Menu (Windows), hoặc `~/.senclaw/desktop` kèm shortcut launcher (Linux). Có bản dựng sẵn cho macOS (Apple Silicon), Windows x64 và Linux x64; `--version v0.3.0` để chọn phiên bản. Sau khi cài, app tự cập nhật.
 
+### Cập nhật
+
+```bash
+senclaw update            # lên release mới nhất (báo khi đã ở bản đó)
+senclaw update 0.1.0      # lên đúng version chỉ định — cả bản cũ hơn, sau khi xác nhận
+senclaw update --list     # danh sách release, mới nhất trước, đánh dấu bản đang cài và bản mới nhất
+senclaw update --select   # chọn version từ danh sách đánh số
+```
+
+Binary được đối chiếu sha256 do GitHub công bố trước khi thay bản đang chạy; Web UI trong `~/.senclaw/web/dist` lên release mới nhất của web-app. `--pre` gồm cả prerelease, `--yes` hạ version không hỏi, `--force` cài lại cùng version. `senclaw` nằm trong app desktop thì không bị đụng tới — app tự cập nhật daemon và UI cùng lúc.
+
 ---
 
 ## Chạy nhanh (từ mã nguồn)

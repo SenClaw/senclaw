@@ -12,5 +12,6 @@ pub mod pairing;
 pub mod runtime;
 pub mod scan;
 pub mod skills;
+pub mod update;
 pub mod wiki;
 pub mod workflow;

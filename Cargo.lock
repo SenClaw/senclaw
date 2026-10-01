@@ -4409,6 +4409,7 @@ dependencies = [
  "russh",
  "russh-keys",
  "schemars",
+ "semver",
  "sen-runtime-sdk",
  "serde",
  "serde_json",
