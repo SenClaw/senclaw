@@ -108,7 +108,7 @@ senclaw uninstall desktop # gỡ app desktop
 ```
 
 - `senclaw web` lưu bundle UI tại `~/.senclaw/web/dist` và phục vụ tại `http://127.0.0.1:18788`. Dùng `--force` để tải lại, `--version v0.3.0` để chọn phiên bản.
-- `senclaw install desktop` cài vào `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` (Windows), hoặc `~/.senclaw/desktop` kèm shortcut launcher (Linux). Hỗ trợ macOS (Apple Silicon + Intel), Windows x64 và Linux x64.
+- `senclaw install desktop` tải bundle từ release của repo [`desktop`](https://github.com/SenClaw/desktop/releases), kiểm tra sha256, rồi cài vào `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` kèm shortcut Desktop + Start Menu (Windows), hoặc `~/.senclaw/desktop` kèm shortcut launcher (Linux). Có bản dựng sẵn cho macOS (Apple Silicon), Windows x64 và Linux x64; `--version v0.3.0` để chọn phiên bản. Sau khi cài, app tự cập nhật.
 
 ---
 

@@ -4,6 +4,7 @@ pub mod channel;
 pub mod clawhub;
 pub mod cognitive;
 pub mod create;
+pub mod desktop;
 pub mod distrib;
 pub mod hub;
 pub mod marketplace;

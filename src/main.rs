@@ -78,6 +78,16 @@ enum Command {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Install a component that does not ship in this binary (the native desktop app)
+    Install {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::desktop::InstallCmd,
+    },
+    /// Remove a component installed by `senclaw install`
+    Uninstall {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::desktop::UninstallCmd,
+    },
     /// Update SenClaw to the latest version (binary + Web UI bundle if present)
     Update {
         /// Release tag to update to (e.g. v0.3.0). Default: latest.
@@ -243,6 +253,8 @@ async fn main() -> Result<()> {
         Command::Web { force, version } => {
             senclaw::cli::commands::distrib::run_web(force, version).await
         }
+        Command::Install { cmd } => senclaw::cli::commands::desktop::run_install(cmd).await,
+        Command::Uninstall { cmd } => senclaw::cli::commands::desktop::run_uninstall(cmd).await,
         Command::Update { version } => senclaw::cli::commands::distrib::run_update(version).await,
         Command::Runtime { cmd } => senclaw::cli::commands::runtime::run(cmd).await,
 

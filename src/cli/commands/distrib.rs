@@ -1,11 +1,12 @@
 //! `senclaw web`, `senclaw update` — the daemon's own binary and Web UI
 //! bundle, downloaded from GitHub Releases on demand.
 //!
-//! The desktop app bundle and its self-update flow moved to the `desktop`
-//! repo entirely (its own `update_desktop` binary): a CLI-installed daemon
-//! has no bundle to swap, no media sidecar to fetch (speech-to-text is the
-//! `sen-whisper` runtime now — `senclaw runtime install sen-whisper`), and
-//! "bundle check" here means only "does the daemon binary itself exist".
+//! The desktop app bundle is a release of the `desktop` repo: installing it
+//! from the CLI is `senclaw install desktop` (see `desktop.rs`, which shares
+//! the download helpers below), and keeping it current is the app's own
+//! `update_desktop` binary. A CLI-installed daemon has no media sidecar to
+//! fetch either (speech-to-text is the `sen-whisper` runtime now — `senclaw
+//! runtime install sen-whisper`).
 //!
 //! Release asset names must match this repo's own release workflow
 //! (`.github/workflows/release.yml`).
@@ -93,7 +94,7 @@ async fn update_binary(version: Option<&str>) -> Result<()> {
 }
 
 /// Rust target triple matching this repo's release asset names.
-fn binary_target() -> Result<&'static str> {
+pub(super) fn binary_target() -> Result<&'static str> {
     if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         Ok("aarch64-apple-darwin")
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
@@ -152,17 +153,17 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn home() -> PathBuf {
+pub(super) fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn tmp_dir() -> Result<PathBuf> {
+pub(super) fn tmp_dir() -> Result<PathBuf> {
     let dir = home().join(".senclaw").join("tmp");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
-fn asset_url(repo: &str, asset: &str, version: Option<&str>) -> String {
+pub(super) fn asset_url(repo: &str, asset: &str, version: Option<&str>) -> String {
     match version {
         Some(tag) => {
             let tag = if tag.starts_with('v') { tag.to_string() } else { format!("v{tag}") };
@@ -172,7 +173,7 @@ fn asset_url(repo: &str, asset: &str, version: Option<&str>) -> String {
     }
 }
 
-async fn download(url: &str, dest: &Path) -> Result<()> {
+pub(super) async fn download(url: &str, dest: &Path) -> Result<()> {
     println!("Downloading {url}");
     let client = reqwest::Client::builder().user_agent(format!("senclaw/{}", env!("CARGO_PKG_VERSION"))).build()?;
     let resp = client.get(url).send().await?;
@@ -198,7 +199,7 @@ async fn download(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_tool(program: &str, args: &[&str]) -> Result<()> {
+pub(super) fn run_tool(program: &str, args: &[&str]) -> Result<()> {
     let status = std::process::Command::new(program)
         .args(args)
         .status()

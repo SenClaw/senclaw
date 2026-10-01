@@ -111,15 +111,16 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Sen
 
 Both installers download the latest release binary into `~/.senclaw/bin` (`%USERPROFILE%\.senclaw\bin` on Windows) and add it to your PATH. To pin a release, set `SENCLAW_VERSION=v0.3.0` before running the installer.
 
-The `senclaw` binary ships **without** the Web UI — it is downloaded on demand:
+The `senclaw` binary ships **without** the Web UI or the desktop app — they are downloaded on demand:
 
 ```bash
 senclaw web               # download the Web UI bundle (first run only), then start the daemon serving it
+senclaw install desktop   # download & install the native desktop app for this platform
+senclaw uninstall desktop # remove the desktop app
 ```
 
-`senclaw web` stores the UI bundle in `~/.senclaw/web/dist` and serves it at `http://127.0.0.1:18788`. Use `--force` to re-download, `--version v0.3.0` to pin a release.
-
-The native desktop app (macOS/Windows/Linux) is its own download and updater now — see the `desktop` repository — rather than a `senclaw install`/`uninstall` subcommand.
+- `senclaw web` stores the UI bundle in `~/.senclaw/web/dist` and serves it at `http://127.0.0.1:18788`. Use `--force` to re-download, `--version v0.3.0` to pin a release.
+- `senclaw install desktop` downloads the bundle from the [`desktop`](https://github.com/SenClaw/desktop/releases) repository's releases, checks its sha256, and installs into `/Applications` (macOS), `%LOCALAPPDATA%\SenClaw\Desktop` with Desktop + Start Menu shortcuts (Windows), or `~/.senclaw/desktop` with a launcher entry (Linux). Prebuilt for macOS (Apple Silicon), Windows x64 and Linux x64; `--version v0.3.0` pins a release. Once installed, the app updates itself.
 
 ---
 
