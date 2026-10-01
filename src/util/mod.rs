@@ -7,5 +7,6 @@ pub mod internal_auth;
 pub mod llm_log;
 pub mod local_time;
 pub mod paths;
+pub mod process_tree;
 pub mod shell_safety;
 pub mod text;

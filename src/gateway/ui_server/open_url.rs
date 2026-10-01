@@ -66,8 +66,12 @@ fn open_in_host_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     let mut cmd = {
         // rundll32 avoids cmd.exe metacharacter parsing of `start`.
+        use std::os::windows::process::CommandExt;
         let mut c = Command::new("rundll32");
         c.arg("url.dll,FileProtocolHandler").arg(url);
+        // A browser this starts is the user's, not ours: keep it out of the
+        // daemon's kill-on-close job so quitting the app doesn't close it.
+        c.creation_flags(crate::util::process_tree::CREATE_BREAKAWAY_FROM_JOB);
         c
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

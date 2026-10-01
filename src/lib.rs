@@ -1346,6 +1346,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     #[cfg(unix)]
     raise_fd_limit();
 
+    // Before the first spawn: on Windows, children otherwise outlive a
+    // `TerminateProcess` of the daemon and keep their ports.
+    util::process_tree::bind_children_to_daemon();
+
     // ===== 0b. Lock down secret-bearing files =====
     // The write paths now chmod 0600 themselves, but that only covers files
     // written after this build. Existing installs already have `config.json`
