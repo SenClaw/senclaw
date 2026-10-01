@@ -134,6 +134,20 @@ impl RuntimeIndex {
     pub fn entry(&self, id: &str) -> Option<&IndexEntry> {
         self.runtimes.iter().find(|e| e.id == id)
     }
+
+    /// Keep every runtime this binary already ships when the fetched index
+    /// does not list it yet. GitHub `main` can lag a build that knows a new
+    /// engine (`sen-turbo-fieldfare`); without the merge, Runtime Selections
+    /// shows the slot and Engines & Frameworks has nothing to install into it.
+    /// An id present on both sides keeps the fetched entry.
+    pub fn with_bundled_additions(mut self) -> Self {
+        for entry in RuntimeIndex::bundled().runtimes {
+            if self.entry(&entry.id).is_none() {
+                self.runtimes.push(entry);
+            }
+        }
+        self
+    }
 }
 
 /// A fetch result cached at `<runtimes_dir>/index-cache.json` so the daemon
@@ -175,7 +189,9 @@ fn cache_path(runtimes_dir: &Path) -> std::path::PathBuf {
 
 pub fn load_cache(runtimes_dir: &Path) -> Option<CachedIndex> {
     let raw = std::fs::read_to_string(cache_path(runtimes_dir)).ok()?;
-    serde_json::from_str(&raw).ok()
+    let mut cached: CachedIndex = serde_json::from_str(&raw).ok()?;
+    cached.index = cached.index.with_bundled_additions();
+    Some(cached)
 }
 
 fn save_cache(runtimes_dir: &Path, cached: &CachedIndex) -> Result<()> {
@@ -212,6 +228,7 @@ pub async fn fetch_and_cache(runtimes_dir: &Path, url: &str) -> (CachedIndex, Op
             // A fresh index may have a newer upstream release than whatever
             // `"latest"` last resolved to — start empty so the caller
             // (`RuntimeManager::refresh_index`) re-resolves it.
+            let index = index.with_bundled_additions();
             let cached = CachedIndex { fetched_at: now_millis(), source: url.to_string(), index, resolved_latest: Default::default() };
             if let Err(e) = save_cache(runtimes_dir, &cached) {
                 tracing::warn!("[runtime] could not cache the runtime index: {e:#}");
@@ -285,7 +302,7 @@ mod tests {
         // every package must be that release's own asset with a usable
         // checksum — the installer verifies against it and refuses otherwise.
         let index = RuntimeIndex::bundled();
-        for id in ["sen-mlx", "sen-sysone", "sen-ocr", "sen-whisper", "sen-tts"] {
+        for id in ["sen-mlx", "sen-turbo-fieldfare", "sen-sysone", "sen-ocr", "sen-whisper", "sen-tts"] {
             let entry = index.entry(id).unwrap_or_else(|| panic!("{id} missing from bundled index"));
             let stable = entry.channel_version(Channel::Stable).unwrap_or_else(|| panic!("{id} has no stable channel"));
             let release = entry
@@ -297,6 +314,14 @@ mod tests {
             for p in &release.packages {
                 let own = format!("https://github.com/SenClaw/{id}/releases/download/v{stable}/{id}-{stable}-{}.tar.gz", p.platform);
                 assert_eq!(p.url, own, "{id}: package is not this release's own asset");
+                // sen-turbo-fieldfare's checksum is the `<archive>.sha256` file
+                // on the same release (§2.3). The installer fetches it when the
+                // index does not repeat the digest. Every other package carries
+                // the digest and the size here.
+                if id == "sen-turbo-fieldfare" {
+                    assert!(p.sha256.is_none(), "{id}: checksum lives in the .sha256 release asset");
+                    continue;
+                }
                 let sha = p.sha256.as_deref().unwrap_or_default();
                 assert!(sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()), "{id} {}: bad sha256", p.platform);
                 assert!(p.size.is_some_and(|s| s > 0), "{id} {}: no size", p.platform);
@@ -346,6 +371,26 @@ mod tests {
         resolved_latest.insert("llama.cpp-metal".to_string(), "b11300".to_string());
         let resolved = CachedIndex { fetched_at: 0, source: "test".into(), index: index.clone(), resolved_latest };
         assert_eq!(resolved.effective_channel_version(e, Channel::Beta), Some("b11300".to_string()));
+    }
+
+    #[test]
+    fn a_fetched_index_keeps_a_bundled_runtime_it_does_not_list() {
+        let remote = RuntimeIndex::parse(r#"{"schemaVersion":1,"runtimes":[]}"#).unwrap();
+        let merged = remote.with_bundled_additions();
+        let entry = merged.entry("sen-turbo-fieldfare").expect("bundled engine must stay selectable");
+        assert_eq!(entry.slots, vec![sen_runtime_sdk::manifest::Slot::Gturbo]);
+        assert!(entry.release("0.1.0").is_some());
+    }
+
+    #[test]
+    fn a_fetched_entry_wins_over_the_bundled_copy_of_the_same_id() {
+        let remote = RuntimeIndex::parse(
+            r#"{"schemaVersion":1,"runtimes":[{"id":"sen-turbo-fieldfare","name":"From the index","type":"llm-engine","slots":["gturbo"],"formats":["gturbo"],"capabilities":["chat"],"platforms":["darwin-arm64"],"channels":{"stable":"9.9.9"},"releases":[]}]}"#,
+        )
+        .unwrap();
+        let merged = remote.with_bundled_additions();
+        assert_eq!(merged.entry("sen-turbo-fieldfare").unwrap().name, "From the index");
+        assert_eq!(merged.runtimes.iter().filter(|e| e.id == "sen-turbo-fieldfare").count(), 1);
     }
 
     #[test]

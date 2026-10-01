@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -245,9 +246,15 @@ async fn install_one(
         let mut s = status.lock().unwrap();
         s.state = JobState::Verifying;
     }
-    if let Some(expected) = &package.sha256 {
-        verify_sha256(&archive_path, expected)?;
-    }
+    // The index may carry the checksum itself (every other sen-* package).
+    // When it does not, the release still publishes `<archive>.sha256` in
+    // `shasum -a 256` format (§2.3). Install refuses to extract without one
+    // of those two.
+    let expected = match &package.sha256 {
+        Some(sha) => sha.clone(),
+        None => checksum_beside(&package.url).await?,
+    };
+    verify_sha256(&archive_path, &expected)?;
 
     {
         let mut s = status.lock().unwrap();
@@ -286,6 +293,34 @@ async fn download_with_progress(
     Ok(())
 }
 
+/// The hex digest in a `shasum -a 256` file (`<hex>  <name>`) or a bare
+/// `sha256:<hex>` line. Anything else is not a checksum we can check.
+fn sha256_from_shasum(text: &str) -> Option<String> {
+    let token = text.split_whitespace().next()?;
+    let hex = token.strip_prefix("sha256:").unwrap_or(token);
+    if hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(hex.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+async fn checksum_beside(archive_url: &str) -> anyhow::Result<String> {
+    let url = format!("{archive_url}.sha256");
+    let client = reqwest::Client::builder().user_agent(format!("senclaw/{}", env!("CARGO_PKG_VERSION"))).build()?;
+    let text = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("fetch checksum {url}"))?
+        .error_for_status()
+        .with_context(|| format!("fetch checksum {url}"))?
+        .text()
+        .await
+        .with_context(|| format!("read checksum {url}"))?;
+    sha256_from_shasum(&text).with_context(|| format!("checksum file {url} has no sha256"))
+}
+
 fn verify_sha256(path: &std::path::Path, expected: &str) -> anyhow::Result<()> {
     use sha2::Digest;
     let bytes = std::fs::read(path)?;
@@ -312,6 +347,20 @@ mod tests {
         let s = status.lock().unwrap();
         assert_eq!(s.state, JobState::Cancelled);
         assert!(s.finished_at.is_some(), "a cancelled job must still report when it finished");
+    }
+
+    #[test]
+    fn a_shasum_file_yields_its_hex_digest() {
+        let line = "abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abcd  sen-turbo-fieldfare-0.1.0-darwin-arm64.tar.gz\n";
+        assert_eq!(
+            sha256_from_shasum(line).as_deref(),
+            Some("abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abcd")
+        );
+        assert_eq!(
+            sha256_from_shasum("sha256:ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD\n").as_deref(),
+            Some("abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd")
+        );
+        assert!(sha256_from_shasum("not a checksum").is_none());
     }
 
     #[test]

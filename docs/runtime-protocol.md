@@ -114,7 +114,9 @@ root (manifest at the top level of the archive or inside a single top-level
 directory — installers accept both), plus `<archive>.sha256` in `shasum -a 256`
 output format (`<hex>  <file name>`, so `shasum -a 256 -c` verifies it). Each
 `sen-*` repo builds them with `make package` and publishes them on its GitHub
-release `v<version>`.
+release `v<version>`. The catalog's `sha256` is that same digest; when a
+package omits it, the installer downloads `<archive>.sha256` from the release
+and refuses to extract if that file is missing or does not match.
 
 ## 3. Launch
 
