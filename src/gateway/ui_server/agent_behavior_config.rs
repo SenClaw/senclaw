@@ -9,12 +9,12 @@
 //! - **memoryRecall** — curated-memory stage: inject relevant curated
 //!   memories (hybrid FTS5/vector search over `memory/*.md`) into the prompt
 //!   before the main turn, and consolidate compaction-dropped history into
-//!   curated memory files (Claude-Code-style auto-memory).
+//!   curated memory files (Claude-Code-style auto-memory). Default **ON**.
 //!
 //! **After-process stages** (run after the main agent turn):
 //! - **afterProcess** — update context by synthesising the conversation so far
 //!   (Claude-Code style) so the agent retains an optimised, compact
-//!   understanding of the whole dialogue for future turns.
+//!   understanding of the whole dialogue for future turns. Default OFF.
 //!
 //! All four are persisted in the global config (`~/.senclaw/config.json`) and
 //! read per-turn by `AgentPool`.

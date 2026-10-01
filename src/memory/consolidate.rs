@@ -27,7 +27,15 @@ use crate::memory::curated;
 /// curated-memory design: durable facts only, nothing derivable or transient.
 const DISTILL_SYSTEM: &str = r#"You distill a conversation summary into durable memories for an AI agent's long-term store.
 
-Extract at most 3 memories worth keeping across future conversations: decisions made, user preferences, project facts, gotchas, unresolved follow-ups. Do NOT extract transient chit-chat, one-off task mechanics, or anything trivially re-derivable.
+Extract at most 3 memories worth keeping across future conversations. Each memory must satisfy all three:
+1. **Selectivity** — drop short-lived details (search result lists, one-off tool noise).
+2. **Abstraction** — generalize this turn's preference into a lasting fact when appropriate.
+3. **Structure** — store recallable fields (who/what/constraint), not raw chat.
+
+Worth keeping: decisions, user preferences, project facts, gotchas, unresolved follow-ups.
+Do NOT extract transient chit-chat, one-off task mechanics, or anything trivially re-derivable from code/git.
+
+If a new fact contradicts an older preference, write the updated fact clearly (include that it supersedes the prior belief).
 
 Return ONLY JSON, no prose:
 {"memories":[{"name":"<kebab-case-slug>","description":"<one-line recall hook, <=120 chars>","type":"<project|reference|feedback|user>","body":"<markdown body; for project/feedback include **Why:** and **How to apply:** lines>"}]}
@@ -68,12 +76,15 @@ fn parse_memories(raw: &str) -> Result<Vec<RawMemory>> {
 }
 
 /// Consolidate a compaction summary into curated memory files under `base`
-/// (the agent dir holding `MEMORY.md` + `memory/`). Returns the number of
-/// memory files written. Never fails the caller's turn — callers should log
-/// and swallow errors.
+/// (the agent dir holding `MEMORY.md` + `memory/`). `origin_session_id` is the
+/// chat JID that produced the summary — stored in frontmatter so recall can
+/// prefer same-session memories and skip bleed from other chats.
+///
+/// Returns the number of memory files written. Never fails the caller's turn —
+/// callers should log and swallow errors.
 pub async fn consolidate_summary(
     base: &Path,
-    folder: &str,
+    origin_session_id: &str,
     summary: &str,
     llm: Option<Arc<dyn LlmClient>>,
     date: &str,
@@ -82,6 +93,11 @@ pub async fn consolidate_summary(
     if summary.is_empty() {
         return Ok(0);
     }
+    let origin = if origin_session_id.is_empty() {
+        "unknown"
+    } else {
+        origin_session_id
+    };
 
     // Path 1: LLM distill.
     if let Some(llm) = llm {
@@ -102,7 +118,7 @@ pub async fn consolidate_summary(
                             &m.body,
                             mem_type,
                             None,
-                            folder,
+                            origin,
                             date,
                             true, // supersede: re-emitted slugs update in place
                         ) {
@@ -135,7 +151,20 @@ pub async fn consolidate_summary(
     // FTS, but do NOT pollute the curated MEMORY.md index. Write the file
     // directly into `memory/` so MemoryManager indexes it, but skip
     // `curated::save` (which would push a noisy index entry every compaction).
-    let slug = format!("conversation-summary-{date}");
+    // Slug includes a short session key so two chats on the same day don't
+    // overwrite each other's summaries.
+    let session_key: String = origin
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+    let slug = format!("conversation-summary-{session_key}-{date}");
     let dir = base.join("memory");
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{slug}.md"));
@@ -148,7 +177,7 @@ pub async fn consolidate_summary(
     ));
     content.push_str("metadata:\n");
     content.push_str("  node_type: conversation_summary\n");
-    content.push_str(&format!("  originSessionId: {folder}\n"));
+    content.push_str(&format!("  originSessionId: {origin}\n"));
     content.push_str(&format!("  createdAt: {date}\n"));
     content.push_str("---\n\n");
     content.push_str(summary);
@@ -243,7 +272,7 @@ mod tests {
         let base = tmp_base("fallback");
         let n = consolidate_summary(
             &base,
-            "g1",
+            "web:chat-a",
             "the summary",
             Some(Arc::new(FailLlm)),
             "2026-07-03",
@@ -251,10 +280,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n, 1);
-        let file = std::fs::read_to_string(base.join("memory/conversation-summary-2026-07-03.md"))
-            .unwrap();
+        let file = std::fs::read_to_string(
+            base.join("memory/conversation-summary-web-chat-a-2026-07-03.md"),
+        )
+        .unwrap();
         assert!(file.contains("the summary"));
         assert!(file.contains("node_type: conversation_summary"));
+        assert!(file.contains("originSessionId: web:chat-a"));
         // Verbatim fallback must NOT create/pollute MEMORY.md.
         assert!(!base.join("MEMORY.md").exists());
         let _ = std::fs::remove_dir_all(&base);
@@ -269,7 +301,7 @@ mod tests {
         assert_eq!(n, 1);
         // File exists but MEMORY.md is not created.
         assert!(base
-            .join("memory/conversation-summary-2026-07-03.md")
+            .join("memory/conversation-summary-g1-2026-07-03.md")
             .exists());
         assert!(!base.join("MEMORY.md").exists());
         let _ = std::fs::remove_dir_all(&base);

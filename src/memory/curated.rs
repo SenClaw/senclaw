@@ -242,10 +242,13 @@ fn write_index(base: &Path, mutate: impl FnOnce(&mut Vec<String>)) -> Result<()>
 }
 
 /// Frontmatter fields relevant to recall presentation.
+#[derive(Debug, Clone)]
 pub struct MemoryMeta {
     pub name: String,
     pub description: String,
     pub mem_type: String,
+    /// Chat JID (or legacy agent folder) that authored this memory.
+    pub origin_session_id: String,
 }
 
 /// Parse the YAML frontmatter of a curated memory file. Returns `None` if the file has
@@ -259,6 +262,7 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
     let mut name = String::new();
     let mut description = String::new();
     let mut mem_type = String::new();
+    let mut origin_session_id = String::new();
     for line in front.lines() {
         let t = line.trim();
         if let Some(v) = t.strip_prefix("name:") {
@@ -267,6 +271,8 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
             description = unquote(v.trim());
         } else if let Some(v) = t.strip_prefix("type:") {
             mem_type = unquote(v.trim());
+        } else if let Some(v) = t.strip_prefix("originSessionId:") {
+            origin_session_id = unquote(v.trim());
         }
     }
     if name.is_empty() {
@@ -277,7 +283,29 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
         name,
         description,
         mem_type,
+        origin_session_id,
     })
+}
+
+/// Rank a curated memory for recall into `chat_jid`.
+///
+/// * `2` — authored in this chat (same JID)
+/// * `1` — agent-wide / legacy (empty, folder name, or non-JID origin)
+/// * `-1` — clearly another chat's session (JID-shaped origin ≠ this chat)
+pub fn memory_session_rank(origin: &str, chat_jid: &str, group_folder: &str) -> i32 {
+    let origin = origin.trim();
+    if origin.is_empty() || origin == group_folder {
+        return 1;
+    }
+    if !chat_jid.is_empty() && origin == chat_jid {
+        return 2;
+    }
+    // Channel / web JIDs look like `web:…`, `tg:…`, `app:…`, `feishu:…`.
+    let looks_like_jid = origin.contains(':');
+    if looks_like_jid && origin != chat_jid {
+        return -1;
+    }
+    1
 }
 
 fn unquote(s: &str) -> String {
@@ -475,6 +503,30 @@ mod tests {
         );
         assert!(index.contains("real-thing.md"));
 
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn memory_session_rank_prefers_same_chat() {
+        assert_eq!(memory_session_rank("web:a", "web:a", "main"), 2);
+        assert_eq!(memory_session_rank("main", "web:a", "main"), 1);
+        assert_eq!(memory_session_rank("", "web:a", "main"), 1);
+        assert_eq!(memory_session_rank("web:other", "web:a", "main"), -1);
+    }
+
+    #[test]
+    fn read_meta_parses_origin_session_id() {
+        let base = tmp().join("meta-origin");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("memory")).unwrap();
+        let path = base.join("memory/note.md");
+        fs::write(
+            &path,
+            "---\nname: note\ndescription: d\nmetadata:\n  type: project\n  originSessionId: web:chat-1\n---\n\nbody\n",
+        )
+        .unwrap();
+        let m = read_meta(&path).unwrap();
+        assert_eq!(m.origin_session_id, "web:chat-1");
         let _ = fs::remove_dir_all(&base);
     }
 }

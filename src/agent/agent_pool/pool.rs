@@ -1841,7 +1841,7 @@ impl AgentPool {
 
             // Curated-memory backend (`memoryRecall` toggle).
             let recall_context = if do_recall {
-                curated_pre_retrieval(prompt, &group.folder, max_results).await
+                curated_pre_retrieval(prompt, &group.folder, jid, max_results).await
             } else {
                 String::new()
             };
@@ -3036,6 +3036,7 @@ impl AgentPool {
                             );
                             if enabled {
                                 let folder = folder.clone();
+                                let jid_for_origin = jid.clone();
                                 let base = cfg.paths.agents_dir.join(&folder);
                                 tokio::spawn(async move {
                                     let llm =
@@ -3044,7 +3045,7 @@ impl AgentPool {
                                         );
                                     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
                                     match crate::memory::consolidate::consolidate_summary(
-                                        &base, &folder, &summary, llm, &date,
+                                        &base, &jid_for_origin, &summary, llm, &date,
                                     )
                                     .await
                                     {
@@ -3531,12 +3532,21 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
 /// (`name (type) — hook` + matched snippet), ending with a hint that the
 /// agent can call the memory tools for deeper retrieval.
 ///
+/// Session scoping: memories whose `originSessionId` is another chat JID are
+/// skipped (prevents bleed between chats that share an agent folder). Same-JID
+/// hits are preferred over agent-wide / legacy folder-tagged ones.
+///
 /// Mirrors `cognitive_pre_retrieval`'s failure contract: any error logs and
 /// returns an empty string — pre-retrieval never fails the agent turn.
-async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usize) -> String {
+async fn curated_pre_retrieval(
+    query: &str,
+    group_folder: &str,
+    chat_jid: &str,
+    max_results: usize,
+) -> String {
     let mgr = crate::memory::manager::get_instance();
     let opts = crate::memory::fts_search::SearchOptions {
-        max_results: max_results + 5,
+        max_results: (max_results + 5) * 2,
         min_score: 0.25,
         source: Some("memory".to_owned()),
     };
@@ -3551,8 +3561,7 @@ async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usi
     // Curated files only: skip daily logs (YYYY-MM-DD.md) and the index.
     let today_file = format!("{}.md", chrono::Utc::now().format("%Y-%m-%d"));
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut out = String::new();
-    let mut n = 0usize;
+    let mut ranked: Vec<(i32, String, String)> = Vec::new();
     for r in results {
         let file_name = std::path::Path::new(&r.path)
             .file_name()
@@ -3565,10 +3574,21 @@ async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usi
         {
             continue;
         }
-        n += 1;
-        match crate::memory::curated::read_meta(std::path::Path::new(&r.path)) {
-            Some(m) => out.push_str(&format!(
-                "[{n}] {} ({}) — {}\n",
+        let meta = crate::memory::curated::read_meta(std::path::Path::new(&r.path));
+        let rank = match &meta {
+            Some(m) => crate::memory::curated::memory_session_rank(
+                &m.origin_session_id,
+                chat_jid,
+                group_folder,
+            ),
+            None => 1, // no frontmatter → treat as shared
+        };
+        if rank < 0 {
+            continue; // other chat's session-scoped memory
+        }
+        let header = match meta {
+            Some(m) => format!(
+                "{} ({}) — {}",
                 m.name,
                 if m.mem_type.is_empty() {
                     "memory"
@@ -3576,14 +3596,21 @@ async fn curated_pre_retrieval(query: &str, group_folder: &str, max_results: usi
                     &m.mem_type
                 },
                 m.description
-            )),
-            None => out.push_str(&format!("[{n}] {file_name}\n")),
-        }
+            ),
+            None => file_name,
+        };
         let snippet: String = r.text.chars().take(300).collect();
-        out.push_str(&format!("{snippet}\n\n"));
-        if n >= max_results {
-            break;
-        }
+        ranked.push((rank, header, snippet));
+    }
+
+    // Same-session first, then shared; preserve search relevance within a tier.
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut out = String::new();
+    let mut n = 0usize;
+    for (_rank, header, snippet) in ranked.into_iter().take(max_results) {
+        n += 1;
+        out.push_str(&format!("[{n}] {header}\n{snippet}\n\n"));
     }
 
     if n == 0 {

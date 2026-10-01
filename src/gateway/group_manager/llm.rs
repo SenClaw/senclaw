@@ -93,15 +93,17 @@ pub fn save_after_process_enabled(config_path: &Path, enabled: bool) -> Result<(
 
 // ===== Curated-memory stage toggle (global, user-set) =====
 
-/// Curated-memory stage. Default OFF — opt-in.
+/// Curated-memory stage. Default ON — auto-recall + consolidation after
+/// compaction so session facts survive context drops (Claude-Code-style).
+/// Users can still turn it off in Settings → Agent behavior.
 ///
 /// When enabled: (a) history dropped by compaction is consolidated into
 /// curated `memory/*.md` files, and (b) each request injects relevant curated
-/// memories found via hybrid FTS5/vector search (Claude-Code-style auto-memory).
+/// memories found via hybrid FTS5/vector search.
 pub fn get_memory_recall_enabled(config_path: &Path) -> bool {
     load_global_config(config_path)
         .memory_recall
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<()> {
