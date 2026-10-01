@@ -592,6 +592,211 @@ pub(crate) fn sanitize_schema_node(node: &mut Value) {
     }
 }
 
+/// Give every historical tool call an id this conversation has not used yet.
+/// TurboFieldfare tracks ids across the whole transcript and answers 400
+/// `invalid or duplicate historical tool call` when a later turn reuses
+/// `ag_call_0`. The matching tool result takes the same new id, in order.
+pub(crate) fn uniquify_tool_call_ids(messages: &mut [Value]) {
+    use std::collections::{HashMap, HashSet, VecDeque};
+    let mut seen = HashSet::new();
+    let mut pending: HashMap<String, VecDeque<String>> = HashMap::new();
+    for msg in messages.iter_mut() {
+        let Some(obj) = msg.as_object_mut() else { continue };
+        let role = obj.get("role").and_then(Value::as_str).unwrap_or("");
+        if role == "assistant" {
+            let Some(calls) = obj.get_mut("tool_calls").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            for call in calls {
+                let Some(id) = call.get("id").and_then(Value::as_str).map(str::to_string) else {
+                    continue;
+                };
+                let mut unique = id.clone();
+                let mut n = 2u32;
+                while !seen.insert(unique.clone()) {
+                    unique = format!("{id}__{n}");
+                    n += 1;
+                }
+                call["id"] = serde_json::json!(unique);
+                pending.entry(id).or_default().push_back(unique);
+            }
+        } else if role == "tool" {
+            let Some(id) = obj.get("tool_call_id").and_then(Value::as_str).map(str::to_string) else {
+                continue;
+            };
+            if let Some(mapped) = pending.get_mut(&id).and_then(VecDeque::pop_front) {
+                obj.insert("tool_call_id".into(), serde_json::json!(mapped));
+            }
+        }
+    }
+}
+
+/// Collapse a union TurboFieldfare cannot render. It accepts a two-branch
+/// nullable union and rejects anything else (`only a two-branch nullable
+/// union is representable`), which is how FormUI's field `oneOf` fails the
+/// whole chat. Object branches become one object whose properties are the
+/// union of the branches.
+pub(crate) fn fold_gemma_unions(node: &mut Value) {
+    if let Some(list) = node.as_array_mut() {
+        for item in list {
+            fold_gemma_unions(item);
+        }
+        return;
+    }
+    let folded = node.as_object().and_then(|obj| {
+        let keyword = ["oneOf", "anyOf", "allOf"]
+            .into_iter()
+            .find(|key| obj.contains_key(*key))?;
+        let branches = obj.get(keyword).and_then(Value::as_array).cloned().unwrap_or_default();
+        if is_two_branch_nullable(&branches) {
+            return None;
+        }
+        Some(merge_union_branches(&branches, obj))
+    });
+    if let Some(folded) = folded {
+        *node = folded;
+    }
+    let Some(obj) = node.as_object_mut() else { return };
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        if let Some(child) = obj.get_mut(&key) {
+            fold_gemma_unions(child);
+        }
+    }
+}
+
+fn is_two_branch_nullable(branches: &[Value]) -> bool {
+    if branches.len() != 2 {
+        return false;
+    }
+    branches
+        .iter()
+        .filter(|branch| {
+            branch.get("type").and_then(Value::as_str) == Some("null")
+                && branch.as_object().is_some_and(|obj| obj.len() == 1)
+        })
+        .count()
+        == 1
+}
+
+fn merge_union_branches(branches: &[Value], parent: &serde_json::Map<String, Value>) -> Value {
+    let mut merged = parent.clone();
+    merged.remove("oneOf");
+    merged.remove("anyOf");
+    merged.remove("allOf");
+    let mut props = merged
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for branch in branches {
+        let Some(obj) = branch.as_object() else { continue };
+        let Some(branch_props) = obj.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        for (key, schema) in branch_props {
+            match props.get(key) {
+                None => {
+                    props.insert(key.clone(), schema.clone());
+                }
+                Some(existing) if existing == schema => {}
+                Some(_) => {
+                    let ty = schema
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .or_else(|| props.get(key).and_then(|v| v.get("type")).and_then(Value::as_str))
+                        .unwrap_or("string");
+                    props.insert(key.clone(), serde_json::json!({"type": ty}));
+                }
+            }
+        }
+    }
+    if !props.is_empty() {
+        merged.insert("properties".into(), Value::Object(props));
+        merged.entry("type").or_insert(serde_json::json!("object"));
+    } else if !merged.contains_key("type") {
+        merged.insert("type".into(), serde_json::json!("object"));
+    }
+    Value::Object(merged)
+}
+
+/// TurboFieldfare requires `type` on every schema node. schemars leaves it off
+/// for a free-form `serde_json::Value` (the `args` field of `schedule_watch`),
+/// and the engine answers 400 `type is required` for the whole chat.
+pub(crate) fn ensure_gemma_types(node: &mut Value) {
+    if node.is_boolean() {
+        *node = serde_json::json!({"type": "object"});
+        return;
+    }
+    if let Some(list) = node.as_array_mut() {
+        for item in list {
+            ensure_gemma_types(item);
+        }
+        return;
+    }
+    let Some(obj) = node.as_object_mut() else { return };
+    if let Some(types) = obj.get("type").and_then(Value::as_array).cloned() {
+        let names: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
+        let concrete: Vec<&str> = names.iter().copied().filter(|name| *name != "null").collect();
+        let nullable = names.iter().any(|name| *name == "null");
+        let single_nullable = nullable && concrete.len() == 1 && names.len() == 2;
+        if !single_nullable {
+            let chosen = concrete
+                .iter()
+                .copied()
+                .find(|name| *name == "object")
+                .or_else(|| concrete.first().copied())
+                .unwrap_or("object");
+            obj.insert("type".into(), serde_json::json!(chosen));
+            if nullable {
+                obj.insert("nullable".into(), serde_json::json!(true));
+            }
+        }
+    }
+    if obj.get("type").and_then(Value::as_str).is_none() && !obj.get("type").is_some_and(Value::is_array) {
+        let inferred = if obj.contains_key("properties") || obj.contains_key("additionalProperties") {
+            "object"
+        } else if obj.contains_key("items") {
+            "array"
+        } else if obj.get("const").is_some_and(Value::is_string)
+            || obj.get("enum").and_then(Value::as_array).is_some_and(|values| values.iter().all(Value::is_string))
+        {
+            "string"
+        } else if obj.get("const").is_some_and(Value::is_number) {
+            "number"
+        } else if obj.get("const").is_some_and(Value::is_boolean) {
+            "boolean"
+        } else {
+            "object"
+        };
+        obj.insert("type".into(), serde_json::json!(inferred));
+    }
+    let keys: Vec<String> = obj.keys().cloned().collect();
+    for key in keys {
+        let Some(child) = obj.get_mut(&key) else { continue };
+        match key.as_str() {
+            "properties" | "patternProperties" | "$defs" | "definitions" => {
+                if let Some(map) = child.as_object_mut() {
+                    for schema in map.values_mut() {
+                        ensure_gemma_types(schema);
+                    }
+                }
+            }
+            "oneOf" | "anyOf" | "allOf" | "prefixItems" => {
+                if let Some(list) = child.as_array_mut() {
+                    for schema in list {
+                        ensure_gemma_types(schema);
+                    }
+                }
+            }
+            "items" | "additionalProperties" | "not" | "if" | "then" | "else" | "contains" | "propertyNames" => {
+                ensure_gemma_types(child);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Convert internal [`Message`] history to OpenAI Chat Completions `messages` JSON.
 ///
 /// OpenAI-compatible APIs (DeepSeek, OpenRouter, etc.) expect:
@@ -784,12 +989,29 @@ async fn query_openai(
         profile.base_url.trim_end_matches('/')
     );
 
-    let api_messages = openai_messages_for_api(messages, system_prompt)?;
-    let openai_tools = if tools.is_empty() {
+    let mut api_messages = openai_messages_for_api(messages, system_prompt)?;
+    let mut openai_tools = if tools.is_empty() {
         None
     } else {
         Some(build_openai_tools(tools))
     };
+    // TurboFieldfare rejects a chat whose history reuses a tool-call id, and
+    // rejects a tool schema whose `oneOf` is not a two-branch nullable union
+    // (FormUI's field list). Rewrite only this engine's request.
+    if profile.model_name.starts_with("gturbo-") {
+        uniquify_tool_call_ids(&mut api_messages);
+        if let Some(tools) = openai_tools.as_mut() {
+            for tool in tools.iter_mut() {
+                if let Some(params) = tool
+                    .get_mut("function")
+                    .and_then(|f| f.get_mut("parameters"))
+                {
+                    fold_gemma_unions(params);
+                    ensure_gemma_types(params);
+                }
+            }
+        }
+    }
 
     // OpenAI reasoning models (o1/o3/o4/gpt-5 families) reject `max_tokens`
     // and require `max_completion_tokens` instead.
@@ -2097,6 +2319,66 @@ mod tests {
         assert!(!uses_max_completion_tokens("gpt-4o"));
         assert!(!uses_max_completion_tokens("deepseek-chat"));
         assert!(!uses_max_completion_tokens("qwen-max"));
+    }
+
+    #[test]
+    fn a_reused_tool_call_id_is_unique_across_the_transcript() {
+        let mut messages = vec![
+            serde_json::json!({"role": "assistant", "content": null, "tool_calls": [
+                {"id": "ag_call_0", "type": "function", "function": {"name": "Skill", "arguments": "{}"}}
+            ]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "ag_call_0", "content": "ok"}),
+            serde_json::json!({"role": "assistant", "content": "now", "tool_calls": [
+                {"id": "ag_call_0", "type": "function", "function": {"name": "clock_now", "arguments": "{}"}}
+            ]}),
+            serde_json::json!({"role": "tool", "tool_call_id": "ag_call_0", "content": "01:04"}),
+        ];
+        uniquify_tool_call_ids(&mut messages);
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "ag_call_0");
+        assert_eq!(messages[1]["tool_call_id"], "ag_call_0");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "ag_call_0__2");
+        assert_eq!(messages[3]["tool_call_id"], "ag_call_0__2");
+    }
+
+    #[test]
+    fn a_multi_branch_union_folds_into_one_object() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "fields": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "oneOf": [
+                            {"properties": {"type": {"const": "text"}, "key": {"type": "string"}}, "required": ["type", "key"]},
+                            {"properties": {"type": {"const": "number"}, "min": {"type": "number"}}, "required": ["type"]}
+                        ]
+                    }
+                },
+                "note": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+            }
+        });
+        fold_gemma_unions(&mut schema);
+        let items = &schema["properties"]["fields"]["items"];
+        assert!(items.get("oneOf").is_none());
+        assert_eq!(items["type"], "object");
+        assert_eq!(items["properties"]["key"]["type"], "string");
+        assert_eq!(items["properties"]["min"]["type"], "number");
+        assert_eq!(items["properties"]["type"]["type"], "string");
+        assert!(schema["properties"]["note"].get("anyOf").is_some(), "a nullable pair stays");
+    }
+
+    #[test]
+    fn a_typeless_json_value_field_becomes_an_object() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "args": {"description": "Arguments for tool, as a JSON object"}
+            }
+        });
+        ensure_gemma_types(&mut schema);
+        assert_eq!(schema["properties"]["args"]["type"], "object");
+        assert_eq!(schema["properties"]["args"]["description"], "Arguments for tool, as a JSON object");
     }
 
     /// Boolean subschemas (schemars output for `serde_json::Value`) must be
