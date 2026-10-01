@@ -150,6 +150,10 @@ pub trait CoreApi: Send + Sync {
     /// Switch the core's working directory (used by workspace_switch and dispatch).
     fn set_working_dir(&self, jid: &str, dir: &str) {}
 
+    /// Set the agent data dir (`~/.senclaw/agents/<folder>`) so the engine can
+    /// load SOUL.md / plans. Cached for lazily created engines. Default no-op.
+    fn set_agent_data_dir(&self, _jid: &str, _dir: &str) {}
+
     /// Reset working directory to the core's compile-time default.
     fn clear_working_dir(&self, jid: &str) {}
 
@@ -182,10 +186,18 @@ pub trait CoreApi: Send + Sync {
     /// Called on engine creation to load persisted group allowed_tools.
     fn add_allowed_tool(&self, _jid: &str, _tool: &str) {}
 
-    /// Recreate session after stop (discards context, fresh session). Default no-op.
+    /// Recreate session after stop (discards in-RAM context, then hydrates
+    /// from the LLM session store unless it was cleared). Default no-op.
     fn create_session(&self, _jid: &str) -> Result<()> {
         Ok(())
     }
+
+    /// Hard-wipe persisted LLM trajectory for a chat (used by stop_and_clear
+    /// and `/reset`). Does not recreate the session by itself.
+    fn clear_llm_session_history(&self, _jid: &str) {}
+
+    /// Manually compact LLM trajectory for a chat (user Compact button).
+    fn force_compact(&self, _jid: &str) {}
 
     /// Send user input to a running session (used by resume_agent). Default no-op.
     fn process_user_input(&self, _jid: &str, _prompt: &str) -> Result<()> {

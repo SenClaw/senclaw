@@ -309,6 +309,7 @@ impl Tool for TaskTool {
 
         let query_config = QueryConfig {
             agent_id: task_id.clone(),
+            chat_jid: String::new(),
             working_dir: subagent_working_dir,
             agent_data_dir: self.agent_data_dir.clone(),
             system_prompt,

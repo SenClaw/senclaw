@@ -41,6 +41,9 @@ pub struct ZenCoreApi {
     /// the empty `ZenCoreOptions` default and every Bash spawn fails with ENOENT
     /// (`current_dir("")`), so the whole "code" feature is dead on a fresh chat.
     working_dirs: Mutex<HashMap<String, String>>,
+    /// Per-jid agent data directory (`~/.senclaw/agents/<folder>`). Cached so a
+    /// lazily created engine can load SOUL.md / plans into the system prompt.
+    agent_data_dirs: Mutex<HashMap<String, String>>,
     /// Callback invoked when an engine emits a plan-exit request. Caller
     /// (lib.rs) uses it to broadcast the event over WS so the UI can render
     /// the plan-approval modal. `Arc<Mutex>` so spawned event loops can hold
@@ -100,6 +103,7 @@ impl ZenCoreApi {
             bot_tokens: Mutex::new(HashMap::new()),
             model_overrides: Mutex::new(HashMap::new()),
             working_dirs: Mutex::new(HashMap::new()),
+            agent_data_dirs: Mutex::new(HashMap::new()),
             on_plan_exit_request: Arc::new(Mutex::new(None)),
             on_tool_execution: Arc::new(Mutex::new(None)),
             on_widget_emit: Arc::new(Mutex::new(None)),
@@ -196,6 +200,13 @@ impl ZenCoreApi {
             .cloned()
             .filter(|d| !d.is_empty())
             .unwrap_or_else(default_working_dir);
+        let agent_data_dir = self
+            .agent_data_dirs
+            .lock()
+            .unwrap()
+            .get(jid)
+            .cloned()
+            .unwrap_or_default();
         let skip = self
             .default_skip_permissions
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -203,6 +214,7 @@ impl ZenCoreApi {
             instance_id: jid.to_string(),
             model_config_id: self.model_overrides.lock().unwrap().get(jid).cloned(),
             working_dir,
+            agent_data_dir,
             // Inherit the admin choice at construction. Setting it afterwards
             // is too late: the engine's first tool call can happen before any
             // per-jid update reaches it.
@@ -611,6 +623,18 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn set_agent_data_dir(&self, jid: &str, dir: &str) {
+        if !dir.is_empty() {
+            self.agent_data_dirs
+                .lock()
+                .unwrap()
+                .insert(jid.to_string(), dir.to_string());
+        }
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_agent_data_dir(dir);
+        }
+    }
+
     fn clear_working_dir(&self, jid: &str) {
         self.working_dirs.lock().unwrap().remove(jid);
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
@@ -667,6 +691,18 @@ impl CoreApi for ZenCoreApi {
         let engine = self.ensure_engine(jid);
         engine.create_session(None)?;
         Ok(())
+    }
+
+    fn clear_llm_session_history(&self, jid: &str) {
+        let _ = crate::zen_core::session_store::clear(jid);
+        if let Some(engine) = self.engines.lock().unwrap().get(jid).cloned() {
+            engine.wipe_persisted_history();
+        }
+    }
+
+    fn force_compact(&self, jid: &str) {
+        let engine = self.ensure_engine(jid);
+        engine.force_compact();
     }
 
     fn get_tool_infos(&self, jid: &str) -> Vec<AgentToolInfo> {

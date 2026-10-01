@@ -1052,6 +1052,21 @@ impl AgentPool {
             .unwrap_or_else(|| workspace_dir.to_string_lossy().to_string());
         self.core_api.set_working_dir(&binding.jid, &effective_dir);
 
+        // Seed agent_data_dir BEFORE engine creation so SOUL.md lands in the
+        // system prompt on the first turn (PersonaUpdate / memory also use it).
+        if let Some(cfg) = self.config.lock().unwrap().as_ref() {
+            let agent_data = cfg.paths.agents_dir.join(&binding.folder);
+            let _ = crate::gateway::group_manager::ensure_agent_dirs(
+                cfg,
+                &binding.folder,
+                &binding.name,
+            );
+            self.core_api.set_agent_data_dir(
+                &binding.jid,
+                &agent_data.to_string_lossy(),
+            );
+        }
+
         let custom_memory_dir: Option<String> = None;
         let memory_index_folder = binding.folder.clone();
 
@@ -2565,7 +2580,20 @@ impl AgentPool {
         tracing::info!("[AgentPool] Resumed agent for {jid} ({resume_mode})");
     }
 
-    /// Terminate agent session for `jid`, discard all context, start fresh.
+    /// Wipe the persisted LLM trajectory for `jid` so the next
+    /// [`Self::stop_agent`] / `create_session` starts empty (hard clear).
+    pub fn clear_llm_session_history(&self, jid: &str) {
+        self.core_api.clear_llm_session_history(jid);
+    }
+
+    /// Manually compact LLM trajectory (Chat info → Compact context).
+    pub fn force_compact(&self, jid: &str) {
+        self.core_api.force_compact(jid);
+    }
+
+    /// Abort the in-flight turn for `jid` and reset the engine session.
+    /// Persisted LLM history is re-hydrated unless
+    /// [`Self::clear_llm_session_history`] was called first (stop_and_clear).
     /// Mirrors TS 1087–1147.
     pub async fn stop_agent(&self, jid: &str) {
         // 1. Notify dispatch if this agent is executing a subtask.

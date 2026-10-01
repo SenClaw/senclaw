@@ -43,12 +43,12 @@ const COMPACT_KEEP_RECENT: usize = 12;
 const DEFAULT_CONTEXT_LENGTH: u64 = 128_000;
 
 /// Trigger proactive auto-compaction once input tokens reach this fraction of
-/// the model context window. Mirrors TS `AUTO_COMPACT_THRESHOLD_RATIO`.
-const AUTO_COMPACT_THRESHOLD_RATIO: f64 = 0.75;
-/// Minimum message count before the **after-process** stage will proactively
-/// compact a completed conversation. Below this the history is small enough that
-/// summarizing it would cost an LLM call without meaningful benefit (and risk
-/// losing recent detail), so `compact_now` is a no-op.
+/// the model context window. Book Ch2 Policy 6 (adaptive window) uses ~80% so
+/// early turns keep raw tool output intact and KV cache is not thrashed.
+const AUTO_COMPACT_THRESHOLD_RATIO: f64 = 0.80;
+/// Minimum message count before compaction is considered. Below this the
+/// history is small enough that summarizing would cost an LLM call without
+/// meaningful benefit (and risk losing recent detail).
 const AFTER_PROCESS_MIN_MESSAGES: usize = 16;
 /// Hard cap for a single LLM request turn (cloud/API providers).
 /// Dispatch tasks have their own larger timeout, but the model call itself
@@ -78,8 +78,13 @@ fn compact_messages(messages: &mut Vec<Message>) -> bool {
     if messages.len() <= COMPACT_KEEP_RECENT + 2 {
         return false;
     }
-    let first_user_idx = messages.iter().position(|m| m.msg_type == "user");
-    let keep_from = messages.len().saturating_sub(COMPACT_KEEP_RECENT);
+    let first_user_idx = messages.iter().position(|m| is_real_user_message(m));
+    let mut keep_from = messages.len().saturating_sub(COMPACT_KEEP_RECENT);
+
+    // Walk back so we never start mid tool_use / tool_result pair.
+    while keep_from > 0 && is_tool_result_user_message(&messages[keep_from]) {
+        keep_from -= 1;
+    }
 
     let mut kept: Vec<Message> = Vec::new();
     if let Some(idx) = first_user_idx {
@@ -93,8 +98,52 @@ fn compact_messages(messages: &mut Vec<Message>) -> bool {
         }
     }
     kept.extend(messages.drain(keep_from..));
+    sanitize_tool_pairs(&mut kept);
     *messages = kept;
     true
+}
+
+fn is_tool_result_user_message(m: &Message) -> bool {
+    m.msg_type == "user"
+        && matches!(
+            m.message.content.first(),
+            Some(ContentBlock::ToolResult { .. })
+        )
+}
+
+fn is_real_user_message(m: &Message) -> bool {
+    m.msg_type == "user" && !is_tool_result_user_message(m)
+}
+
+fn tool_use_ids_in(m: &Message) -> Vec<String> {
+    m.message
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Drop orphan tool_result blocks whose matching tool_use is not in the list.
+fn sanitize_tool_pairs(messages: &mut Vec<Message>) {
+    let mut known_uses = std::collections::HashSet::new();
+    for m in messages.iter() {
+        for id in tool_use_ids_in(m) {
+            known_uses.insert(id);
+        }
+    }
+    messages.retain_mut(|m| {
+        if !is_tool_result_user_message(m) {
+            return true;
+        }
+        m.message.content.retain(|b| match b {
+            ContentBlock::ToolResult { tool_use_id, .. } => known_uses.contains(tool_use_id),
+            _ => true,
+        });
+        !m.message.content.is_empty()
+    });
 }
 
 /// Prompt used to ask the main model for a lossless session snapshot.
@@ -105,21 +154,25 @@ Cover the following (merge sections freely, but omit nothing):
 
 A. **Intent evolution** — User requests in time order, how they changed, final shape. Include key user messages verbatim.
 B. **Technical context** — Frameworks, toolchains, architecture, runtime environment.
-C. **Artifacts & changes** — Files examined/modified/created. Embed full source for key changes.
-D. **Errors & fixes** — All anomalies, fix paths, and user corrections.
+C. **Artifacts & changes** — Files examined/modified/created. Embed full source for key changes. Keep file paths as recoverable references.
+D. **Errors & fixes** — All anomalies, fix paths, and user corrections (failed approaches matter — do not drop them).
 E. **Open items** — Closed vs in-progress vs remaining work, with blockers.
 F. **Interruption point** — Exact files, functions, edit actions at the moment of interruption.
 G. **Continuation path** (only if applicable) — Quote user's follow-up intent, task name, suggested handoff.
+H. **Decisions & constraints** — Architecture choices, user preferences, hard constraints that later turns must respect.
 
 ## Rules
 - Archive only from conversation content — no speculation or fabrication.
+- Prioritize task-relevant facts over raw tool dumps; drop navigation chrome / ads / repeated noise.
+- Keep semantic completeness (who/what/when/where) — never compress \"X left OpenAI in May 2024\" into \"X left\".
+- When citing external facts, keep source URLs or file paths as references so originals can be re-fetched.
 - Label gaps as \"not confirmed in context\".
 - No tool calls — pure text reasoning and archival.
-- Prefer full source over vague description.
+- Prefer full source over vague description for small critical snippets; otherwise summarize + path.
 ";
 
-const COMPACT_NOTICE: &str = "[Context Compression Notice]
-The conversation has been automatically compressed due to token limit. Below is a comprehensive summary.";
+const COMPACT_NOTICE: &str = "[COMPRESSED] Context Compression Notice
+The conversation was compressed to stay within the token budget and reduce context rot. Below is a structured summary; re-fetch originals via paths/URLs in the summary when detail is needed.";
 
 /// Fire a PreCompact/PostCompact hook (non-blocking, spawned). No-op when no
 /// hook manager or no hooks registered for the event.
@@ -171,13 +224,7 @@ fn spawn_compact_hook(config: &QueryConfig, messages: &[Message], event: HookEve
 /// intact, guaranteeing the message list still ends on a user message and that
 /// tool_use/tool_result pairs are not split. Mirrors TS `autoCompact`.
 fn last_real_user_index(messages: &[Message]) -> Option<usize> {
-    messages.iter().rposition(|m| {
-        m.msg_type == "user"
-            && !matches!(
-                m.message.content.first(),
-                Some(ContentBlock::ToolResult { .. })
-            )
-    })
+    messages.iter().rposition(is_real_user_message)
 }
 
 /// The text of the user input this whole `query()` call is working on —
@@ -323,11 +370,15 @@ struct CompactOutcome {
     changed: bool,
 }
 
-/// **After-process stage.** Run *after* a turn completes (not in the query
-/// loop) to keep the stored conversation compact and coherent — the same
-/// Claude-Code-style LLM summarization as the in-loop safety compaction, but
-/// triggered eagerly once the history has grown past
-/// [`AFTER_PROCESS_MIN_MESSAGES`] rather than only at the 75% context threshold.
+/// **After-process / adaptive-window compaction.** Run after a turn (or on
+/// manual force) with Claude-Code-style LLM summarization.
+///
+/// When `force` is false (normal after-process), compaction only runs once
+/// input tokens reach [`AUTO_COMPACT_THRESHOLD_RATIO`] of the context window
+/// *and* the history has at least [`AFTER_PROCESS_MIN_MESSAGES`] — matching
+/// book Ch2 Policy 6 (batch compress near capacity, not every turn).
+/// When `force` is true (user clicked Compact), the token threshold is skipped
+/// but the minimum message floor still applies.
 ///
 /// Earlier messages are summarized into a lossless snapshot while the most
 /// recent turn is preserved verbatim; on summary failure it falls back to
@@ -336,16 +387,43 @@ struct CompactOutcome {
 /// reflects the compaction. Returns the (possibly unchanged) message list;
 /// no-op for subagents and trivially short conversations.
 pub async fn compact_now(
-    mut messages: Vec<Message>,
+    messages: Vec<Message>,
     config: &QueryConfig,
     cancel: &CancellationToken,
 ) -> Vec<Message> {
+    compact_now_inner(messages, config, cancel, false).await
+}
+
+/// Same as [`compact_now`] but skips the context-window threshold (manual Compact).
+pub async fn compact_now_forced(
+    messages: Vec<Message>,
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+) -> Vec<Message> {
+    compact_now_inner(messages, config, cancel, true).await
+}
+
+async fn compact_now_inner(
+    mut messages: Vec<Message>,
+    config: &QueryConfig,
+    cancel: &CancellationToken,
+    force: bool,
+) -> Vec<Message> {
     if config.is_subagent || messages.len() < AFTER_PROCESS_MIN_MESSAGES {
+        return messages;
+    }
+    if !force && !needs_auto_compact(&messages, config.profile.context_length) {
+        debug!(
+            agent_id = %config.agent_id,
+            msg_count = messages.len(),
+            "after-process: skip compact — below adaptive-window threshold"
+        );
         return messages;
     }
     info!(
         agent_id = %config.agent_id,
         msg_count = messages.len(),
+        force,
         "after-process: proactively compacting completed conversation"
     );
     config
@@ -448,6 +526,7 @@ async fn auto_compact(
                     };
                 }
                 // For the truncation fallback the whole list is the result.
+                append_continuity_reminder(&mut truncated, &config.chat_jid);
                 let usage = count_tokens(&truncated, ctx);
                 return CompactOutcome {
                     exec: CompactExecData {
@@ -468,11 +547,27 @@ async fn auto_compact(
             }
         };
 
+    // Persist summary as handoff so resume / next turn can re-inject it even
+    // if the in-memory summary message is later dropped.
+    if let Some(ref summary_text) = summary {
+        if !config.chat_jid.is_empty() {
+            let ws = crate::control_plane::workspace::Workspace::for_chat(&config.chat_jid);
+            if let Err(e) = ws.write_handoff(summary_text) {
+                warn!(
+                    chat_jid = %config.chat_jid,
+                    error = %e,
+                    "failed to write compaction handoff.md"
+                );
+            }
+        }
+    }
+
     // Usage after compaction reflects only the compacted history (notice +
     // summary); the kept current turn re-counts on the next real LLM turn.
     let usage_after = count_tokens(&compacted_history, ctx);
     let mut final_messages = compacted_history;
     final_messages.extend(keep);
+    append_continuity_reminder(&mut final_messages, &config.chat_jid);
 
     CompactOutcome {
         exec: CompactExecData {
@@ -492,6 +587,53 @@ async fn auto_compact(
     }
 }
 
+/// Inject date + workspace handoff/progress after compaction so the model
+/// retains session continuity even when middle trajectory was dropped.
+fn append_continuity_reminder(messages: &mut Vec<Message>, chat_jid: &str) {
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let mut parts: Vec<String> = vec![format!(
+        "Context was compacted. Today's date is {date}."
+    )];
+    if !chat_jid.is_empty() {
+        let ws = crate::control_plane::workspace::Workspace::for_chat(chat_jid);
+        if let Some(handoff) = ws.read_handoff() {
+            let body = crate::util::text::truncate_on_char_boundary(&handoff, 6_000);
+            parts.push(format!("Session handoff (resume notes):\n{body}"));
+        }
+        if let Some(progress) = ws.read_progress() {
+            let body = crate::util::text::truncate_on_char_boundary(&progress, 4_000);
+            parts.push(format!("Session progress log:\n{body}"));
+        }
+    }
+    let reminder = create_user_message(vec![ContentBlock::Text {
+        text: format!(
+            "<system-reminder>\n{}\n</system-reminder>",
+            parts.join("\n\n")
+        ),
+    }]);
+    // Place after the compact notice when present; otherwise after the first
+    // real user message so the model sees continuity before recent turns.
+    let insert_at = messages
+        .iter()
+        .position(|m| {
+            m.message.content.iter().any(|b| matches!(
+                b,
+                ContentBlock::Text { text } if text.contains("[Context compacted")
+                    || text.contains("[Context Compression Notice]")
+            ))
+        })
+        .map(|i| i + 1)
+        .or_else(|| {
+            messages
+                .iter()
+                .position(is_real_user_message)
+                .map(|i| i + 1)
+        })
+        .unwrap_or(0)
+        .min(messages.len());
+    messages.insert(insert_at, reminder);
+}
+
 /// Configuration passed to the query loop. All fields are owned so the config
 /// can be moved into spawned tasks.
 /// Resolver returning the current tool list. Called once per turn so newly
@@ -501,6 +643,9 @@ pub type ToolsResolver = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 
 pub struct QueryConfig {
     pub agent_id: String,
+    /// Chat JID (engine instance id) — used to load workspace handoff/progress
+    /// after compaction. Empty for subagents / unit tests.
+    pub chat_jid: String,
     pub working_dir: String,
     pub agent_data_dir: String,
     pub system_prompt: String,
@@ -1267,6 +1412,9 @@ pub async fn query(
                     let token_before =
                         count_tokens(&messages, config.profile.context_length).use_tokens;
                     let did_compact = compact_messages(&mut messages);
+                    if did_compact {
+                        append_continuity_reminder(&mut messages, &config.chat_jid);
+                    }
                     let usage_after = count_tokens(&messages, config.profile.context_length);
                     config
                         .event_bus
@@ -1621,6 +1769,9 @@ pub async fn query(
                 config.agent_id
             );
             messages.clear();
+            if !config.chat_jid.is_empty() {
+                let _ = crate::zen_core::session_store::clear(&config.chat_jid);
+            }
             messages.push(create_user_message(vec![ContentBlock::Text {
                 text: format!("按照以下计划进行实现：\n\n{}", plan_content),
             }]));
@@ -2540,12 +2691,98 @@ mod tests {
                 ..Default::default()
             }),
         };
-        // Need >= 3 messages and input >= 75% of context.
-        let below = vec![make(10), make(20), make(70_000)];
+        // Need >= 3 messages and input >= 80% of context (102_400 of 128k).
+        let below = vec![make(10), make(20), make(90_000)];
         assert!(!needs_auto_compact(&below, 128_000));
-        let above = vec![make(10), make(20), make(100_000)];
+        let above = vec![make(10), make(20), make(105_000)];
         assert!(needs_auto_compact(&above, 128_000));
         // Too few messages never compacts.
         assert!(!needs_auto_compact(&[make(200_000)], 128_000));
+    }
+
+    #[test]
+    fn compact_messages_keeps_tool_pairs_intact() {
+        let mut msgs = Vec::new();
+        msgs.push(create_user_message(vec![ContentBlock::Text {
+            text: "first".into(),
+        }]));
+        // Pad with enough filler so keep-recent kicks in.
+        for i in 0..20 {
+            msgs.push(create_user_message(vec![ContentBlock::Text {
+                text: format!("pad-{i}"),
+            }]));
+            msgs.push(Message {
+                msg_type: "assistant".into(),
+                message: MessagePayload {
+                    role: "assistant".into(),
+                    content: vec![ContentBlock::Text {
+                        text: format!("ok-{i}"),
+                    }],
+                },
+                uuid: format!("a-{i}"),
+                usage: None,
+            });
+        }
+        // Tail: assistant tool_use + user tool_result that must stay paired.
+        msgs.push(Message {
+            msg_type: "assistant".into(),
+            message: MessagePayload {
+                role: "assistant".into(),
+                content: vec![ContentBlock::ToolUse {
+                    id: "call-1".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                }],
+            },
+            uuid: "a-tool".into(),
+            usage: None,
+        });
+        msgs.push(create_user_message(vec![ContentBlock::ToolResult {
+            tool_use_id: "call-1".into(),
+            content: "ok".into(),
+            is_error: false,
+        }]));
+        msgs.push(create_user_message(vec![ContentBlock::Text {
+            text: "latest".into(),
+        }]));
+
+        assert!(compact_messages(&mut msgs));
+        // tool_result must still have its matching tool_use in the list.
+        let uses: std::collections::HashSet<_> = msgs
+            .iter()
+            .flat_map(|m| tool_use_ids_in(m))
+            .collect();
+        for m in &msgs {
+            for b in &m.message.content {
+                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                    assert!(
+                        uses.contains(tool_use_id),
+                        "orphan tool_result {tool_use_id} after compact"
+                    );
+                }
+            }
+        }
+        // Latest real user prompt preserved.
+        assert!(msgs.iter().any(|m| {
+            m.message.content.iter().any(|b| matches!(
+                b,
+                ContentBlock::Text { text } if text == "latest"
+            ))
+        }));
+    }
+
+    #[test]
+    fn append_continuity_reminder_inserts_system_reminder() {
+        let mut msgs = vec![create_user_message(vec![ContentBlock::Text {
+            text: "hi".into(),
+        }])];
+        append_continuity_reminder(&mut msgs, "");
+        assert_eq!(msgs.len(), 2);
+        let text = match &msgs[1].message.content[0] {
+            ContentBlock::Text { text } => text.as_str(),
+            _ => panic!("expected text"),
+        };
+        assert!(text.contains("<system-reminder>"));
+        assert!(text.contains("Today's date"));
     }
 }

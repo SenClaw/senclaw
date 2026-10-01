@@ -120,6 +120,28 @@ impl Workspace {
         Ok(())
     }
 
+    /// Read `handoff.md` for resume-after-compact injection. `None` if missing/empty.
+    pub fn read_handoff(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.handoff_path()).ok()?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    /// Read `progress.md` for resume-after-compact injection. `None` if missing/empty.
+    pub fn read_progress(&self) -> Option<String> {
+        let text = std::fs::read_to_string(self.progress_path()).ok()?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
     /// L1 offload (§8 "no silent edits"): the full content is written under
     /// `artifacts/<call_id>`, and the returned preview says plainly that it
     /// was cut and where the rest lives — never a silent truncation.

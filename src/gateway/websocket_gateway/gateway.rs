@@ -53,6 +53,11 @@ pub trait WsGatewayApi: Send + Sync {
     fn resume_agent(&self, _group_jid: &str, _query: Option<&str>) {}
     /// Stop the agent for a group.
     async fn stop_agent(&self, _group_jid: &str) {}
+    /// Wipe persisted LLM trajectory for a chat (hard clear). Call before
+    /// `stop_agent` on stop_and_clear so create_session does not re-hydrate.
+    fn clear_llm_session_history(&self, _group_jid: &str) {}
+    /// Manually compact LLM trajectory for a chat (Compact context button).
+    fn compact_agent(&self, _group_jid: &str) {}
     /// Switch agent mode (`"Agent" | "Plan"`) for a group's engine.
     fn set_agent_mode(&self, _group_jid: &str, _mode: &str) {}
     /// Read the current agent mode for a group. Returns `None` if no engine.

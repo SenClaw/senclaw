@@ -2051,6 +2051,10 @@ pub(crate) async fn handle_agent_control(
                 api.stop_agent(&jid).await;
             });
         }
+        // Summarize / compress LLM trajectory for this chat (Chat info button).
+        "compact" => {
+            state.api.compact_agent(&group_jid);
+        }
         // Stop the agent AND permanently delete all persisted message history for this JID.
         // After stopping, push an empty history:load so the frontend clears its local list.
         "stop_and_clear" => {
@@ -2059,6 +2063,9 @@ pub(crate) async fn handle_agent_control(
             let jid = group_jid.clone();
             let sender_clone = sender.clone();
             tokio::spawn(async move {
+                // Clear LLM trajectory *before* stop_agent → create_session
+                // so hydration does not revive the wiped session.
+                api.clear_llm_session_history(&jid);
                 api.stop_agent(&jid).await;
 
                 // 1. Chat messages (user / agent text turns)

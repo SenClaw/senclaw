@@ -29,6 +29,7 @@ pub mod permissions;
 pub mod prompt;
 pub mod query_llm;
 pub mod run_tools;
+pub mod session_store;
 pub mod state;
 pub mod vision;
 pub mod workbench;

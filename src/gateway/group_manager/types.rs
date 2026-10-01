@@ -356,9 +356,9 @@ pub(super) struct GlobalConfig {
         rename = "preCognitive"
     )]
     pub(super) pre_cognitive: Option<bool>,
-    /// After-process stage: when enabled, the conversation is proactively
-    /// summarized/compacted (Claude-Code-style) after each turn so the context
-    /// stays optimized and the model keeps understanding the whole conversation.
+    /// After-process stage: when enabled, the conversation may be compacted
+    /// after a turn once usage reaches ~80% of the context window (adaptive
+    /// window — Claude-Code-style, not every turn).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

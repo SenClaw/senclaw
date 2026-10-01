@@ -6,6 +6,7 @@
 //!
 //! Port of TS `ZenEngine` from sema-core.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -97,6 +98,12 @@ pub struct ZenEngine {
     /// out closures that re-fetch live engine state without holding a strong
     /// ref (which would prevent drop). Mirror of `AgentPool::self_weak`.
     self_weak: Mutex<std::sync::Weak<Self>>,
+
+    /// After hydrating a persisted trajectory (daemon restart / stop-without-clear),
+    /// the next user turn re-injects first-turn identity (profile, date, project
+    /// docs) even though `messages` is non-empty — those blocks were only on the
+    /// original first user message and are often dropped by compaction.
+    identity_refresh_pending: Arc<AtomicBool>,
 }
 
 impl ZenEngine {
@@ -160,6 +167,7 @@ impl ZenEngine {
             workbench_service: workbench_service.clone(),
             discovered_tools: Arc::new(Mutex::new(std::collections::HashSet::new())),
             self_weak: Mutex::new(std::sync::Weak::new()),
+            identity_refresh_pending: Arc::new(AtomicBool::new(false)),
         });
         *engine.self_weak.lock().unwrap() = Arc::downgrade(&engine);
 
@@ -1050,6 +1058,25 @@ impl ZenCore for ZenEngine {
             .unwrap_or_else(Self::generate_session_id);
         state.set_session_id(sid.clone());
         *self.session_id.write().unwrap() = Some(sid.clone());
+
+        // Hydrate LLM trajectory from disk so stop / daemon restart do not
+        // erase session memory while the UI transcript is still present.
+        // Callers that intend a hard wipe (`stop_and_clear`, `/reset`) must
+        // `session_store::clear` *before* this method.
+        let mut history_loaded = false;
+        if let Some(msgs) = super::session_store::load(&self.instance_id) {
+            let n = msgs.len();
+            state.set_message_history(MAIN_AGENT_ID, msgs);
+            history_loaded = true;
+            self.identity_refresh_pending.store(true, Ordering::Relaxed);
+            info!(
+                "[{}] create_session: hydrated {n} LLM message(s) from session store",
+                self.instance_id
+            );
+        } else {
+            self.identity_refresh_pending
+                .store(false, Ordering::Relaxed);
+        }
         drop(state);
 
         // Register working dir in ConfigManager (creates default config if new)
@@ -1087,7 +1114,7 @@ impl ZenCore for ZenEngine {
         self.fire(EngineEvent::SessionReady(SessionReadyData {
             working_dir: opts.working_dir.clone(),
             session_id: sid,
-            history_loaded: session_id.is_some(),
+            history_loaded,
             usage: UsageData {
                 use_tokens: 0,
                 max_tokens: 0,
@@ -1473,6 +1500,49 @@ impl ZenCore for ZenEngine {
 // ============================================================================
 
 impl ZenEngine {
+    /// Persist the main-agent LLM trajectory for this chat JID.
+    fn persist_llm_history(jid: &str, messages: &[Message]) {
+        if let Err(e) = super::session_store::save(jid, messages) {
+            warn!(jid, error = %e, "failed to persist LLM session history");
+        }
+    }
+
+    /// Wipe both RAM and disk history for this chat (hard reset).
+    pub fn wipe_persisted_history(&self) {
+        let _ = super::session_store::clear(&self.instance_id);
+        let mut state = self.state.lock().unwrap();
+        state.set_message_history(MAIN_AGENT_ID, Vec::new());
+        self.identity_refresh_pending
+            .store(false, Ordering::Relaxed);
+    }
+
+    /// Hot-update the agent data directory (SOUL.md / plans / memory base).
+    pub fn set_agent_data_dir(&self, dir: &str) {
+        info!("[{}] set_agent_data_dir: {dir}", self.instance_id);
+        self.options.write().unwrap().agent_data_dir = dir.to_owned();
+    }
+
+    /// Workspace handoff / progress for resume after hydrate or compact.
+    fn collect_resume_context(jid: &str) -> Option<String> {
+        let ws = crate::control_plane::workspace::Workspace::for_chat(jid);
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(handoff) = ws.read_handoff() {
+            let body = crate::util::text::truncate_on_char_boundary(&handoff, 6_000);
+            parts.push(format!("Session handoff (resume notes):\n{body}"));
+        }
+        if let Some(progress) = ws.read_progress() {
+            let body = crate::util::text::truncate_on_char_boundary(&progress, 4_000);
+            parts.push(format!("Session progress log:\n{body}"));
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "<system-reminder>\n{}\n</system-reminder>\n\n",
+            parts.join("\n\n")
+        ))
+    }
+
     /// Push one input onto the pending queue. Returns `(inject, queue_length)`.
     fn push_pending(
         state: &mut StateManager,
@@ -1568,6 +1638,7 @@ impl ZenEngine {
         let permission_manager = self.permission_manager.clone();
         let response_registry = self.response_registry.clone();
         let state_for_spawn = self.state.clone();
+        let identity_refresh_for_spawn = self.identity_refresh_pending.clone();
 
         // Build system prompt (stable base + dynamic system context appended).
         // When the Skill tool is registered we append a skills reminder so the
@@ -1641,6 +1712,8 @@ impl ZenEngine {
             .and_then(|f| f.prompt_reminder())
             .map(str::to_string);
 
+        let soul_block = Self::load_soul_prompt_block(&opts.agent_data_dir);
+
         let system_prompt = Self::assemble_system_prompt(
             &opts.system_prompt,
             &opts.working_dir,
@@ -1653,6 +1726,7 @@ impl ZenEngine {
             operating_rules.as_deref(),
             repo_map_block.as_deref(),
             edit_format_reminder.as_deref(),
+            soul_block.as_deref(),
         );
 
         // UserPromptSubmit hook — may update the prompt before it reaches the LLM.
@@ -1727,7 +1801,11 @@ impl ZenEngine {
         // user query. Date-only context is still injected for everyone.
         let user_msg = {
             let mut blocks = Vec::<ContentBlock>::new();
-            if messages.is_empty() {
+            let refresh_identity = messages.is_empty()
+                || self
+                    .identity_refresh_pending
+                    .swap(false, Ordering::Relaxed);
+            if refresh_identity {
                 let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
                 if let Some(ctx) = Self::collect_first_turn_context(
                     &opts.working_dir,
@@ -1735,6 +1813,16 @@ impl ZenEngine {
                     &self.instance_id,
                 ) {
                     blocks.push(ContentBlock::Text { text: ctx });
+                }
+                // After hydrate / compact, also surface workspace handoff so
+                // the model can resume without the dropped middle of the
+                // trajectory (control-plane external memory).
+                if !messages.is_empty() {
+                    if let Some(resume) =
+                        Self::collect_resume_context(&self.instance_id)
+                    {
+                        blocks.push(ContentBlock::Text { text: resume });
+                    }
                 }
             }
             // Skill pre-match: scan the prompt against loaded skill triggers
@@ -1795,6 +1883,7 @@ impl ZenEngine {
                 });
             let config = conversation::QueryConfig {
                 agent_id: MAIN_AGENT_ID.to_string(),
+                chat_jid: instance_id.clone(),
                 working_dir: opts.working_dir.clone(),
                 agent_data_dir: opts.agent_data_dir.clone(),
                 system_prompt: system_prompt.clone(),
@@ -1834,6 +1923,8 @@ impl ZenEngine {
             if let Ok(msgs) = &result {
                 let mut st = state_for_spawn.lock().unwrap();
                 st.set_message_history(MAIN_AGENT_ID, msgs.clone());
+                drop(st);
+                Self::persist_llm_history(&instance_id, msgs);
             }
 
             // After-process stage: proactively summarize/compact the completed
@@ -1844,8 +1935,18 @@ impl ZenEngine {
             if opts.after_process && !cancel.is_cancelled() {
                 if let Ok(msgs) = &result {
                     let compacted = conversation::compact_now(msgs.clone(), &config, &cancel).await;
+                    let changed = compacted.len() != msgs.len()
+                        || compacted
+                            .first()
+                            .map(|m| m.uuid.as_str())
+                            != msgs.first().map(|m| m.uuid.as_str());
                     let mut st = state_for_spawn.lock().unwrap();
-                    st.set_message_history(MAIN_AGENT_ID, compacted);
+                    st.set_message_history(MAIN_AGENT_ID, compacted.clone());
+                    drop(st);
+                    Self::persist_llm_history(&instance_id, &compacted);
+                    if changed {
+                        identity_refresh_for_spawn.store(true, Ordering::Relaxed);
+                    }
                 }
             }
 
@@ -1983,6 +2084,7 @@ impl ZenEngine {
         operating_rules: Option<&str>,
         repo_map: Option<&str>,
         edit_format: Option<&str>,
+        soul: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1995,6 +2097,12 @@ impl ZenEngine {
         let sys_ctx = Self::collect_system_context(working_dir);
 
         let mut out = format!("{base}\n\n# System\n{sys_ctx}");
+        // Persona sits early so identity/behaviour rules shape every decision
+        // before skills / tools reminders. Truncated at load time.
+        if let Some(block) = soul {
+            out.push_str("\n\n");
+            out.push_str(block);
+        }
         if let Some(reminder) = skills_reminder {
             out.push_str("\n\n");
             out.push_str(reminder);
@@ -2040,6 +2148,25 @@ impl ZenEngine {
             out.push_str(block);
         }
         out
+    }
+
+    /// Load and wrap `SOUL.md` for the system prompt. Caps size so a huge
+    /// persona file cannot blow the context budget alone.
+    fn load_soul_prompt_block(agent_data_dir: &str) -> Option<String> {
+        if agent_data_dir.trim().is_empty() {
+            return None;
+        }
+        let path = std::path::Path::new(agent_data_dir).join("SOUL.md");
+        let raw = std::fs::read_to_string(&path).ok()?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let body = crate::util::text::truncate_on_char_boundary(
+            trimmed,
+            crate::user_profile::MAX_FLAT_FILE_CHARS,
+        );
+        Some(format!("# Persona (SOUL.md)\n{body}"))
     }
 
     /// Build the deferred-tools system reminder. Returns `None` when zero
@@ -2388,9 +2515,106 @@ until you have carried out the skill's steps.\n\
 
     /// Hot-update the after-process flag for this engine (set from the global
     /// `afterProcess` toggle on each turn). When true, the conversation is
-    /// proactively compacted after each completed turn.
+    /// proactively compacted after each completed turn **if** the adaptive
+    /// window threshold (~80% context) is reached.
     pub fn set_after_process(&self, enabled: bool) {
         self.options.write().unwrap().after_process = enabled;
+    }
+
+    /// Manually compact this chat's LLM trajectory (user Compact button).
+    /// Spawns a background LLM summarization; no-op when history is too short
+    /// or a turn is already in flight.
+    pub fn force_compact(self: &Arc<Self>) {
+        if self.state.lock().unwrap().current_state(MAIN_AGENT_ID) == SessionState::Processing {
+            warn!(
+                "[{}] force_compact ignored — agent is mid-turn",
+                self.instance_id
+            );
+            return;
+        }
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            engine.run_force_compact().await;
+        });
+    }
+
+    async fn run_force_compact(&self) {
+        let messages = {
+            let state = self.state.lock().unwrap();
+            state.message_history(MAIN_AGENT_ID)
+        };
+        if messages.len() < 16 {
+            info!(
+                "[{}] force_compact: history too short ({} msgs)",
+                self.instance_id,
+                messages.len()
+            );
+            return;
+        }
+
+        let opts = self.options.read().unwrap().clone();
+        let profile = self.resolve_model_profile();
+        let http_client = self.http_client.clone();
+        let event_bus = self.event_bus.clone();
+        let permission_manager = self.permission_manager.clone();
+        let response_registry = self.response_registry.clone();
+        let session_id = self.session_id.read().unwrap().clone().unwrap_or_default();
+        let instance_id = self.instance_id.clone();
+        let engine_for_tools = self.self_weak.lock().unwrap().clone();
+        let tools_resolver: conversation::ToolsResolver = Arc::new(move || {
+            engine_for_tools
+                .upgrade()
+                .map(|e| e.tools_for_main_agent())
+                .unwrap_or_default()
+        });
+
+        let cancel = CancellationToken::new();
+        {
+            let mut state = self.state.lock().unwrap();
+            state.current_abort = Some(cancel.clone());
+        }
+
+        let config = conversation::QueryConfig {
+            agent_id: MAIN_AGENT_ID.to_string(),
+            chat_jid: instance_id.clone(),
+            working_dir: opts.working_dir.clone(),
+            agent_data_dir: opts.agent_data_dir.clone(),
+            system_prompt: opts.system_prompt.clone(),
+            tools: tools_resolver,
+            http_client,
+            event_bus: event_bus.clone(),
+            response_registry: Some(response_registry),
+            permission_checker: permission_manager,
+            profile,
+            thinking: false,
+            stream: false,
+            is_subagent: false,
+            hook_manager: Some(self.hook_manager.clone()),
+            hook_client: Some(self.http_client.clone()),
+            hook_profile: Some(self.resolve_model_profile()),
+            session_id,
+            enable_cache: false,
+            agent_status: false,
+            agent_mode: opts.agent_mode,
+            max_turns_override: None,
+            pending_inject: None,
+        };
+
+        info!("[{instance_id}] force_compact: starting");
+        let compacted =
+            conversation::compact_now_forced(messages, &config, &cancel).await;
+        {
+            let mut st = self.state.lock().unwrap();
+            st.set_message_history(MAIN_AGENT_ID, compacted.clone());
+            st.current_abort = None;
+        }
+        Self::persist_llm_history(&instance_id, &compacted);
+        self.identity_refresh_pending
+            .store(true, Ordering::Relaxed);
+        info!(
+            "[{instance_id}] force_compact: done ({} msgs)",
+            compacted.len()
+        );
     }
 
     /// Hot-update the rendered `## User defaults` system-prompt block (set
@@ -3382,10 +3606,12 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(with.contains("## User defaults"));
-        let without =
-            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None, None, None, None, None);
+        let without = ZenEngine::assemble_system_prompt(
+            "base", "/tmp", None, None, None, None, None, None, None, None, None, None,
+        );
         assert!(!without.contains("## User defaults"));
     }
 
@@ -3419,6 +3645,32 @@ mod tests {
     }
 
     #[test]
+    fn soul_block_lands_in_system_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("SOUL.md"), "# Identity\nYou are Sen.\n").unwrap();
+        let soul = ZenEngine::load_soul_prompt_block(dir.path().to_str().unwrap()).unwrap();
+        assert!(soul.contains("# Persona (SOUL.md)"));
+        assert!(soul.contains("You are Sen."));
+        let out = ZenEngine::assemble_system_prompt(
+            "BASE",
+            "/tmp",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&soul),
+        );
+        let base_at = out.find("BASE").unwrap();
+        let soul_at = out.find("Persona (SOUL.md)").unwrap();
+        assert!(base_at < soul_at);
+    }
+
+    #[test]
     fn operating_rules_land_after_the_base_prompt() {
         // Order is a security property, not formatting: AGENTS.md is text the
         // user types, so it must never precede the base prompt's safety
@@ -3435,6 +3687,7 @@ mod tests {
             Some("<user_operating_rules>\nRULE_MARKER\n</user_operating_rules>"),
             None,
             None,
+            None,
         );
         let base_at = out.find("BASE_MARKER").expect("base present");
         let rule_at = out.find("RULE_MARKER").expect("rules present");
@@ -3446,8 +3699,9 @@ mod tests {
 
     #[test]
     fn operating_rules_absent_leaves_prompt_untouched() {
-        let without =
-            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None, None, None, None, None);
+        let without = ZenEngine::assemble_system_prompt(
+            "base", "/tmp", None, None, None, None, None, None, None, None, None, None,
+        );
         assert!(!without.contains("user_operating_rules"));
     }
 

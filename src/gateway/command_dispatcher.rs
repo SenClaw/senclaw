@@ -148,6 +148,7 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
         let jid = chat_jid?;
         let count = db.delete_group_messages_for_jid(jid).unwrap_or(0);
         let _ = db.delete_agent_timestamp(jid);
+        let _ = crate::zen_core::session_store::clear(jid);
         return Some(format!(
             "🗑️ Session reset — cleared {count} messages for {jid}"
         ));

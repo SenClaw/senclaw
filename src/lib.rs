@@ -262,6 +262,14 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         self.agent_pool.stop_agent(group_jid).await;
     }
 
+    fn clear_llm_session_history(&self, group_jid: &str) {
+        self.agent_pool.clear_llm_session_history(group_jid);
+    }
+
+    fn compact_agent(&self, group_jid: &str) {
+        self.agent_pool.force_compact(group_jid);
+    }
+
     fn set_agent_mode(&self, group_jid: &str, mode: &str) {
         self.agent_pool.set_agent_mode(group_jid, mode);
     }
