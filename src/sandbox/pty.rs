@@ -100,6 +100,7 @@ pub fn shell_command(
             let args = direct::bwrap_args(
                 &sb.workdir,
                 &std::env::var("HOME").unwrap_or_default(),
+                &direct::state_dir(),
                 sb.network,
                 &sb.mounts,
                 sb.fs_mode,

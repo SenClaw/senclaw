@@ -43,8 +43,40 @@ const MAC_SECRET_SUBPATHS: &[&str] = &[
     "Library/Application Support/Google/Chrome",
     "Library/Cookies",
     // The daemon's own state: DB, tokens, every other Space App's data.
+    // Kept even when `SENCLAW_HOME` moves this daemon's state elsewhere: the
+    // user's own install on the same machine is just as private.
     ".senclaw",
 ];
+
+/// The daemon's state folder as handed to the profile builders — wherever
+/// `SENCLAW_HOME` put it, not only `~/.senclaw`.
+pub fn state_dir() -> String {
+    crate::util::paths::senclaw_home().to_string_lossy().to_string()
+}
+
+/// Every root a Seatbelt profile denies reading: the home-relative credential
+/// stores, plus the daemon's state folder when the list does not already cover
+/// it (a relocated `SENCLAW_HOME`).
+fn mac_denied_roots(home: &str, state_dir: &str) -> Vec<String> {
+    let mut roots: Vec<String> = MAC_SECRET_SUBPATHS
+        .iter()
+        .map(|s| format!("{}/{}", home.trim_end_matches('/'), s))
+        .collect();
+    let state = state_dir.trim_end_matches('/');
+    if !state.is_empty() && !roots.iter().any(|r| std::path::Path::new(state).starts_with(r)) {
+        roots.push(state.to_string());
+    }
+    roots
+}
+
+/// The `--tmpfs` covering the daemon's state folder when the one over `home`
+/// does not (a `SENCLAW_HOME` outside the home directory). Must be pushed
+/// before anything inside it is bound back in.
+pub(crate) fn bwrap_state_mask(home: &str, state_dir: &str) -> Option<[String; 2]> {
+    let state = state_dir.trim_end_matches('/');
+    let under_home = !home.is_empty() && home != "/" && std::path::Path::new(state).starts_with(home);
+    (!state.is_empty() && state != "/" && !under_home).then(|| ["--tmpfs".to_string(), state.to_string()])
+}
 
 pub async fn exec(
     sb: &Sandbox,
@@ -227,6 +259,7 @@ pub fn write_seatbelt_profile(sb: &Sandbox, allowlist: &[String]) -> Result<Path
         seatbelt_profile(
             &workdir_s,
             &home,
+            &state_dir(),
             sb.network,
             &sb.mounts,
             sb.fs_mode,
@@ -283,6 +316,7 @@ fn denied_ancestors(path: &str, denied_roots: &[String]) -> Vec<String> {
 pub fn seatbelt_profile(
     workdir: &str,
     home: &str,
+    state_dir: &str,
     network: bool,
     mounts: &[crate::sandbox::mounts::Mount],
     fs_mode: crate::sandbox::fsmode::FsMode,
@@ -335,14 +369,12 @@ pub fn seatbelt_profile(
     } else {
         p.push_str(";; ── reads: open, minus the credential stores ──\n");
         p.push_str("(deny file-read*\n");
-        for sub in MAC_SECRET_SUBPATHS {
-            p.push_str(&format!(
-                "  (subpath {})\n",
-                sb_str(&format!("{}/{}", home.trim_end_matches('/'), sub))
-            ));
+        let denied_roots = mac_denied_roots(home, state_dir);
+        for root in &denied_roots {
+            p.push_str(&format!("  (subpath {})\n", sb_str(root)));
         }
         p.push_str(")\n");
-        // The sandbox's own directory is under ~/.senclaw, which the block above
+        // The sandbox's own directory is under the state folder, which the block above
         // just denied. Re-allow it — last matching rule wins in Seatbelt, so this
         // must come after the deny.
         p.push_str(&format!("(allow file-read* (subpath {}))\n", sb_str(workdir)));
@@ -364,10 +396,6 @@ pub fn seatbelt_profile(
         // database, its token, every other app's data — stay dark.
         //
         // The jailed branch above needs no equivalent: it allows metadata outright.
-        let denied_roots: Vec<String> = MAC_SECRET_SUBPATHS
-            .iter()
-            .map(|s| format!("{}/{}", home.trim_end_matches('/'), s))
-            .collect();
         let granted = std::iter::once(workdir.to_string()).chain(mounts.iter().map(|m| m.source.clone()));
         let mut rescued: Vec<String> = Vec::new();
         for path in granted {
@@ -413,6 +441,7 @@ fn bwrap_command(
     for a in bwrap_args(
         workdir,
         &std::env::var("HOME").unwrap_or_default(),
+        &state_dir(),
         sb.network,
         &sb.mounts,
         sb.fs_mode,
@@ -430,6 +459,7 @@ fn bwrap_command(
 pub fn bwrap_args(
     workdir: &str,
     home: &str,
+    state_dir: &str,
     network: bool,
     mounts: &[crate::sandbox::mounts::Mount],
     fs_mode: crate::sandbox::fsmode::FsMode,
@@ -501,6 +531,7 @@ pub fn bwrap_args(
             a.push("--tmpfs".into());
             a.push(home.to_string());
         }
+        a.extend(bwrap_state_mask(home, state_dir).into_iter().flatten());
     }
 
     // …then the sandbox's own directory is bound back in, writable. This comes
@@ -549,7 +580,7 @@ mod tests {
 
     #[test]
     fn seatbelt_denies_writes_before_allowing_the_workdir() {
-        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let p = seatbelt_profile("/w/sbx", "/Users/u", "/Users/u/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         let deny = p.find("(deny file-write*)").expect("must deny writes");
         let allow = p.find("(allow file-write*").expect("must allow the workdir");
         assert!(deny < allow, "the allow must come after the deny to win");
@@ -571,6 +602,7 @@ mod tests {
         let p = seatbelt_profile(
             "/Users/u/senclaw/workspace/space-apps/ba",
             "/Users/u",
+            "/Users/u/.senclaw",
             false,
             &mounts,
             crate::sandbox::fsmode::FsMode::Open,
@@ -613,7 +645,7 @@ mod tests {
 
     #[test]
     fn seatbelt_denies_the_credential_paths() {
-        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let p = seatbelt_profile("/w/sbx", "/Users/u", "/Users/u/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         assert!(p.contains("\"/Users/u/.ssh\""));
         assert!(p.contains("\"/Users/u/Library/Keychains\""));
         assert!(p.contains("\"/Users/u/.senclaw\""));
@@ -624,7 +656,7 @@ mod tests {
         // The real workdir lives under ~/.senclaw, which the secret-deny list
         // covers. Without the re-allow the sandbox cannot read its own files.
         let wd = "/Users/u/.senclaw/space-app-data/sandbox/workspaces/abc";
-        let p = seatbelt_profile(wd, "/Users/u", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let p = seatbelt_profile(wd, "/Users/u", "/Users/u/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         let deny = p.find("(deny file-read*").unwrap();
         let reallow = p.find(&format!("(allow file-read* (subpath \"{wd}\"))")).unwrap();
         assert!(deny < reallow, "re-allow must come after the secret deny");
@@ -632,19 +664,47 @@ mod tests {
 
     #[test]
     fn network_rule_follows_the_sandbox_setting() {
-        assert!(seatbelt_profile("/w", "/h", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
-        assert!(!seatbelt_profile("/w", "/h", true, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
+        assert!(seatbelt_profile("/w", "/h", "/h/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
+        assert!(!seatbelt_profile("/w", "/h", "/h/.senclaw", true, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
     }
 
     #[test]
     fn seatbelt_paths_are_quoted_and_escaped() {
-        let p = seatbelt_profile("/w/a\"b", "/h", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let p = seatbelt_profile("/w/a\"b", "/h", "/h/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         assert!(p.contains("\"/w/a\\\"b\""), "a quote in a path must be escaped");
     }
 
     #[test]
+    fn a_relocated_state_folder_is_denied_like_the_default_one() {
+        // `SENCLAW_HOME=/opt/news/state`: the home-relative list cannot name
+        // it, yet it holds this daemon's database and tokens.
+        let wd = "/opt/news/state/sandbox/workspaces/abc";
+        let p = seatbelt_profile(wd, "/Users/u", "/opt/news/state", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let deny = p.find(r#"(subpath "/opt/news/state")"#).expect("the state folder must be denied");
+        let reallow = p.find(&format!("(allow file-read* (subpath \"{wd}\"))")).unwrap();
+        assert!(deny < reallow, "the workdir inside it is granted after the deny");
+        assert!(p.contains(r#"(allow file-read-metadata (literal "/opt/news/state"))"#), "its ancestors resolve");
+        assert!(p.contains(r#"(subpath "/Users/u/.senclaw")"#), "the user's own install stays denied");
+        // Already covered by the home-relative list: not listed twice.
+        let q = seatbelt_profile("/w", "/Users/u", "/Users/u/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        assert_eq!(q.matches(r#"(subpath "/Users/u/.senclaw")"#).count(), 1);
+    }
+
+    #[test]
+    fn bwrap_masks_a_state_folder_outside_home_before_binding_the_workdir() {
+        let args = bwrap_args("/opt/news/state/ws/a", "/home/u", "/opt/news/state", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let joined = args.join(" ");
+        let mask = joined.find("--tmpfs /opt/news/state ").expect("the state folder must be masked");
+        let bind = joined.find("--bind /opt/news/state/ws/a").expect("workdir bound");
+        assert!(mask < bind, "masking after the bind would hide the workdir");
+        // Inside home, the tmpfs over home already hides it.
+        let inside = bwrap_args("/w", "/home/u", "/home/u/apps/news/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        assert!(!inside.join(" ").contains("--tmpfs /home/u/apps"), "{inside:?}");
+    }
+
+    #[test]
     fn bwrap_covers_home_before_binding_the_workdir_back() {
-        let args = bwrap_args("/home/u/.senclaw/ws/a", "/home/u", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let args = bwrap_args("/home/u/.senclaw/ws/a", "/home/u", "/home/u/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         let joined = args.join(" ");
         let tmpfs_home = joined.find("--tmpfs /home/u ").expect("home must be covered");
         let bind = joined.find("--bind /home/u/.senclaw/ws/a").expect("workdir bound");
@@ -653,13 +713,13 @@ mod tests {
 
     #[test]
     fn bwrap_unshares_the_network_only_when_disabled() {
-        assert!(bwrap_args("/w", "/h", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
-        assert!(!bwrap_args("/w", "/h", true, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
+        assert!(bwrap_args("/w", "/h", "/h/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
+        assert!(!bwrap_args("/w", "/h", "/h/.senclaw", true, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
     }
 
     #[test]
     fn bwrap_reads_the_script_from_stdin_not_from_argv() {
-        let args = bwrap_args("/w", "/h", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
+        let args = bwrap_args("/w", "/h", "/h/.senclaw", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default());
         assert_eq!(args.last().map(String::as_str), Some("-s"));
         assert!(!args.iter().any(|a| a == "-c"), "never build a `sh -c` command line");
     }
@@ -668,9 +728,9 @@ mod tests {
     fn bwrap_never_tmpfses_a_root_home() {
         // HOME=/ (or unset) must not turn into `--tmpfs /`, which would hide
         // the entire filesystem including the interpreter.
-        let args = bwrap_args("/w", "/", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
+        let args = bwrap_args("/w", "/", "", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
         assert!(!args.contains("--tmpfs / "));
-        let args = bwrap_args("/w", "", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
+        let args = bwrap_args("/w", "", "", false, &[], crate::sandbox::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
         assert!(!args.contains("--tmpfs  "));
     }
 }

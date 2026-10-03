@@ -517,10 +517,6 @@ pub struct DispatchConfig {
     pub default_timeout_secs: u64,
 }
 
-fn home() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
-}
-
 fn env_or(key: &str, fallback: &str) -> String {
     env::var(key).unwrap_or_else(|_| fallback.to_owned())
 }
@@ -563,9 +559,8 @@ impl Config {
     /// Read env vars (no `.env` loading — the binary entrypoint already calls
     /// `dotenvy::dotenv()`).
     pub fn from_env() -> Self {
-        let h = home();
-        let senclaw_home = h.join(".senclaw");
-        let senclaw_data = h.join("senclaw");
+        let senclaw_home = crate::util::paths::senclaw_home();
+        let senclaw_data = crate::util::paths::senclaw_data_home();
 
         Self {
             telegram: TelegramConfig {

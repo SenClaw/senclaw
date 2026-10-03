@@ -25,10 +25,7 @@ pub fn data_dir() -> PathBuf {
             }
         }
     }
-    match std::env::var("HOME").ok().filter(|h| !h.is_empty()) {
-        Some(home) => PathBuf::from(home).join(".senclaw").join("sandbox"),
-        None => PathBuf::from("."),
-    }
+    crate::util::paths::senclaw_home().join("sandbox")
 }
 
 pub fn db_path() -> String {

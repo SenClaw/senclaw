@@ -67,7 +67,7 @@ impl Default for LspSettings {
 }
 
 pub fn settings_path() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".senclaw").join("lsp.json")
+    crate::util::paths::senclaw_home().join("lsp.json")
 }
 
 pub fn load_settings() -> LspSettings {

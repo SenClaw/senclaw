@@ -103,7 +103,7 @@ fn local_manager(cfg: &Config) -> std::sync::Arc<RuntimeManager> {
         bundled_dir: cfg.paths.bundled_runtimes_dir.clone(),
         local_models_dir: cfg.paths.local_models_dir.clone(),
         config_path: cfg.paths.global_config_path.clone(),
-        home: cfg.paths.global_config_path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
+        home: crate::util::paths::senclaw_home(),
         index_url: cfg.paths.runtime_index_url.clone(),
     })
 }

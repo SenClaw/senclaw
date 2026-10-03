@@ -82,7 +82,7 @@ fn hash(s: &str) -> String {
 pub fn root_for(repo: &Path) -> PathBuf {
     let base = std::env::var("SENCLAW_WORKTREES_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".senclaw").join("worktrees"));
+        .unwrap_or_else(|_| crate::util::paths::senclaw_home().join("worktrees"));
     base.join(hash(&repo.to_string_lossy()))
 }
 

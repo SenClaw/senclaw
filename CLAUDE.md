@@ -31,8 +31,8 @@ cargo run -- start           # run the daemon (UI 18788, WS 18789 by default)
 senclaw runtime list         # installed runtimes / slots (see `senclaw runtime --help`)
 ```
 
-Never develop against a live install: use `HOME=<scratch dir>` (every path derives from it) plus
-`SENCLAW_UI_PORT`/`SENCLAW_WS_PORT` on other ports, and pin client tools to them explicitly — `senclaw acp` takes
+Never develop against a live install: use `SENCLAW_HOME=<scratch dir>` (every daemon path derives from it; user data
+defaults to `$SENCLAW_HOME/data`, else `SENCLAW_DATA_HOME`) plus `SENCLAW_UI_PORT`/`SENCLAW_WS_PORT` on other ports, and pin client tools to them explicitly — `senclaw acp` takes
 `--gateway ws://127.0.0.1:<ws port>` and does not read `SENCLAW_WS_PORT`.
 
 The web UI is built in `../web-app` (`npm run build`); the daemon serves `SENCLAW_WEB_DIST`, else `./web/dist`, else
@@ -77,7 +77,7 @@ Releases are tag-driven (`vX.Y.Z` → `.github/workflows/release.yml` publishes 
 - **`clawhub/`** — ClawHub skill marketplace (auth, lockfile, signal protocol)
 - **`skills/`** — Bundled skill definitions (bot-channels, clawhub, wiki)
 - **`cli/`** — Subcommands: `skills`, `clawhub`, `wiki`, `channel`
-- **`config.rs`** — Single `Config::from_env()` read at startup. All paths default under `~/.senclaw/`
+- **`config.rs`** — Single `Config::from_env()` read at startup. All paths default under `~/.senclaw/` (`SENCLAW_HOME`) and `~/senclaw/` (`SENCLAW_DATA_HOME`); resolve either through `util::paths::senclaw_home()` / `senclaw_data_home()`, never `home_dir().join(".senclaw")` ([docs/senclaw-home.md](docs/senclaw-home.md))
 
 ### Web UI
 

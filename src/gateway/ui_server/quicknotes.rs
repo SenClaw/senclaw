@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, response::Json};
@@ -52,10 +51,7 @@ pub(crate) async fn quicknotes_save(
         safe
     };
 
-    let dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("senclaw")
-        .join("quicknotes");
+    let dir = crate::util::paths::senclaw_data_home().join("quicknotes");
     fs::create_dir_all(&dir)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

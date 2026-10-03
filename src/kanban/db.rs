@@ -1543,9 +1543,6 @@ pub struct ActivityItem {
 pub fn default_data_dir(app: &str) -> PathBuf {
     let base = std::env::var("SENCLAW_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".senclaw")
-        });
+        .unwrap_or_else(|_| crate::util::paths::senclaw_home());
     base.join("space-apps").join(app)
 }

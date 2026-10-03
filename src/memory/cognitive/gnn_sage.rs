@@ -147,9 +147,7 @@ impl SageModel {
     /// Default weights path under the user's senclaw home. Keyed by dim
     /// so multiple embedder dims can coexist (e.g. swapping bge-small ↔ MLX).
     pub fn default_path(dim: usize) -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".senclaw")
+        crate::util::paths::senclaw_home()
             .join("cognitive")
             .join(format!("sage_{dim}.bin"))
     }

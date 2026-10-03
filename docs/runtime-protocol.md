@@ -135,7 +135,7 @@ after the manifest's own `entry.env` so they always win:
 | `SENCLAW_LOCAL_MODELS_DIR` | `~/.senclaw/local-models/` |
 | `SENCLAW_PARENT_PID` | the daemon's pid |
 | `SENCLAW_CONFIG_PATH` | the daemon's `config.json` (read-only; §8) |
-| `SENCLAW_HOME` | `~/.senclaw` |
+| `SENCLAW_HOME` | the daemon's state folder (`$SENCLAW_HOME`, default `~/.senclaw`) |
 | `SENCLAW_MODEL_PATH` / `SENCLAW_MODEL_ID` | model mode only |
 
 Every variable has a standalone default in `LaunchEnv::from_env`, so a runtime

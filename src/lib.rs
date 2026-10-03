@@ -1786,9 +1786,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         .parent()
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".senclaw")
+            crate::util::paths::senclaw_home()
         });
     let mcp_manager = Arc::new(mcp::manager::McpManager::new(working_dir, user_config_dir));
     if let Err(e) = mcp_manager.init().await {
@@ -1947,7 +1945,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         bundled_dir: cfg.paths.bundled_runtimes_dir.clone(),
         local_models_dir: cfg.paths.local_models_dir.clone(),
         config_path: cfg.paths.global_config_path.clone(),
-        home: cfg.paths.global_config_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from(".")),
+        home: crate::util::paths::senclaw_home(),
         index_url: cfg.paths.runtime_index_url.clone(),
     });
     // Stop anything a previous daemon left running (crash, `kill -9`) before
@@ -3067,7 +3065,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     .db_path
                     .parent()
                     .map(|p| p.join("mcp-dispatch"))
-                    .unwrap_or_else(|| std::path::PathBuf::from(".senclaw/mcp-dispatch")),
+                    .unwrap_or_else(|| crate::util::paths::senclaw_home().join("mcp-dispatch")),
                 config_path: cfg.paths.global_config_path.clone(),
             };
             let mcp_dispatcher = agent::mcp_dispatch::MCPDispatcher::new(

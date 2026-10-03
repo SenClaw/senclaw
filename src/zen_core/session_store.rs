@@ -15,9 +15,7 @@ fn root() -> PathBuf {
     std::env::var("SENCLAW_LLM_SESSIONS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".senclaw")
+            crate::util::paths::senclaw_home()
                 .join("llm-sessions")
         })
 }

@@ -987,10 +987,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_active_profile_completes_through_the_bridge_path() {
-        let config_path = dirs::home_dir()
-            .expect("home dir")
-            .join(".senclaw")
-            .join("config.json");
+        let config_path = crate::util::paths::senclaw_home().join("config.json");
         // The daemon installs this at boot; a test process has to do it itself
         // or every OAuth profile resolves to an empty bearer token.
         crate::providers::oauth::init(crate::providers::oauth::store::default_path(&config_path));

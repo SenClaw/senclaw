@@ -12,9 +12,7 @@ fn get_wiki_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("WIKI_DIR") {
         return PathBuf::from(dir);
     }
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("wiki")
 }
 

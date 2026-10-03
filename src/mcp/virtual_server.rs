@@ -93,9 +93,7 @@ impl VirtualServer {
     }
 
     fn read_current_workspace(&self) -> PathBuf {
-        let state_file = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".senclaw")
+        let state_file = crate::util::paths::senclaw_home()
             .join(format!("workspace-state-{}.json", self.admin_folder));
         fs::read_to_string(&state_file)
             .ok()

@@ -40,8 +40,7 @@ fn logs_dir() -> PathBuf {
             return PathBuf::from(d);
         }
     }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".senclaw").join("llm_logs")
+crate::util::paths::senclaw_home().join("llm_logs")
 }
 
 /// `HH:MM:SS` in local time, matching the TS `getTimeString()`.

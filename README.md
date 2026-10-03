@@ -300,7 +300,7 @@ By default, SenClaw stores runtime data under the user's home directory, split i
 └── virtual-agents/                 # DAG virtual worker folders
 ```
 
-Most paths can be overridden through `.env` or `~/.senclaw/config.json`.
+Most paths can be overridden through `.env` or `~/.senclaw/config.json`. `SENCLAW_HOME` moves the whole `~/.senclaw` root and `SENCLAW_DATA_HOME` the `~/senclaw` one, so an app can run SenClaw as its runtime core with state of its own — see [docs/senclaw-home.md](docs/senclaw-home.md).
 
 ---
 

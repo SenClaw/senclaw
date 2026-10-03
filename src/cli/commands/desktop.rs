@@ -189,7 +189,7 @@ fn default_install_target(os: &str) -> PathBuf {
         "windows" => {
             dirs::data_local_dir().unwrap_or_else(|| home().join("AppData").join("Local")).join("SenClaw").join("Desktop")
         }
-        _ => home().join(".senclaw").join("desktop"),
+        _ => crate::util::paths::senclaw_home().join("desktop"),
     }
 }
 

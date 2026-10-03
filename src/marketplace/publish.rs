@@ -172,9 +172,7 @@ pub fn canonical_platform(input: &str) -> String {
 /// Where the publish token lives. Never passed on the command line — an
 /// argument would land in shell history and in every process listing.
 pub fn token_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("hub-token")
 }
 

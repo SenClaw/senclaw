@@ -58,9 +58,7 @@ pub(crate) fn random_wechat_uin() -> String {
 }
 
 fn wechat_state_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("wechat")
         .join("accounts")
 }
@@ -70,17 +68,13 @@ fn account_path(account_id: &str) -> PathBuf {
 }
 
 fn sync_buf_path(account_id: &str) -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("wechat")
         .join(format!("sync-buf-{account_id}.bin"))
 }
 
 fn context_tokens_path(account_id: &str) -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("wechat")
         .join(format!("context-tokens-{account_id}.json"))
 }

@@ -210,8 +210,7 @@ impl DispatchServer {
     }
 
     fn read_admin_workspace(&self) -> Option<String> {
-        let state_file = dirs::home_dir()?
-            .join(".senclaw")
+        let state_file = crate::util::paths::senclaw_home()
             .join(format!("workspace-state-{}.json", self.admin_folder));
         let raw = fs::read_to_string(&state_file).ok()?;
         let v: serde_json::Value = serde_json::from_str(&raw).ok()?;

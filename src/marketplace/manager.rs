@@ -79,9 +79,7 @@ impl MarketplaceManager {
     /// Create a marketplace manager with default paths, seeding `hub_url` as the
     /// default store on first run.
     pub fn new_with_hub(hub_url: &str) -> Result<Self> {
-        let home =
-            dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Failed to get home directory"))?;
-        let senclaw_home = home.join(".senclaw");
+        let senclaw_home = crate::util::paths::senclaw_home();
 
         let config_path = senclaw_home.join("marketplace.json");
         let state_path = senclaw_home.join("marketplace-state.json");

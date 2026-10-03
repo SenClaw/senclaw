@@ -287,7 +287,7 @@ Mặc định SenClaw lưu dữ liệu runtime trong home directory, tách thàn
 └── virtual-agents/                 # thư mục virtual worker của DAG
 ```
 
-Hầu hết đường dẫn có thể ghi đè qua `.env` hoặc `~/.senclaw/config.json`.
+Hầu hết đường dẫn có thể ghi đè qua `.env` hoặc `~/.senclaw/config.json`. `SENCLAW_HOME` dời cả gốc `~/.senclaw`, `SENCLAW_DATA_HOME` dời gốc `~/senclaw`, nên một ứng dụng có thể chạy SenClaw làm runtime core với state riêng — xem [docs/senclaw-home.md](docs/senclaw-home.md).
 
 ---
 

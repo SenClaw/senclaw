@@ -61,13 +61,11 @@ pub(crate) fn default_config_path() -> std::path::PathBuf {
     }
 }
 
-/// `~/.senclaw` — the same resolution every other module in the crate uses
-/// (`crate::trajectory::root`, `crate::failures`), so a scratch `HOME` for a
-/// live check redirects control-plane state exactly like everything else.
+/// `~/.senclaw` (or `$SENCLAW_HOME`) — the same resolution every other module
+/// in the crate uses, so a scratch `SENCLAW_HOME` for a live check redirects
+/// control-plane state exactly like everything else.
 pub(crate) fn senclaw_home() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
 }
 
 /// A jid, mangled into a path component. Mirrors `crate::trajectory::safe`,

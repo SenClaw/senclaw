@@ -58,7 +58,7 @@ pub(super) fn binary_target() -> Result<&'static str> {
 /// Return the local Web UI dist directory, downloading and extracting the
 /// release bundle on first use (or when `force` is set).
 pub(super) async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf> {
-    let dist = home().join(".senclaw").join("web").join("dist");
+    let dist = crate::util::paths::senclaw_home().join("web").join("dist");
     if !force && dist.join("index.html").exists() {
         return Ok(dist);
     }
@@ -103,7 +103,7 @@ pub(super) fn home() -> PathBuf {
 }
 
 pub(super) fn tmp_dir() -> Result<PathBuf> {
-    let dir = home().join(".senclaw").join("tmp");
+    let dir = crate::util::paths::senclaw_home().join("tmp");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

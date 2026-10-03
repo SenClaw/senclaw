@@ -35,7 +35,7 @@ const MAX_TOOL_CONTENT: usize = 32 * 1024;
 fn root() -> PathBuf {
     std::env::var("SENCLAW_TRAJECTORIES_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".senclaw").join("trajectories"))
+        .unwrap_or_else(|_| crate::util::paths::senclaw_home().join("trajectories"))
 }
 
 fn safe(jid: &str) -> String {

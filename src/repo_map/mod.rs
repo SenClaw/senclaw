@@ -247,9 +247,7 @@ struct Slot {
 static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Slot>>>> = OnceLock::new();
 
 fn cache_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".senclaw")
+    crate::util::paths::senclaw_home()
         .join("repo-map")
 }
 

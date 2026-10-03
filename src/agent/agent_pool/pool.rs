@@ -158,9 +158,7 @@ pub struct AgentPool {
 
 impl AgentPool {
     pub fn new(core_api: Arc<dyn CoreApi>) -> Arc<Self> {
-        let default_home = dirs::home_dir()
-            .map(|h| h.join(".senclaw"))
-            .unwrap_or_else(|| PathBuf::from(".senclaw"));
+        let default_home = crate::util::paths::senclaw_home();
         let pool = Arc::new(Self {
             core_api,
             state: Mutex::new(State::new()),
@@ -996,6 +994,8 @@ impl AgentPool {
 
         // Init workspace state file (mirrors TS 569-572).
         let home = self.senclaw_home.lock().unwrap().clone();
+        let default_workspace =
+            crate::util::paths::senclaw_data_home().join("workspace").join(&binding.folder);
         let workspace_dir = if binding.group_type == "code" {
             allowed_work_dirs
                 .as_ref()
@@ -1005,23 +1005,9 @@ impl AgentPool {
                 // `~` reaches us unexpanded. Resolve it here — the backend owns
                 // path access.
                 .map(|p| crate::util::paths::expand_tilde(p))
-                .unwrap_or_else(|| {
-                    home.parent()
-                        .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
-                        .unwrap_or_else(|| {
-                            PathBuf::from("senclaw")
-                                .join("workspace")
-                                .join(&binding.folder)
-                        })
-                })
+                .unwrap_or_else(|| default_workspace.clone())
         } else {
-            home.parent()
-                .map(|p| p.join("senclaw").join("workspace").join(&binding.folder))
-                .unwrap_or_else(|| {
-                    PathBuf::from("senclaw")
-                        .join("workspace")
-                        .join(&binding.folder)
-                })
+            default_workspace
         };
         let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
         Self::init_workspace_state(&state_file, &workspace_dir);

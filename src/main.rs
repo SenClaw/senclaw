@@ -199,6 +199,8 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
+    // Before anything spawns: children must see the same absolute folders.
+    senclaw::util::paths::pin_senclaw_dirs_in_env();
 
     let cli = Cli::parse();
 

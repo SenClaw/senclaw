@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use semver::Version;
 use serde::Deserialize;
 
-use super::distrib::{binary_target, download, ensure_web_dist, home, make_executable, tmp_dir, REPO};
+use super::distrib::{binary_target, download, ensure_web_dist, make_executable, tmp_dir, REPO};
 
 /// How many releases `--list` and `--select` show.
 const SHOWN_RELEASES: usize = 15;
@@ -141,7 +141,7 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
     println!("Updating SenClaw {current} → {}…", chosen.tag);
     install_binary(&asset, &current_exe).await?;
 
-    let web_dist = home().join(".senclaw").join("web").join("dist");
+    let web_dist = crate::util::paths::senclaw_home().join("web").join("dist");
     if web_dist.join("index.html").exists() {
         println!("\nUpdating Web UI…");
         ensure_web_dist(true, None).await?;

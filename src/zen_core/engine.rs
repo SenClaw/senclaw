@@ -954,16 +954,7 @@ impl ZenEngine {
         let config_path = std::env::var("SENCLAW_CONFIG_PATH")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| {
-                dirs::home_dir()
-                    .map(|h| {
-                        h.join(".senclaw")
-                            .join("config.json")
-                            .to_string_lossy()
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| ".senclaw/config.json".to_string())
-            });
+            .unwrap_or_else(|| crate::util::paths::senclaw_home().join("config.json").to_string_lossy().to_string());
         Self::resolve_model_profile_at(std::path::Path::new(&config_path), override_id)
     }
 

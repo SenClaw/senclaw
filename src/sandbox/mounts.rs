@@ -52,6 +52,9 @@ fn forbidden_roots() -> Vec<PathBuf> {
     // The app's own data: mounting it would expose every other sandbox, and let
     // one sandbox rewrite the Seatbelt profile another is about to be run with.
     v.push(config::data_dir());
+    // The daemon's state folder wherever `SENCLAW_HOME` put it; `~/.senclaw`
+    // below stays refused as well, for the user's own install.
+    v.push(crate::util::paths::senclaw_home());
     if let Ok(home) = std::env::var("HOME") {
         let h = PathBuf::from(&home);
         for secret in [
@@ -126,6 +129,7 @@ fn is_secret(p: &Path) -> bool {
         .iter()
         .any(|k| s.contains(k))
         || p.starts_with(config::data_dir())
+        || p.starts_with(crate::util::paths::senclaw_home())
 }
 
 /// Target must be a plain relative path inside the sandbox. Defaults to the

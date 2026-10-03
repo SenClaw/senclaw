@@ -306,17 +306,13 @@ pub fn current(app_id: &str) -> AppSandbox {
 /// is scoped to this one app, so granting a path the app happens not to use
 /// costs nothing.
 pub fn own_data_dirs(app_id: &str) -> Vec<PathBuf> {
-    match std::env::var("HOME") {
-        Ok(h) if !h.trim().is_empty() => own_data_dirs_in(Path::new(&h), app_id),
-        _ => Vec::new(),
-    }
+    own_data_dirs_in(&crate::util::paths::senclaw_home(), app_id)
 }
 
-/// The list itself, with `$HOME` passed in — pure, so it can be asserted on
-/// without a test mutating the process environment out from under its
-/// neighbours.
-pub fn own_data_dirs_in(home: &Path, app_id: &str) -> Vec<PathBuf> {
-    let root = home.join(".senclaw");
+/// The list itself, with the daemon's state folder passed in — pure, so it can
+/// be asserted on without a test mutating the process environment out from
+/// under its neighbours.
+pub fn own_data_dirs_in(root: &Path, app_id: &str) -> Vec<PathBuf> {
     vec![
         root.join("apps").join(app_id),
         root.join("space-apps").join(app_id),
@@ -455,7 +451,7 @@ mod tests {
 
     #[test]
     fn every_granted_data_dir_belongs_to_the_one_app() {
-        let dirs = own_data_dirs_in(Path::new("/Users/tester"), "crm");
+        let dirs = own_data_dirs_in(Path::new("/Users/tester/.senclaw"), "crm");
         assert!(!dirs.is_empty());
         for d in &dirs {
             let s = d.to_string_lossy();

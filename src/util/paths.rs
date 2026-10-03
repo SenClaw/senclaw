@@ -1,6 +1,89 @@
 //! Filesystem path helpers shared across the daemon.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Relocates the daemon's state folder — config, database, tokens, logs,
+/// runtimes (default `~/.senclaw`).
+pub const SENCLAW_HOME_ENV: &str = "SENCLAW_HOME";
+/// Relocates the user-data folder — agent profiles, workspaces, wiki,
+/// workflows (default `~/senclaw`).
+pub const SENCLAW_DATA_HOME_ENV: &str = "SENCLAW_DATA_HOME";
+
+/// The daemon's state folder: `$SENCLAW_HOME`, else `~/.senclaw`.
+///
+/// Every module derives its default paths from here, so one variable moves a
+/// whole daemon — which is what lets an app embed SenClaw as its runtime core
+/// without sharing state with the user's own install.
+pub fn senclaw_home() -> PathBuf {
+    resolve_dirs(env_value(SENCLAW_HOME_ENV), env_value(SENCLAW_DATA_HOME_ENV), &user_home(), &cwd()).0
+}
+
+/// The user-data folder: `$SENCLAW_DATA_HOME`; else `$SENCLAW_HOME/data` when
+/// `SENCLAW_HOME` moves the state folder; else `~/senclaw`.
+pub fn senclaw_data_home() -> PathBuf {
+    resolve_dirs(env_value(SENCLAW_HOME_ENV), env_value(SENCLAW_DATA_HOME_ENV), &user_home(), &cwd()).1
+}
+
+/// Rewrite a relative or `~`-prefixed `SENCLAW_HOME` / `SENCLAW_DATA_HOME` in
+/// this process's environment to the absolute folder it resolved to.
+///
+/// Children inherit the environment but not the working directory: an MCP
+/// server started in a chat's project folder, or a runtime started in its
+/// package folder, would otherwise read `./.senclaw-dev` as a different
+/// folder than the daemon did. Call once at startup, before anything spawns.
+pub fn pin_senclaw_dirs_in_env() {
+    let (home, data) = (senclaw_home(), senclaw_data_home());
+    for (key, resolved) in [(SENCLAW_HOME_ENV, home), (SENCLAW_DATA_HOME_ENV, data)] {
+        if let Some(raw) = env_value(key) {
+            if Path::new(&raw) != resolved {
+                std::env::set_var(key, resolved);
+            }
+        }
+    }
+}
+
+/// `(state folder, user-data folder)` from the two variables' raw values.
+///
+/// Explicitly naming the default `~/.senclaw` keeps the default `~/senclaw`
+/// beside it: setting the variable to where the data already is must not
+/// make the user's profiles and workspaces vanish into a new empty folder.
+fn resolve_dirs(home_var: Option<String>, data_var: Option<String>, user_home: &Path, cwd: &Path) -> (PathBuf, PathBuf) {
+    let default_home = user_home.join(".senclaw");
+    let home = home_var.as_deref().map(|v| absolute_dir(v, user_home, cwd));
+    let data = match (data_var.as_deref(), &home) {
+        (Some(v), _) => absolute_dir(v, user_home, cwd),
+        (None, Some(h)) if *h != default_home => h.join("data"),
+        (None, _) => user_home.join("senclaw"),
+    };
+    (home.unwrap_or(default_home), data)
+}
+
+/// `~` expanded, then a relative path anchored at `cwd`.
+fn absolute_dir(raw: &str, user_home: &Path, cwd: &Path) -> PathBuf {
+    let p = match raw.strip_prefix("~/") {
+        Some(rest) => user_home.join(rest),
+        None if raw == "~" => user_home.to_path_buf(),
+        None => PathBuf::from(raw),
+    };
+    if p.is_absolute() {
+        p
+    } else {
+        cwd.join(p)
+    }
+}
+
+/// A variable's value, trimmed; unset and blank both read as `None`.
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+fn user_home() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
 
 /// Expand a leading `~` to the user's home directory.
 ///
@@ -147,6 +230,57 @@ mod tests {
     #[test]
     fn leaves_absolute_unchanged() {
         assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
+    }
+
+    fn dirs_for(home_var: Option<&str>, data_var: Option<&str>) -> (PathBuf, PathBuf) {
+        resolve_dirs(
+            home_var.map(str::to_string),
+            data_var.map(str::to_string),
+            Path::new("/Users/u"),
+            Path::new("/work/app"),
+        )
+    }
+
+    #[test]
+    fn unset_variables_keep_the_two_home_folders() {
+        assert_eq!(
+            dirs_for(None, None),
+            (PathBuf::from("/Users/u/.senclaw"), PathBuf::from("/Users/u/senclaw"))
+        );
+    }
+
+    #[test]
+    fn senclaw_home_alone_moves_the_user_data_with_it() {
+        // One variable must be enough for an embedding app: leaving the data
+        // at `~/senclaw` would share profiles and workspaces with the user's
+        // own daemon.
+        assert_eq!(
+            dirs_for(Some("/apps/news/.senclaw"), None),
+            (PathBuf::from("/apps/news/.senclaw"), PathBuf::from("/apps/news/.senclaw/data"))
+        );
+    }
+
+    #[test]
+    fn naming_the_default_home_keeps_the_default_data_folder() {
+        assert_eq!(dirs_for(Some("~/.senclaw"), None).1, PathBuf::from("/Users/u/senclaw"));
+        assert_eq!(dirs_for(Some("/Users/u/.senclaw/"), None).1, PathBuf::from("/Users/u/senclaw"));
+    }
+
+    #[test]
+    fn data_home_is_independent_when_set() {
+        assert_eq!(
+            dirs_for(Some("/apps/news/state"), Some("/apps/news/data")),
+            (PathBuf::from("/apps/news/state"), PathBuf::from("/apps/news/data"))
+        );
+        assert_eq!(dirs_for(None, Some("/d")), (PathBuf::from("/Users/u/.senclaw"), PathBuf::from("/d")));
+    }
+
+    #[test]
+    fn relative_and_tilde_values_resolve_to_absolute_folders() {
+        assert_eq!(
+            dirs_for(Some(".senclaw-dev"), Some("~/dev-data")),
+            (PathBuf::from("/work/app/.senclaw-dev"), PathBuf::from("/Users/u/dev-data"))
+        );
     }
 
     #[test]

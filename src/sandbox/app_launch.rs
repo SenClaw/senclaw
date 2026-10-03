@@ -212,6 +212,7 @@ pub async fn plan(
     let granted: Vec<String> = mounts.iter().map(|m| m.source.clone()).collect();
 
     let home = std::env::var("HOME").unwrap_or_default();
+    let state_dir = crate::sandbox::backend::direct::state_dir();
     let app_dir_s = app_dir
         .canonicalize()
         .unwrap_or_else(|_| app_dir.to_path_buf())
@@ -227,6 +228,7 @@ pub async fn plan(
                 app_id,
                 &app_dir_s,
                 &home,
+                &state_dir,
                 network,
                 &mounts,
                 cfg.read_mode,
@@ -246,6 +248,7 @@ pub async fn plan(
             a.extend(bwrap_app_args(
                 &app_dir_s,
                 &home,
+                &state_dir,
                 &mounts,
                 cfg.read_mode,
                 &read_allowlist,
@@ -306,6 +309,7 @@ pub async fn plan(
 pub fn toolchain_read_mounts() -> Vec<Mount> {
     toolchain_read_mounts_from(
         &std::env::var("HOME").unwrap_or_default(),
+        &crate::sandbox::backend::direct::state_dir(),
         &std::env::var("PATH").unwrap_or_default(),
     )
 }
@@ -316,7 +320,7 @@ pub fn toolchain_read_mounts() -> Vec<Mount> {
 /// gets cut is the one the app needed.
 const MAX_TOOLCHAIN_GRANTS: usize = 16;
 
-pub fn toolchain_read_mounts_from(home: &str, path_var: &str) -> Vec<Mount> {
+pub fn toolchain_read_mounts_from(home: &str, state_dir: &str, path_var: &str) -> Vec<Mount> {
     let home_path = PathBuf::from(home);
     let mut out: Vec<Mount> = Vec::new();
     for entry in path_var.split(':').filter(|e| !e.trim().is_empty()) {
@@ -344,8 +348,11 @@ pub fn toolchain_read_mounts_from(home: &str, path_var: &str) -> Vec<Mount> {
         // `mounts::validate` below also refuses them, but it builds its guard
         // list from the *process* `$HOME` — so a daemon running with a different
         // home would grant a `.ssh` on PATH read-only. A test caught exactly
-        // that, hence this check first.
-        if is_under_secret_dir(&home_path, &want) {
+        // that, hence this check first. The daemon's state folder likewise,
+        // wherever `SENCLAW_HOME` put it: `$SENCLAW_HOME/bin` on PATH would
+        // otherwise grant its parent — the whole folder — read-only.
+        let in_state_dir = !state_dir.is_empty() && want.starts_with(state_dir);
+        if in_state_dir || is_under_secret_dir(&home_path, &want) {
             continue;
         }
         // …then the shared guard list, for everything else it knows about.
@@ -413,6 +420,7 @@ fn write_profile(
     app_id: &str,
     app_dir: &str,
     home: &str,
+    state_dir: &str,
     network: bool,
     mounts: &[Mount],
     read_mode: crate::sandbox::fsmode::FsMode,
@@ -422,6 +430,7 @@ fn write_profile(
     let body = crate::sandbox::backend::direct::seatbelt_profile(
         app_dir,
         home,
+        state_dir,
         network,
         mounts,
         read_mode,
@@ -447,6 +456,7 @@ fn write_profile(
 pub fn bwrap_app_args(
     app_dir: &str,
     home: &str,
+    state_dir: &str,
     mounts: &[Mount],
     read_mode: crate::sandbox::fsmode::FsMode,
     read_allowlist: &[String],
@@ -490,6 +500,9 @@ pub fn bwrap_app_args(
     if !read_mode.jails_reads() && !home.is_empty() && home != "/" {
         a.push("--tmpfs".into());
         a.push(home.to_string());
+    }
+    if !read_mode.jails_reads() {
+        a.extend(crate::sandbox::backend::direct::bwrap_state_mask(home, state_dir).into_iter().flatten());
     }
 
     a.extend(["--bind".into(), app_dir.to_string(), app_dir.to_string()]);
@@ -538,6 +551,7 @@ mod tests {
         crate::sandbox::backend::direct::seatbelt_profile(
             "/Users/u/.senclaw/workspace/space-apps/demo",
             "/Users/u",
+            "/Users/u/.senclaw",
             matches!(cfg_net, NetMode::All),
             &mounts,
             read_mode,
@@ -635,7 +649,7 @@ mod tests {
             Mount { source: "/home/u/.senclaw/apps/demo".into(), target: "data".into(), read_only: false },
             Mount { source: "/home/u/docs".into(), target: "docs".into(), read_only: true },
         ];
-        let a = bwrap_app_args("/opt/app", "/home/u", &mounts, FsMode::Open, &[]).join(" ");
+        let a = bwrap_app_args("/opt/app", "/home/u", "/home/u/.senclaw", &mounts, FsMode::Open, &[]).join(" ");
         assert!(a.contains("--bind-try /home/u/.senclaw/apps/demo /home/u/.senclaw/apps/demo"), "{a}");
         assert!(a.contains("--ro-bind-try /home/u/docs /home/u/docs"), "{a}");
         assert!(!a.contains("/opt/app/data"), "nothing may be remapped: {a}");
@@ -653,7 +667,7 @@ mod tests {
             target: String::new(),
             read_only: false,
         }];
-        let a = bwrap_app_args("/opt/app", "/home/u", &mounts, FsMode::Open, &[]);
+        let a = bwrap_app_args("/opt/app", "/home/u", "/home/u/.senclaw", &mounts, FsMode::Open, &[]);
         let joined = a.join(" ");
         let tmpfs_home = joined.find("--tmpfs /home/u ").expect("home must be masked");
         let bind_data = joined.find("--bind-try /home/u/.senclaw/apps/demo").unwrap();
@@ -704,6 +718,7 @@ mod tests {
 
         let ms = toolchain_read_mounts_from(
             &home_s,
+            "",
             &format!("/usr/bin:{}:{}", node_bin.display(), own_bin.display()),
         );
         // `/usr/bin` is already inside the jail's system roots, so it must not
@@ -731,6 +746,22 @@ mod tests {
     }
 
     #[test]
+    fn toolchain_grants_never_reach_into_the_state_folder() {
+        // `$SENCLAW_HOME/bin` on PATH (where install.sh puts `senclaw`) would
+        // otherwise grant its parent: the daemon's whole state folder.
+        let home = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let state_bin = state.path().join("bin");
+        std::fs::create_dir_all(&state_bin).unwrap();
+        let ms = toolchain_read_mounts_from(
+            &home.path().to_string_lossy(),
+            &state.path().to_string_lossy(),
+            &state_bin.to_string_lossy(),
+        );
+        assert!(ms.is_empty(), "got {:?}", ms.iter().map(|m| &m.source).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn toolchain_grants_are_bounded_and_skip_credential_stores() {
         let home = tempfile::tempdir().unwrap();
         let home_s = home.path().to_string_lossy().to_string();
@@ -743,7 +774,7 @@ mod tests {
             std::fs::create_dir_all(&d).unwrap();
             entries.push(d.to_string_lossy().to_string());
         }
-        let ms = toolchain_read_mounts_from(&home_s, &entries.join(":"));
+        let ms = toolchain_read_mounts_from(&home_s, "", &entries.join(":"));
         assert!(ms.len() <= MAX_TOOLCHAIN_GRANTS, "got {}", ms.len());
         assert!(
             !ms.iter().any(|m| m.source.contains(".ssh")),
