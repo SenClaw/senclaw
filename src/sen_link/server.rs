@@ -36,7 +36,7 @@ pub async fn agent_card(State(st): State<Arc<LinkState>>) -> Response {
 }
 
 /// Body of `POST /a2a/pair`.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairRequest {
     pub code: String,
@@ -49,16 +49,16 @@ pub struct PairRequest {
     pub token: Option<String>,
 }
 
-pub async fn pair(State(st): State<Arc<LinkState>>, Json(req): Json<PairRequest>) -> Response {
+/// Redeem an invite and record the caller as a peer. `channel` is the hub
+/// channel the request arrived on (relay pairing): only that channel's invite
+/// matches, and the new peer keeps the channel. Shared by HTTP and the relay.
+pub fn pair_with(st: &LinkState, req: PairRequest, channel: Option<&str>) -> Result<Value, (StatusCode, String)> {
     let s = st.settings();
-    if !s.enabled {
-        return not_found();
-    }
-    match st.store.redeem_invite(&req.code, now()) {
-        Ok(true) => {}
-        Ok(false) => return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid or expired invite code" }))).into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
-    }
+    let invite = match st.store.redeem_invite(&req.code, now(), channel) {
+        Ok(Some(i)) => i,
+        Ok(None) => return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into())),
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    };
     let theirs = random_token();
     let peer = Peer {
         id: uuid::Uuid::new_v4().to_string(),
@@ -68,14 +68,35 @@ pub async fn pair(State(st): State<Arc<LinkState>>, Json(req): Json<PairRequest>
         inbound_token_hash: sha256_hex(&theirs),
         auto_run: false,
         assignee: None,
+        relay: invite.relay,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let id = peer.id.clone();
-    if let Err(e) = st.store.upsert(peer) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+    st.store.upsert(peer).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tracing::info!(peer = %id, relay = channel.is_some(), "[sen-link] paired by invite");
+    Ok(json!({ "peerId": id, "name": s.name, "token": theirs, "url": s.public_url }))
+}
+
+pub async fn pair(State(st): State<Arc<LinkState>>, Json(req): Json<PairRequest>) -> Response {
+    if !st.settings().enabled {
+        return not_found();
     }
-    tracing::info!(peer = %id, "[sen-link] paired by invite");
-    Json(json!({ "peerId": id, "name": s.name, "token": theirs, "url": s.public_url })).into_response()
+    match pair_with(&st, req, None) {
+        Ok(v) => Json(v).into_response(),
+        Err((code, e)) => (code, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// Answer one JSON-RPC request body for `peer`. Shared by HTTP and the relay.
+pub fn rpc_reply(st: &LinkState, peer: &Peer, req: &Value) -> Value {
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+    let Some(method) = req["method"].as_str() else {
+        return a2a::rpc_error(&id, a2a::INVALID_REQUEST, "missing method");
+    };
+    match handle(st, peer, a2a::canonical_method(method), &req["params"]) {
+        Ok(result) => a2a::rpc_result(&id, result),
+        Err((code, msg)) => a2a::rpc_error(&id, code, &msg),
+    }
 }
 
 /// `POST /a2a` — JSON-RPC 2.0, A2A v1.0 methods.
@@ -87,19 +108,10 @@ pub async fn rpc(State(st): State<Arc<LinkState>>, headers: HeaderMap, body: axu
         Some(p) => p,
         None => return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response(),
     };
-    let req: Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(e) => return Json(a2a::rpc_error(&Value::Null, a2a::PARSE_ERROR, &e.to_string())).into_response(),
-    };
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    let Some(method) = req["method"].as_str() else {
-        return Json(a2a::rpc_error(&id, a2a::INVALID_REQUEST, "missing method")).into_response();
-    };
-    let reply = match handle(&st, &peer, a2a::canonical_method(method), &req["params"]) {
-        Ok(result) => a2a::rpc_result(&id, result),
-        Err((code, msg)) => a2a::rpc_error(&id, code, &msg),
-    };
-    Json(reply).into_response()
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(req) => Json(rpc_reply(&st, &peer, &req)).into_response(),
+        Err(e) => Json(a2a::rpc_error(&Value::Null, a2a::PARSE_ERROR, &e.to_string())).into_response(),
+    }
 }
 
 type RpcResult = Result<Value, (i64, String)>;
@@ -229,6 +241,7 @@ mod tests {
             inbound_token_hash: String::new(),
             auto_run,
             assignee: Some("claude-code".into()),
+            relay: None,
             created_at: String::new(),
         }
     }

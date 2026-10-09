@@ -20,6 +20,26 @@ Pairing exchanges two random tokens: each side stores the token it presents to t
 token it accepts (`~/.senclaw/sen-link/peers.json`, mode 0600). A daemon without a `publicUrl` still answers `/a2a`
 to anyone who can reach it with a valid peer token; its peers just have no URL to send it tasks with.
 
+### Through the hub (NAT, no public URL)
+
+When neither daemon can reach the other, pair through a SenClaw hub (`senclaw-hub-connector`):
+
+1. On both: set `"hubUrl": "https://<your hub>"` in sen-link settings (no `publicUrl` needed).
+2. On **B**: `POST /api/sen-link/invites` → the reply also carries `"connect": "senlink:…"`.
+3. On **A**: `POST /api/sen-link/peers/pair` with `{"connect": "senlink:…"}`.
+
+Each hub invite mints **its own hub channel** and a fresh 32-byte key; the connection string carries the hub URL,
+channel id, channel access token, key and invite code — hand it over like a password. The hub admits at most two
+connections per channel, so a channel is exactly one pair of daemons, and frames on it are AES-GCM encrypted with the
+pair's key: the hub relays ciphertext only. Requests on the channel go through the same code as `/a2a` and
+`/a2a/pair`, so peer tokens are checked exactly as over HTTP, and a peer's token is accepted only on that peer's own
+channel. A peer paired this way has no URL and is always called through its channel (`viaRelay: true`).
+
+Both daemons keep their peers' channels open and reconnect on their own (2 s → 60 s backoff). Every 30 s — and right
+after removing a peer or saving settings — the open channels are reconciled with the store: an expired invite, a
+removed peer or a disabled sen-link closes its socket. Hub versions before the write-deadline fix (every frame relayed
+more than 10 s after the hub's last ping failed with "i/o timeout") drop such links every few seconds; update the hub.
+
 ## Trust
 
 A remote peer never starts work on its own: its tasks land in **Triage** until a person moves them. To let a peer's
@@ -34,6 +54,7 @@ control, and prefer Triage — a person reads the task before moving it to Ready
 
 | Route (on the sending daemon) | A2A call |
 |---|---|
+| `POST /api/sen-link/peers/pair` `{url, code}` or `{connect}` | pairing (direct, or through a hub invite) |
 | `POST /api/sen-link/peers/:id/messages` `{text, taskId?, worktree?}` | `SendMessage` (new task, or follow-up when `taskId` is set) |
 | `GET /api/sen-link/peers/:id/tasks` | `ListTasks` |
 | `GET /api/sen-link/peers/:id/tasks/:taskId` | `GetTask` |
@@ -72,9 +93,9 @@ sees cards it created (card tenant `sen-link:<peer-id>`).
 | `publicUrl` | — | how peers reach this daemon |
 | `boardTitle` | `sen-link` | board incoming tasks land on (created on first use) |
 | `workspaceDir` | — | that board's workspace dir (where workers run) |
-| `defaultAssignee` | — | when neither peer nor message names one |
+| `defaultAssignee` | — | when the peer has no assignee of its own |
+| `hubUrl` | — | SenClaw hub for peers behind NAT; when set, every invite mints a hub channel |
 
 ## Not yet
 
-Relay through `senclaw-hub-connector` for peers behind NAT, streaming (`SendStreamingMessage`), push notifications,
-shared boards/memory sync, and desktop/web UI screens.
+Streaming (`SendStreamingMessage`), push notifications, and shared boards/memory sync.

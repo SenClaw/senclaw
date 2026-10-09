@@ -8,6 +8,7 @@
 pub mod a2a;
 pub mod api;
 pub mod client;
+pub mod relay;
 pub mod server;
 pub mod settings;
 pub mod store;
@@ -24,6 +25,8 @@ pub struct LinkState {
     pub kanban: Arc<crate::kanban::db::Db>,
     pub store: store::PeerStore,
     pub http: reqwest::Client,
+    /// Open hub channels (peers reached through the relay).
+    pub links: relay::Links,
 }
 
 impl LinkState {
@@ -36,7 +39,7 @@ impl LinkState {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .unwrap_or_default();
-        Self { config_path, kanban, store, http }
+        Self { config_path, kanban, store, http, links: relay::Links::default() }
     }
 
     pub fn settings(&self) -> settings::SenLinkSettings {

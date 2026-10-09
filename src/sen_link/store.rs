@@ -14,6 +14,19 @@ pub const INVITE_TTL_SECS: i64 = 10 * 60;
 /// Unambiguous alphabet for spoken/typed invite codes.
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
+/// A dedicated hub channel shared by exactly two daemons (the hub admits at
+/// most two connections per channel). Frames on it are AES-GCM encrypted with
+/// `key`, which only the two peers hold — the hub relays ciphertext.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayInfo {
+    pub hub_url: String,
+    pub channel_id: String,
+    pub access_token: String,
+    /// Base64 of the 32-byte channel key.
+    pub key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Peer {
@@ -31,6 +44,9 @@ pub struct Peer {
     /// Assignee for this peer's incoming tasks.
     #[serde(default)]
     pub assignee: Option<String>,
+    /// Reached through a hub channel instead of (or when there is no) `url`.
+    #[serde(default)]
+    pub relay: Option<RelayInfo>,
     pub created_at: String,
 }
 
@@ -41,6 +57,8 @@ pub struct PeerView {
     pub id: String,
     pub name: String,
     pub url: Option<String>,
+    /// Reached through the hub relay.
+    pub via_relay: bool,
     pub can_send: bool,
     pub auto_run: bool,
     pub assignee: Option<String>,
@@ -53,7 +71,8 @@ impl From<&Peer> for PeerView {
             id: p.id.clone(),
             name: p.name.clone(),
             url: p.url.clone(),
-            can_send: p.url.is_some() && p.outbound_token.is_some(),
+            via_relay: p.relay.is_some(),
+            can_send: (p.url.is_some() || p.relay.is_some()) && p.outbound_token.is_some(),
             auto_run: p.auto_run,
             assignee: p.assignee.clone(),
             created_at: p.created_at.clone(),
@@ -63,9 +82,12 @@ impl From<&Peer> for PeerView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Invite {
+pub struct Invite {
     code_hash: String,
-    expires_at: i64,
+    pub expires_at: i64,
+    /// The hub channel minted for this invite; the pairing peer keeps it.
+    #[serde(default)]
+    pub relay: Option<RelayInfo>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -152,30 +174,49 @@ impl PeerStore {
             .find(|p| crate::gateway::ui_server::auth::ct_eq(&p.inbound_token_hash, &h))
     }
 
-    /// A one-time pairing code, valid for [`INVITE_TTL_SECS`].
-    pub fn create_invite(&self, now: i64) -> Result<(String, i64)> {
+    /// A one-time pairing code, valid for [`INVITE_TTL_SECS`], optionally
+    /// bound to a hub channel minted for it.
+    pub fn create_invite(&self, now: i64, relay: Option<RelayInfo>) -> Result<(String, i64)> {
         let code = random_code();
         let expires_at = now + INVITE_TTL_SECS;
         let h = sha256_hex(&code);
         self.edit(|d| {
             d.invites.retain(|i| i.expires_at > now);
-            d.invites.push(Invite { code_hash: h, expires_at });
+            d.invites.push(Invite { code_hash: h, expires_at, relay });
         })?;
         Ok((code, expires_at))
     }
 
-    /// Consume an invite. True when `code` was live. A miss writes nothing, so
-    /// unauthenticated guesses cannot churn the file.
-    pub fn redeem_invite(&self, code: &str, now: i64) -> Result<bool> {
+    /// Consume an invite, returning it when `code` was live. A miss writes
+    /// nothing, so unauthenticated guesses cannot churn the file. With
+    /// `channel`, only the invite minted for that hub channel matches.
+    pub fn redeem_invite(&self, code: &str, now: i64, channel: Option<&str>) -> Result<Option<Invite>> {
         let h = sha256_hex(&normalize_code(code));
         let _g = self.lock.lock().unwrap();
         let mut d = self.read();
-        let live = d.invites.iter().any(|i| i.expires_at > now && i.code_hash == h);
-        if live {
-            d.invites.retain(|i| i.expires_at > now && i.code_hash != h);
-            self.write(&d)?;
-        }
-        Ok(live)
+        let matches = |i: &Invite| {
+            i.expires_at > now
+                && i.code_hash == h
+                && channel.is_none_or(|c| i.relay.as_ref().is_some_and(|r| r.channel_id == c))
+        };
+        let Some(found) = d.invites.iter().find(|i| matches(i)).cloned() else {
+            return Ok(None);
+        };
+        d.invites.retain(|i| i.expires_at > now && i.code_hash != h);
+        self.write(&d)?;
+        Ok(Some(found))
+    }
+
+    /// Hub channels still worth listening on: live invites and relay peers.
+    pub fn relay_channels(&self, now: i64) -> Vec<RelayInfo> {
+        let _g = self.lock.lock().unwrap();
+        let d = self.read();
+        d.invites
+            .iter()
+            .filter(|i| i.expires_at > now)
+            .filter_map(|i| i.relay.clone())
+            .chain(d.peers.iter().filter_map(|p| p.relay.clone()))
+            .collect()
     }
 
     pub fn upsert(&self, peer: Peer) -> Result<()> {
@@ -215,14 +256,26 @@ mod tests {
     #[test]
     fn an_invite_is_single_use_and_expires() {
         let (_t, s) = store();
-        let (code, exp) = s.create_invite(1000).unwrap();
+        let (code, exp) = s.create_invite(1000, None).unwrap();
         assert_eq!(code.len(), 8);
         assert_eq!(exp, 1000 + INVITE_TTL_SECS);
         let typed = format!("{}-{}", &code[..4], code[4..].to_lowercase());
-        assert!(s.redeem_invite(&typed, 1001).unwrap());
-        assert!(!s.redeem_invite(&code, 1002).unwrap());
-        let (late, _) = s.create_invite(2000).unwrap();
-        assert!(!s.redeem_invite(&late, 2000 + INVITE_TTL_SECS + 1).unwrap());
+        assert!(s.redeem_invite(&typed, 1001, None).unwrap().is_some());
+        assert!(s.redeem_invite(&code, 1002, None).unwrap().is_none());
+        let (late, _) = s.create_invite(2000, None).unwrap();
+        assert!(s.redeem_invite(&late, 2000 + INVITE_TTL_SECS + 1, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_relay_invite_only_redeems_on_its_own_channel() {
+        let (_t, s) = store();
+        let relay = RelayInfo { hub_url: "http://hub".into(), channel_id: "ch-1".into(), access_token: "t".into(), key: "k".into() };
+        let (code, _) = s.create_invite(10, Some(relay.clone())).unwrap();
+        assert_eq!(s.relay_channels(11), vec![relay.clone()]);
+        assert!(s.redeem_invite(&code, 11, Some("ch-2")).unwrap().is_none());
+        let inv = s.redeem_invite(&code, 11, Some("ch-1")).unwrap().unwrap();
+        assert_eq!(inv.relay, Some(relay));
+        assert!(s.relay_channels(12).is_empty());
     }
 
     #[test]
@@ -237,6 +290,7 @@ mod tests {
             inbound_token_hash: sha256_hex(&tok),
             auto_run: false,
             assignee: None,
+            relay: None,
             created_at: "now".into(),
         })
         .unwrap();

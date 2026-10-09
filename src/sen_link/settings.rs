@@ -20,8 +20,11 @@ pub struct SenLinkSettings {
     pub board_title: String,
     /// Where dispatched workers for incoming tasks run (the board's workspace).
     pub workspace_dir: Option<String>,
-    /// Assignee for incoming tasks when neither the peer nor the message names one.
+    /// Assignee for incoming tasks when the peer has none of its own.
     pub default_assignee: Option<String>,
+    /// SenClaw hub (`senclaw-hub-connector`) for peers that cannot reach each
+    /// other directly (NAT). When set, every invite mints its own hub channel.
+    pub hub_url: Option<String>,
 }
 
 impl Default for SenLinkSettings {
@@ -34,6 +37,7 @@ impl Default for SenLinkSettings {
             board_title: "sen-link".into(),
             workspace_dir: None,
             default_assignee: None,
+            hub_url: None,
         }
     }
 }
@@ -46,9 +50,11 @@ impl SenLinkSettings {
         if self.board_title.trim().is_empty() {
             return Err("boardTitle: must not be empty".into());
         }
-        if let Some(u) = &self.public_url {
-            if !(u.starts_with("http://") || u.starts_with("https://")) {
-                return Err("publicUrl: must start with http:// or https://".into());
+        for (field, u) in [("publicUrl", &self.public_url), ("hubUrl", &self.hub_url)] {
+            if let Some(u) = u {
+                if !(u.starts_with("http://") || u.starts_with("https://")) {
+                    return Err(format!("{field}: must start with http:// or https://"));
+                }
             }
         }
         Ok(self)

@@ -45,7 +45,13 @@ async fn status(State(st): State<Arc<LinkState>>) -> Response {
         url: s.public_url.as_deref(),
         version: env!("CARGO_PKG_VERSION"),
     });
-    Json(json!({ "settings": s, "agentCard": card, "peerCount": st.store.peers().len() })).into_response()
+    Json(json!({
+        "settings": s,
+        "agentCard": card,
+        "peerCount": st.store.peers().len(),
+        "hubChannels": st.links.open().len(),
+    }))
+    .into_response()
 }
 
 async fn settings_get(State(st): State<Arc<LinkState>>) -> Response {
@@ -58,7 +64,10 @@ async fn settings_put(State(st): State<Arc<LinkState>>, Json(body): Json<SenLink
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
     match crate::gateway::group_manager::save_sen_link_settings(st.config_path(), &s) {
-        Ok(()) => Json(s).into_response(),
+        Ok(()) => {
+            super::relay::reconcile(&st);
+            Json(s).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -67,8 +76,27 @@ async fn invite(State(st): State<Arc<LinkState>>) -> Response {
     if let Some(r) = need_enabled(&st) {
         return r;
     }
-    match st.store.create_invite(crate::kanban::api::now()) {
-        Ok((code, expires_at)) => Json(json!({ "code": code, "expiresAt": expires_at, "url": st.settings().public_url })).into_response(),
+    let s = st.settings();
+    // With a hub, the invite gets its own channel: the other daemon can pair
+    // (and later talk) through it even when neither side is reachable.
+    let relay = match s.hub_url.as_deref() {
+        Some(hub) => match super::relay::register_channel(&st.http, hub).await {
+            Ok(r) => Some(r),
+            Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        },
+        None => None,
+    };
+    match st.store.create_invite(crate::kanban::api::now(), relay.clone()) {
+        Ok((code, expires_at)) => {
+            let connect = relay.as_ref().map(|r| super::relay::encode_connect(r, &code));
+            if let Some(r) = &relay {
+                // Listen now, so the other side can pair as soon as it has the string.
+                if let Err(e) = super::relay::ensure(&st, r) {
+                    return err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"));
+                }
+            }
+            Json(json!({ "code": code, "expiresAt": expires_at, "url": s.public_url, "connect": connect })).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
 }
@@ -80,33 +108,56 @@ async fn peers(State(st): State<Arc<LinkState>>) -> Response {
 
 #[derive(Deserialize)]
 struct PairBody {
-    url: String,
-    code: String,
+    /// Direct pairing: the other daemon's URL and its invite code.
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    /// Hub pairing: the `senlink:` connection string of a hub invite.
+    #[serde(default)]
+    connect: Option<String>,
 }
 
-/// Pair with the daemon at `url` using the invite code a person read off it.
+/// Pair with another daemon: directly (`url` + `code`) or through the hub
+/// channel of its invite (`connect`).
 async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Response {
     if let Some(r) = need_enabled(&st) {
         return r;
     }
-    if !(b.url.starts_with("http://") || b.url.starts_with("https://")) {
-        return err(StatusCode::BAD_REQUEST, "url: must start with http:// or https://");
-    }
     let s = st.settings();
     let ours = random_token();
-    let reply = match client::pair(&st.http, &b.url, &b.code, &s.name, s.public_url.as_deref(), &ours).await {
-        Ok(v) => v,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+    let (reply, url, relay) = if let Some(c) = b.connect.as_deref().filter(|c| !c.trim().is_empty()) {
+        let connect = match super::relay::decode_connect(c) {
+            Ok(c) => c,
+            Err(e) => return err(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        };
+        match client::pair_via_hub(&st, &connect, &s.name, s.public_url.as_deref(), &ours).await {
+            // Talk through the hub: that is why this pairing used it.
+            Ok(v) => (v, None, Some(connect.relay())),
+            Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        }
+    } else {
+        let (Some(url), Some(code)) = (b.url.as_deref(), b.code.as_deref()) else {
+            return err(StatusCode::BAD_REQUEST, "give url and code, or a senlink: connection string");
+        };
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return err(StatusCode::BAD_REQUEST, "url: must start with http:// or https://");
+        }
+        match client::pair(&st.http, url, code, &s.name, s.public_url.as_deref(), &ours).await {
+            // Prefer the URL we actually reached over the one it advertises.
+            Ok(v) => (v, Some(url.trim_end_matches('/').to_string()), None),
+            Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        }
     };
     let peer = Peer {
         id: uuid::Uuid::new_v4().to_string(),
         name: reply["name"].as_str().unwrap_or("peer").chars().take(80).collect(),
-        // Prefer the URL we actually reached over the one it advertises.
-        url: Some(b.url.trim_end_matches('/').to_string()),
+        url,
         outbound_token: reply["token"].as_str().map(str::to_string),
         inbound_token_hash: sha256_hex(&ours),
         auto_run: false,
         assignee: None,
+        relay,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let view = PeerView::from(&peer);
@@ -146,7 +197,11 @@ async fn peer_patch(State(st): State<Arc<LinkState>>, Path(id): Path<String>, Js
 
 async fn peer_delete(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
     match st.store.remove(&id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            // Close its hub channel now rather than at the next reconcile.
+            super::relay::reconcile(&st);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => err(StatusCode::NOT_FOUND, "no such peer"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -170,8 +225,8 @@ async fn with_peer(st: &LinkState, id: &str) -> Result<Peer, Response> {
     st.store.get(id).ok_or_else(|| err(StatusCode::NOT_FOUND, "no such peer"))
 }
 
-async fn relay(st: &LinkState, peer: &Peer, method: &str, params: Value) -> Response {
-    match client::call(&st.http, peer, method, params).await {
+async fn relay(st: &Arc<LinkState>, peer: &Peer, method: &str, params: Value) -> Response {
+    match client::call(st, peer, method, params).await {
         Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
     }

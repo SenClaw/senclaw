@@ -64,6 +64,17 @@ pub struct RelayClient {
     /// underlying WebSocket dropped). Lets a supervisor reconnect — the socket has
     /// no self-healing of its own.
     closed: Arc<Notify>,
+    /// Cancelled on drop: ends both socket tasks so the connection closes. The
+    /// inbound task holds a sender clone (for pongs), so dropping the client's
+    /// own sender alone never closed anything — a dropped client stayed
+    /// connected, holding one of the hub's two slots on its channel.
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Drop for RelayClient {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 impl RelayClient {
@@ -118,6 +129,9 @@ impl RelayClient {
             .send(WsMessage::Text(serde_json::to_string(&handshake_msg)?))
             .await?;
 
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_inbound = cancel.clone();
+        let cancel_outbound = cancel.clone();
         let cid_clone = channel_id.clone();
         let sid_clone = sender_id.clone();
         let handler_inbound = handler.clone();
@@ -127,7 +141,12 @@ impl RelayClient {
                 "Inbound relay stream processor started for channel: {}",
                 cid_clone
             );
-            while let Some(frame) = ws_read.next().await {
+            loop {
+                let frame = tokio::select! {
+                    f = ws_read.next() => f,
+                    _ = cancel_inbound.cancelled() => None,
+                };
+                let Some(frame) = frame else { break };
                 let frame = match frame {
                     Ok(f) => f,
                     Err(e) => {
@@ -217,6 +236,10 @@ impl RelayClient {
             ping_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
+                    _ = cancel_outbound.cancelled() => {
+                        let _ = ws_write.send(WsMessage::Close(None)).await;
+                        break;
+                    }
                     _ = ping_tick.tick() => {
                         if let Err(e) = ws_write.send(WsMessage::Ping(Vec::new())).await {
                             tracing::warn!(
@@ -281,6 +304,7 @@ impl RelayClient {
             sender_id,
             outbound_tx,
             closed,
+            cancel,
         })
     }
 

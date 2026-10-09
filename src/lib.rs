@@ -3427,10 +3427,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 claude_code::hooks::STOP_PATH,
                 axum::routing::post(claude_code::hooks::stop_hook),
             )
-            .merge(sen_link::router(Arc::new(sen_link::LinkState::new(
-                &cfg,
-                std::sync::Arc::clone(&kanban_state.db),
-            ))));
+            .merge({
+                let link_state = Arc::new(sen_link::LinkState::new(
+                    &cfg,
+                    std::sync::Arc::clone(&kanban_state.db),
+                ));
+                // Hub channels of relay peers and live hub invites.
+                sen_link::relay::start(&link_state);
+                sen_link::router(link_state)
+            });
         let ui_router = gateway::ui_server::build_router(ui_state)
             .nest(
                 "/api/kanban",
