@@ -35,6 +35,12 @@ pair's key: the hub relays ciphertext only. Requests on the channel go through t
 `/a2a/pair`, so peer tokens are checked exactly as over HTTP, and a peer's token is accepted only on that peer's own
 channel. A peer paired this way has no URL and is always called through its channel (`viaRelay: true`).
 
+Each request carries the sender's timestamp; one outside a 2-minute window, or an id already served within it, is
+refused — a hub replaying captured frames cannot re-run a task. Answers over 5 MiB are refused with 413 (the hub drops
+connections sending frames over 8 MiB), and a channel serves at most 8 requests at once. If a pairing reply is lost,
+retrying the same connection string re-issues the token instead of failing. An invite code alone never claims a hub
+invite over HTTP, and a hub that cannot be reached leaves a direct invite (with a `warning`).
+
 Both daemons keep their peers' channels open and reconnect on their own (2 s → 60 s backoff). Every 30 s — and right
 after removing a peer or saving settings — the open channels are reconciled with the store: an expired invite, a
 removed peer or a disabled sen-link closes its socket. Hub versions before the write-deadline fix (every frame relayed

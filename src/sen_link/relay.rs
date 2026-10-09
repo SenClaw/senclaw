@@ -36,6 +36,15 @@ const CONNECT_WAIT: Duration = Duration::from_secs(15);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often the set of open channels is reconciled with the store.
 const RECONCILE_EVERY: Duration = Duration::from_secs(30);
+/// A request older or newer than this (sender clock vs ours) is refused, and
+/// ids seen within it are remembered: a hub replaying a captured frame gets
+/// neither a stale one through nor a fresh one twice.
+const REPLAY_WINDOW_MS: i64 = 120_000;
+/// Largest answer sent back over a channel. The hub drops any connection that
+/// sends a frame over 8 MiB, and encryption + base64 + JSON add ~40 %.
+const MAX_RESP_BYTES: usize = 5 * 1024 * 1024;
+/// Requests served at once per channel; the rest wait.
+const MAX_CONCURRENT_SERVES: usize = 8;
 const CONNECT_PREFIX: &str = "senlink:";
 
 /// One message on a pair channel (encrypted before it leaves the process).
@@ -44,6 +53,8 @@ const CONNECT_PREFIX: &str = "senlink:";
 pub enum Frame {
     Req {
         id: String,
+        /// Sender's clock, ms since the epoch (replay window).
+        ts: i64,
         path: String,
         /// The caller's peer token (absent for `/a2a/pair`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,6 +147,9 @@ pub struct Link {
     client: tokio::sync::RwLock<Option<RelayClient>>,
     up: watch::Sender<bool>,
     pending: Mutex<HashMap<String, oneshot::Sender<(u16, Value)>>>,
+    /// Request ids served within the replay window, with their timestamps.
+    seen: Mutex<HashMap<String, i64>>,
+    serving: tokio::sync::Semaphore,
     stopped: AtomicBool,
     /// Wakes the supervisor out of its wait so it drops the client.
     stop: tokio_util::sync::CancellationToken,
@@ -161,7 +175,13 @@ impl Link {
         let id = uuid::Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id.clone(), tx);
-        let frame = Frame::Req { id: id.clone(), path: path.into(), token: token.map(str::to_string), body };
+        let frame = Frame::Req {
+            id: id.clone(),
+            ts: chrono::Utc::now().timestamp_millis(),
+            path: path.into(),
+            token: token.map(str::to_string),
+            body,
+        };
         if let Err(e) = self.send(&frame).await {
             self.pending.lock().unwrap().remove(&id);
             return Err(e);
@@ -174,6 +194,17 @@ impl Link {
                 bail!("peer did not answer within {}s", CALL_TIMEOUT.as_secs())
             }
         }
+    }
+
+    /// Whether a request is fresh: inside the window and not seen before.
+    /// Records it when it is.
+    fn accept(&self, id: &str, ts: i64, now: i64) -> bool {
+        if (now - ts).abs() > REPLAY_WINDOW_MS {
+            return false;
+        }
+        let mut seen = self.seen.lock().unwrap();
+        seen.retain(|_, t| (now - *t).abs() <= REPLAY_WINDOW_MS);
+        seen.insert(id.to_string(), ts).is_none()
     }
 
     fn decrypt(&self, nonce: &str, ct: &str, tag: &str) -> Result<String> {
@@ -223,6 +254,8 @@ pub fn ensure(st: &Arc<LinkState>, info: &RelayInfo) -> Result<Arc<Link>> {
         client: tokio::sync::RwLock::new(None),
         up,
         pending: Mutex::new(HashMap::new()),
+        seen: Mutex::new(HashMap::new()),
+        serving: tokio::sync::Semaphore::new(MAX_CONCURRENT_SERVES),
         stopped: AtomicBool::new(false),
         stop: tokio_util::sync::CancellationToken::new(),
     });
@@ -310,11 +343,20 @@ fn handler(st: Weak<LinkState>, link: Weak<Link>) -> RelayMessageHandler {
                     let _ = tx.send((status, body));
                 }
             }
-            Frame::Req { id, path, token, body } => {
+            Frame::Req { id, ts, path, token, body } => {
+                if !link.accept(&id, ts, chrono::Utc::now().timestamp_millis()) {
+                    tracing::warn!(channel = %link.info.channel_id, "[sen-link] refused a stale or replayed hub request");
+                    return;
+                }
                 let st = st.clone();
                 tokio::spawn(async move {
+                    let Ok(_permit) = link.serving.acquire().await else { return };
                     let Some(st) = st.upgrade() else { return };
-                    let (status, body) = serve(&st, &link.info.channel_id, &path, token.as_deref(), body);
+                    let (mut status, mut body) = serve(&st, &link.info.channel_id, &path, token.as_deref(), body);
+                    if serde_json::to_vec(&body).map_or(0, |b| b.len()) > MAX_RESP_BYTES {
+                        status = 413;
+                        body = json!({ "error": "answer too large for the hub relay" });
+                    }
                     let _ = link.send(&Frame::Resp { id, status, body }).await;
                 });
             }
@@ -399,9 +441,29 @@ mod tests {
         assert!(decode_connect("senlink:@@@").is_err());
     }
 
+    #[tokio::test]
+    async fn replayed_or_stale_requests_are_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let st = Arc::new(LinkState::new_at(
+            t.path().join("config.json"),
+            Arc::new(crate::kanban::db::Db::open(&t.path().join("k.db")).unwrap()),
+            super::super::store::PeerStore::new(t.path().join("p.json")),
+        ));
+        // A hub nobody listens on: the supervisor just keeps retrying.
+        let info = RelayInfo { hub_url: "http://127.0.0.1:9".into(), channel_id: "c".into(), access_token: "t".into(), key: new_key() };
+        let link = ensure(&st, &info).unwrap();
+        let now = 1_000_000_000_000;
+        assert!(link.accept("a", now, now));
+        assert!(!link.accept("a", now, now + 1), "same id twice");
+        assert!(!link.accept("b", now - REPLAY_WINDOW_MS - 1, now), "too old");
+        assert!(!link.accept("c", now + REPLAY_WINDOW_MS + 1, now), "from the future");
+        assert!(link.accept("a", now + 3 * REPLAY_WINDOW_MS, now + 3 * REPLAY_WINDOW_MS), "forgotten after the window");
+        st.links.stop("c");
+    }
+
     #[test]
     fn frames_have_a_stable_wire_shape() {
-        let f = Frame::Req { id: "1".into(), path: "/a2a".into(), token: None, body: json!({}) };
+        let f = Frame::Req { id: "1".into(), ts: 5, path: "/a2a".into(), token: None, body: json!({}) };
         let v = serde_json::to_value(&f).unwrap();
         assert_eq!(v["kind"], "req");
         assert!(v.get("token").is_none());

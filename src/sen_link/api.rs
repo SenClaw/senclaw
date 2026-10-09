@@ -79,12 +79,13 @@ async fn invite(State(st): State<Arc<LinkState>>) -> Response {
     let s = st.settings();
     // With a hub, the invite gets its own channel: the other daemon can pair
     // (and later talk) through it even when neither side is reachable.
-    let relay = match s.hub_url.as_deref() {
+    // A hub that cannot be reached still leaves a direct invite (url + code).
+    let (relay, warning) = match s.hub_url.as_deref() {
         Some(hub) => match super::relay::register_channel(&st.http, hub).await {
-            Ok(r) => Some(r),
-            Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+            Ok(r) => (Some(r), None),
+            Err(e) => (None, Some(format!("hub unavailable, direct invite only: {e:#}"))),
         },
-        None => None,
+        None => (None, None),
     };
     match st.store.create_invite(crate::kanban::api::now(), relay.clone()) {
         Ok((code, expires_at)) => {
@@ -95,7 +96,8 @@ async fn invite(State(st): State<Arc<LinkState>>) -> Response {
                     return err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"));
                 }
             }
-            Json(json!({ "code": code, "expiresAt": expires_at, "url": s.public_url, "connect": connect })).into_response()
+            Json(json!({ "code": code, "expiresAt": expires_at, "url": s.public_url, "connect": connect, "warning": warning }))
+                .into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }

@@ -73,6 +73,12 @@ impl Crypto {
         let cipher =
             Aes256Gcm::new_from_slice(&self.key).map_err(|e| anyhow!("Invalid key: {}", e))?;
 
+        // `Nonce::from_slice` panics on any length but 12. The bytes come off
+        // the network, and a panic here killed the relay's socket task while
+        // its keepalive half lived on — a wedged link nothing reconnected.
+        if nonce_bytes.len() != 12 || tag.len() != 16 {
+            return Err(anyhow!("Decryption failed: bad nonce or tag length"));
+        }
         let nonce = Nonce::from_slice(nonce_bytes);
 
         let mut full_payload = ciphertext.to_vec();
@@ -103,6 +109,13 @@ impl Crypto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_nonce_or_tag_is_an_error_not_a_panic() {
+        let c = Crypto::new([7u8; 32]);
+        assert!(c.decrypt(&[0u8; 5], b"x", &[0u8; 16]).is_err());
+        assert!(c.decrypt(&[0u8; 12], b"x", &[0u8; 3]).is_err());
+    }
 
     #[test]
     fn test_encrypt_decrypt() {

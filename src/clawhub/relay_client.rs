@@ -95,7 +95,14 @@ impl RelayClient {
         handler: Option<RelayMessageHandler>,
     ) -> Result<Self> {
         let ws_url = build_ws_url(&hub_url, &channel_id, &access_token)?;
-        info!("Connecting to WebSocket relay at {}...", ws_url);
+        // Never the URL itself: its query carries the channel access token.
+        info!(
+            "Connecting to WebSocket relay at {}://{}{} (channel {})...",
+            ws_url.scheme(),
+            ws_url.host_str().unwrap_or(""),
+            ws_url.port().map(|p| format!(":{p}")).unwrap_or_default(),
+            channel_id
+        );
         let (ws_stream, _) = connect_async(ws_url.as_str())
             .await
             .map_err(|e| anyhow!("Failed to connect to relay websocket: {e}"))?;

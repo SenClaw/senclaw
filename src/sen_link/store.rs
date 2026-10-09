@@ -189,7 +189,9 @@ impl PeerStore {
 
     /// Consume an invite, returning it when `code` was live. A miss writes
     /// nothing, so unauthenticated guesses cannot churn the file. With
-    /// `channel`, only the invite minted for that hub channel matches.
+    /// `channel`, only the invite minted for that hub channel matches; without
+    /// it (HTTP pairing) only invites that have no hub channel do — the code
+    /// alone must not claim a channel meant for whoever holds its string.
     pub fn redeem_invite(&self, code: &str, now: i64, channel: Option<&str>) -> Result<Option<Invite>> {
         let h = sha256_hex(&normalize_code(code));
         let _g = self.lock.lock().unwrap();
@@ -197,7 +199,10 @@ impl PeerStore {
         let matches = |i: &Invite| {
             i.expires_at > now
                 && i.code_hash == h
-                && channel.is_none_or(|c| i.relay.as_ref().is_some_and(|r| r.channel_id == c))
+                && match channel {
+                    Some(c) => i.relay.as_ref().is_some_and(|r| r.channel_id == c),
+                    None => i.relay.is_none(),
+                }
         };
         let Some(found) = d.invites.iter().find(|i| matches(i)).cloned() else {
             return Ok(None);
@@ -273,6 +278,7 @@ mod tests {
         let (code, _) = s.create_invite(10, Some(relay.clone())).unwrap();
         assert_eq!(s.relay_channels(11), vec![relay.clone()]);
         assert!(s.redeem_invite(&code, 11, Some("ch-2")).unwrap().is_none());
+        assert!(s.redeem_invite(&code, 11, None).unwrap().is_none(), "HTTP must not claim a hub invite");
         let inv = s.redeem_invite(&code, 11, Some("ch-1")).unwrap().unwrap();
         assert_eq!(inv.relay, Some(relay));
         assert!(s.relay_channels(12).is_empty());

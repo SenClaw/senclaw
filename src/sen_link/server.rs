@@ -56,7 +56,26 @@ pub fn pair_with(st: &LinkState, req: PairRequest, channel: Option<&str>) -> Res
     let s = st.settings();
     let invite = match st.store.redeem_invite(&req.code, now(), channel) {
         Ok(Some(i)) => i,
-        Ok(None) => return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into())),
+        Ok(None) => {
+            // A retry after a lost reply over the hub: the invite is spent but
+            // the same caller (same channel, same token it gave us) already
+            // became a peer. Re-issue its token instead of refusing, or the
+            // two sides would disagree about being paired.
+            if let (Some(ch), Some(tok)) = (channel, req.token.as_deref().filter(|t| !t.is_empty())) {
+                let existing = st.store.peers().into_iter().find(|p| {
+                    p.relay.as_ref().is_some_and(|r| r.channel_id == ch) && p.outbound_token.as_deref() == Some(tok)
+                });
+                if let Some(p) = existing {
+                    let theirs = random_token();
+                    let h = sha256_hex(&theirs);
+                    st.store
+                        .update(&p.id, |p| p.inbound_token_hash = h)
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    return Ok(json!({ "peerId": p.id, "name": s.name, "token": theirs, "url": s.public_url }));
+                }
+            }
+            return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into()));
+        }
         Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     };
     let theirs = random_token();
@@ -299,6 +318,24 @@ mod tests {
         let f = json!({ "message": a2a::user_message("bucket is sen-assets", Some(&tid.to_string()), json!({})) });
         handle(&st, &a, "SendMessage", &f).unwrap();
         assert_eq!(st.kanban.card_role(tid).unwrap().as_deref(), Some("ready"));
+    }
+
+    #[test]
+    fn a_hub_pair_retry_after_a_lost_reply_reissues_the_token() {
+        let (_t, st) = state();
+        let relay = crate::sen_link::store::RelayInfo { hub_url: "http://h".into(), channel_id: "ch".into(), access_token: "t".into(), key: "k".into() };
+        let (code, _) = st.store.create_invite(now(), Some(relay)).unwrap();
+        let req = || PairRequest { code: code.clone(), name: "A".into(), url: None, token: Some("slk_a".into()) };
+        let first = pair_with(&st, req(), Some("ch")).unwrap();
+        let again = pair_with(&st, req(), Some("ch")).unwrap();
+        assert_eq!(first["peerId"], again["peerId"]);
+        assert_ne!(first["token"], again["token"]);
+        assert_eq!(st.store.peers().len(), 1);
+        // Only the newest token works; a stranger with another token is refused.
+        assert!(st.store.by_inbound_token(again["token"].as_str().unwrap()).is_some());
+        assert!(st.store.by_inbound_token(first["token"].as_str().unwrap()).is_none());
+        let other = PairRequest { code: code.clone(), name: "X".into(), url: None, token: Some("slk_x".into()) };
+        assert_eq!(pair_with(&st, other, Some("ch")).unwrap_err().0, StatusCode::FORBIDDEN);
     }
 
     #[test]
