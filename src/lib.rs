@@ -23,6 +23,7 @@ pub mod browser_agent;
 pub mod build_info;
 pub mod channels;
 pub mod checkpoints;
+pub mod claude_code;
 pub mod clawhub;
 pub mod cli;
 pub mod config;
@@ -45,6 +46,7 @@ pub mod providers;
 pub mod repo_map;
 pub mod runtime;
 pub mod sandbox;
+pub mod sen_link;
 pub mod scaffold;
 pub mod scheduler;
 pub mod security;
@@ -3073,6 +3075,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 std::sync::Arc::clone(&persona_registry),
                 dcfg,
             );
+            // Cards assigned to `claude-code` run in the user's own Claude
+            // Code CLI, verified by SenClaw (see `crate::claude_code`).
+            mcp_dispatcher.set_claude_code(std::sync::Arc::new(claude_code::ClaudeCodeWorker::new(
+                Arc::new(cfg.clone()),
+                Some(Arc::clone(&db)),
+                claude_code::local_base_url(&ui_bind_host, cfg.ui_server.port),
+            )));
             mcp_dispatcher.start();
             // Keep the Arc alive for the life of the daemon.
             let _mcp_dispatcher = mcp_dispatcher;
@@ -3399,11 +3408,35 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // daemon UI server (the native Flutter screen talks to these routes).
         // Auth middleware is layered *after* the kanban nest so it covers
         // those routes too (a layer added before a nest would not wrap it).
+        // Claude Code cowork (`/api/claude-code/*`, the `/mcp/{core|kanban}`
+        // bridge, the worker's Stop hook) and sen-link (A2A at `/a2a`, the
+        // Agent Card, `/api/sen-link/*`). Merged before the auth layer so
+        // their `/api` routes are gated; the others check their own tokens.
+        let cowork_base = claude_code::local_base_url(&ui_bind_host, cfg.ui_server.port);
+        let cowork_router = axum::Router::new()
+            .merge(claude_code::api::router(Arc::new(claude_code::api::ApiState {
+                config: Arc::new(cfg.clone()),
+                base_url: cowork_base,
+            })))
+            .merge(claude_code::mcp_bridge::router(claude_code::mcp_bridge::BridgeState::new(
+                Arc::new(cfg.clone()),
+                Some(Arc::clone(&db)),
+                api_auth.token.clone(),
+            )))
+            .route(
+                claude_code::hooks::STOP_PATH,
+                axum::routing::post(claude_code::hooks::stop_hook),
+            )
+            .merge(sen_link::router(Arc::new(sen_link::LinkState::new(
+                &cfg,
+                std::sync::Arc::clone(&kanban_state.db),
+            ))));
         let ui_router = gateway::ui_server::build_router(ui_state)
             .nest(
                 "/api/kanban",
                 kanban::api::api_router(std::sync::Arc::clone(&kanban_state)),
             )
+            .merge(cowork_router)
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&api_auth),
                 gateway::ui_server::auth::http_auth_mw,

@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use app_space_sdk::dispatch::{
@@ -44,6 +44,9 @@ pub struct MCPDispatcher {
     personas: Arc<Mutex<PersonaRegistry>>,
     cfg: DispatcherConfig,
     active: AtomicUsize,
+    /// Runs items assigned to Claude Code (`crate::claude_code::worker::handles`).
+    /// Unset = those assignees fall through to the persona path like any other.
+    claude_code: OnceLock<Arc<crate::claude_code::ClaudeCodeWorker>>,
 }
 
 impl MCPDispatcher {
@@ -57,7 +60,13 @@ impl MCPDispatcher {
             personas,
             cfg,
             active: AtomicUsize::new(0),
+            claude_code: OnceLock::new(),
         })
+    }
+
+    /// Route Claude Code assignees to `worker`. First call wins.
+    pub fn set_claude_code(&self, worker: Arc<crate::claude_code::ClaudeCodeWorker>) {
+        let _ = self.claude_code.set(worker);
     }
 
     /// Spawn the poll loop. The spawned task holds an `Arc<Self>`, so the loop
@@ -148,6 +157,15 @@ impl MCPDispatcher {
 
     /// Run one item as a tool-enabled agent and map the result to an [`Outcome`].
     async fn execute(&self, item: &WorkItem) -> Outcome {
+        if let Some(cc) = self.claude_code.get().filter(|_| crate::claude_code::worker::handles(item.assignee.as_deref())) {
+            let (working_dir, worktree) = match self.resolve_workspace(item) {
+                Ok(d) => d,
+                Err(e) => return Outcome::Failed { error: format!("workspace: {e}") },
+            };
+            let timeout = Duration::from_secs(item.timeout_secs.unwrap_or(self.cfg.default_timeout_secs));
+            let outcome = cc.execute(item, &working_dir, timeout).await;
+            return with_worktree(outcome, worktree.as_ref());
+        }
         // Resolve the persona (clone out from behind the lock).
         let persona = {
             let reg = self.personas.lock().unwrap();
@@ -192,26 +210,15 @@ impl MCPDispatcher {
                 error: r.error_message.unwrap_or_else(|| "agent error".into()),
             },
             Ok(r) => {
-                let mut summary = r
+                let summary = r
                     .text
                     .lines()
                     .find(|l| !l.trim().is_empty())
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let mut metadata = serde_json::json!({ "turns": r.turn_count, "secs": r.duration.as_secs() });
-                if let Some(wt) = &worktree {
-                    // The board's checkout is untouched; say where the work is.
-                    let wt_summary = crate::worktree::summary(std::path::Path::new(&wt.path));
-                    summary = format!("{summary} — {wt_summary}");
-                    metadata["worktree"] = serde_json::json!({
-                        "path": wt.path,
-                        "branch": wt.branch,
-                        "base": wt.base,
-                        "summary": wt_summary,
-                    });
-                }
-                Outcome::Completed { summary, metadata }
+                let metadata = serde_json::json!({ "turns": r.turn_count, "secs": r.duration.as_secs() });
+                with_worktree(Outcome::Completed { summary, metadata }, worktree.as_ref())
             }
             Err(e) => Outcome::Failed {
                 error: e.to_string(),
@@ -281,5 +288,26 @@ impl MCPDispatcher {
                 Ok((dir.to_string_lossy().to_string(), None))
             }
         }
+    }
+}
+
+/// A completed run in a worktree says where its work is: the board's checkout
+/// is untouched, and the branch is what a person reviews next.
+fn with_worktree(outcome: Outcome, worktree: Option<&crate::worktree::WorktreeInfo>) -> Outcome {
+    match (outcome, worktree) {
+        (Outcome::Completed { summary, mut metadata }, Some(wt)) => {
+            let wt_summary = crate::worktree::summary(std::path::Path::new(&wt.path));
+            if !metadata.is_object() {
+                metadata = serde_json::json!({});
+            }
+            metadata["worktree"] = serde_json::json!({
+                "path": wt.path,
+                "branch": wt.branch,
+                "base": wt.base,
+                "summary": wt_summary,
+            });
+            Outcome::Completed { summary: format!("{summary} — {wt_summary}"), metadata }
+        }
+        (o, _) => o,
     }
 }

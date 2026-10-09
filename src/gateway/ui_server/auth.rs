@@ -378,7 +378,7 @@ fn load_or_create_token_file(path: &PathBuf) -> String {
 
 /// Constant-time string equality — a naive `==` short-circuits on the first
 /// differing byte and leaks prefix length through timing.
-fn ct_eq(a: &str, b: &str) -> bool {
+pub(crate) fn ct_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
         return false;
@@ -386,7 +386,7 @@ fn ct_eq(a: &str, b: &str) -> bool {
     a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn token_from_headers(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn token_from_headers(headers: &HeaderMap) -> Option<String> {
     if let Some(v) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         if let Some(t) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
             let t = t.trim();

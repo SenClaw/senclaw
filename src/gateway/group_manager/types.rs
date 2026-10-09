@@ -425,6 +425,14 @@ pub(super) struct GlobalConfig {
     /// key missing here is erased by the next unrelated save.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "browserAgent")]
     pub(super) browser_agent: Option<serde_json::Value>,
+    /// Claude Code worker (`crate::claude_code::settings`). Raw JSON for the
+    /// same reason as `browserAgent`: a key missing here is erased by the next
+    /// unrelated save.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "claudeCode")]
+    pub(super) claude_code: Option<serde_json::Value>,
+    /// sen-link A2A peering (`crate::sen_link::settings`). Raw JSON, as above.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "senLink")]
+    pub(super) sen_link: Option<serde_json::Value>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
