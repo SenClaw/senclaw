@@ -46,7 +46,17 @@ Status: implemented (uncommitted) · e2e verified with a fake `claude`; live Cla
   assignee; worker guidance no longer contradicts; process-group kill + bounded output; unchecked "done" → Blocked;
   bridge session caps, id rewriting, run-token chat pinning; invite misses don't write; canceled tasks stay canceled;
   trust boundary documented (worker is not sandboxed from the daemon).
-- Not done: desktop/web UI screens, hub relay for NAT, A2A streaming/push, live run with real Claude Code.
+- Not done: A2A streaming/push, live run with real Claude Code (CLI login expired on this machine).
+
+## Round 2 (2026-10-10)
+- UI: Settings → Claude Code and Settings → sen-link in web-app (branch feat/claude-code-cowork) and desktop
+  (same branch; widget tests), Vietnamese strings.
+- Hub relay for NAT peers: per-invite hub channel + AES-GCM key, `senlink:` connection string, reconnect/reconcile;
+  hardened after review (decrypt length guard, replay window, 5 MiB cap, idempotent pairing, token not logged).
+- senclaw-hub-connector fix (branch fix/relay-write-deadline): sticky write deadline dropped relayed frames.
+- `senclaw-link` MCP server (link_peers/send/task/tasks/cancel) in senclaw-core; watch on
+  `mcp__senclaw-link__link_task` verified to resume the chat when a peer task completes.
+- E2E: local hub + two isolated daemons, pairing and Claude Code tasks over the relay both ways, 70 s idle with no drops.
 
 ## Risks
 - Live `claude` auth expired on this machine → e2e unverified until re-login.

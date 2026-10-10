@@ -25,6 +25,7 @@ pub mod space_server;
 pub mod space_sync;
 pub mod ts_transpile;
 pub mod usage_server;
+pub mod link_server;
 pub mod user_profile_server;
 pub mod virtual_server;
 pub mod docs_server;

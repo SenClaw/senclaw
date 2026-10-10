@@ -2407,6 +2407,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // the gate closes. In-process callers read it from here; MCP children
         // get it in their own config env (`mcp::helper`).
         util::internal_auth::set_daemon_token(&token);
+        // sen-link tools carry no per-chat context, so one process answers every
+        // caller — which is what lets a watch probe `link_task` until a peer's
+        // task finishes. Registered here, after the token exists, because the
+        // spec carries it (loopback is not a credential under auth mode `always`).
+        mcp_manager
+            .register_builtin_spec(mcp::helper::link_mcp_config(cfg.ui_server.port))
+            .await;
         let auth = gateway::ui_server::auth::ApiAuth {
             env_mode: cfg.ui_server.auth_mode,
             env_set: cfg.ui_server.auth_mode_from_env,

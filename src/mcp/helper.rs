@@ -208,6 +208,15 @@ pub fn space_mcp_config(
     cfg
 }
 
+/// sen-link tools (`senclaw link-server`, tool prefix `link_`). Loopback HTTP
+/// into the daemon's `/api/sen-link/*`, like the Space App tools above.
+pub fn link_mcp_config(ui_port: u16) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-link", "link-server");
+    cfg.env.insert("SENCLAW_LINK_API_URL".into(), format!("http://127.0.0.1:{ui_port}"));
+    with_daemon_token(&mut cfg);
+    cfg
+}
+
 /// Hand a subprocess the daemon's API token.
 ///
 /// Loopback stops being a credential under auth mode `always`, and these
@@ -514,6 +523,7 @@ pub const DEFAULT_CORE_SERVERS: &[&str] = &[
     "senclaw-js",
     "senclaw-sandbox",
     "senclaw-profile",
+    "senclaw-link",
 ];
 
 /// Env var carrying [`CoreMcpParams::servers`] to the subprocess.
@@ -572,6 +582,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         js_mcp_config(p.js_timeout_ms, p.js_memory_mb),
         sandbox_mcp_config(),
         user_profile_mcp_config(p.user_profile_path, p.chat_jid),
+        link_mcp_config(p.ui_port),
     ];
     for part in parts {
         cfg.env.extend(part.env);

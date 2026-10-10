@@ -198,6 +198,7 @@ mcp__senclaw-<domain>__<tool-prefix>_<verb>[_<modifier>]
 | **cognitive** | `senclaw-cognitive` | **`cog_`** (not `cognitive_`) | `mcp__senclaw-cognitive__cog_search` |
 | **sandbox** | `senclaw-sandbox` | **`sbx_`** (not `sandbox_`) | `mcp__senclaw-sandbox__sbx_run` |
 | usage | `senclaw-usage` | `usage_` | `mcp__senclaw-usage__usage_overview` |
+| link | `senclaw-link` | `link_` | `mcp__senclaw-link__link_send` |
 | admin | `senclaw-admin` | (varies) | — |
 
 Source of truth: server names live in [`src/mcp/helper.rs`](src/mcp/helper.rs) `*_mcp_config()` builders; tool names are the `#[rmcp::tool] async fn <name>` definitions in `src/mcp/*_server.rs`.

@@ -158,6 +158,8 @@ enum Command {
     SandboxServer,
     /// Start the token-usage accounting MCP server (stdio JSON-RPC)
     UsageServer,
+    /// Start the sen-link MCP server — link_* tools to delegate to paired SenClaws (stdio JSON-RPC)
+    LinkServer,
     /// Start the Soul Core MCP server — profile_* tools over USER.md (stdio JSON-RPC)
     UserProfileServer,
     /// Internal: brush (rust-bash) sandbox child — reads a script from stdin,
@@ -227,6 +229,7 @@ async fn main() -> Result<()> {
                 | Command::PatternsServer
                 | Command::JsServer
                 | Command::UsageServer
+                | Command::LinkServer
                 | Command::UserProfileServer
                 | Command::BrushSandbox { .. }
                 | Command::KanbanServer
@@ -309,6 +312,7 @@ async fn main() -> Result<()> {
         Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
         Command::SandboxServer => senclaw::mcp::sandbox_server::run_stdio_server().await,
         Command::UsageServer => senclaw::mcp::usage_server::run_stdio_server().await,
+        Command::LinkServer => senclaw::mcp::link_server::run_stdio_server().await,
         Command::UserProfileServer => {
             senclaw::mcp::user_profile_server::run_stdio_server().await
         }

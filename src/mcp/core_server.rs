@@ -42,6 +42,7 @@ use super::schedule_server::McpScheduleServer;
 use super::send_server::McpSendServer;
 use super::space_server::McpSpaceServer;
 use super::usage_server::McpUsageServer;
+use super::link_server::McpLinkServer;
 use super::virtual_server::McpVirtualServer;
 use super::wiki_server::McpWikiServer;
 use super::docs_server::McpDocsServer;
@@ -98,6 +99,7 @@ macro_rules! for_each_child {
         if let Some($child) = &$self.js $body
         if let Some($child) = &$self.sandbox $body
         if let Some($child) = &$self.user_profile $body
+        if let Some($child) = &$self.link $body
     };
 }
 
@@ -186,6 +188,7 @@ pub struct CoreServer {
     js: Option<Child<McpJsServer>>,
     sandbox: Option<Child<McpSandboxServer>>,
     user_profile: Option<Child<McpUserProfileServer>>,
+    link: Option<Child<McpLinkServer>>,
 }
 
 impl CoreServer {
@@ -288,6 +291,7 @@ impl CoreServer {
                 McpUserProfileServer,
                 McpUserProfileServer::from_env()
             ),
+            link: build_child!(w, "senclaw-link", McpLinkServer, McpLinkServer::from_env()),
         };
         server.warn_on_duplicate_tools();
         Ok(server)

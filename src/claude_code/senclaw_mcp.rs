@@ -24,6 +24,7 @@ pub const CLAUDE_CORE_SERVERS: &[&str] = &[
     "senclaw-wiki",
     "senclaw-space",
     "senclaw-profile",
+    "senclaw-link",
 ];
 
 pub const CORE_NAME: &str = "senclaw-core";

@@ -26,7 +26,7 @@ The worker session:
 - runs headless in the card's directory with `--permission-mode` / `--allowedTools` from settings, and
   `--strict-mcp-config` — it sees exactly SenClaw's servers, none of the user's own;
 - gets `senclaw-kanban` (read the card, comment) and `senclaw-core` (schedule, background, memory, wiki, space/calendar,
-  dispatch, send, usage, profile) scoped to `claudeCode.mcpChatJid` (default: the first chat);
+  dispatch, send, usage, profile, sen-link) scoped to `claudeCode.mcpChatJid` (default: the first chat);
 - may **not** call `kanban_complete` / `kanban_block` — SenClaw closes the card;
 - must end with a structured result (`--json-schema`): `status` `done|blocked`, `summary`, `files_changed`, …
 

@@ -68,6 +68,23 @@ control, and prefer Triage — a person reads the task before moving it to Ready
 
 Also: `GET /api/sen-link/status`, `GET /api/sen-link/peers`, `PATCH/DELETE /api/sen-link/peers/:id`.
 
+### From an agent (`senclaw-link` tools)
+
+Agents delegate without the UI through the bundled `senclaw-link` MCP server (in `senclaw-core`, so every SenClaw chat
+has it, and Claude Code gets it through `/mcp/core`): `link_peers`, `link_send {peer, text, worktree?, task_id?}`,
+`link_task {peer, task_id}`, `link_tasks {peer}`, `link_cancel {peer, task_id}`. `peer` is a name (case-insensitive)
+or id. Results are compact: `state` is one word — `submitted | working | input_required | completed | failed |
+canceled` — and `results` carry the peer's summary and branch.
+
+To be woken when a delegated task finishes, arm a watch instead of polling in the turn:
+
+```json
+{"tool": "mcp__senclaw-link__link_task", "args": {"peer": "SenClaw B", "task_id": "5"},
+ "done_path": "state", "done_op": "in", "done_values": ["completed", "failed", "canceled", "input_required"]}
+```
+
+The tools are loopback calls to `/api/sen-link/*` (registered as a daemon-wide built-in, so a watch can probe them).
+
 ## Wire surface (on the receiving daemon)
 
 | Path | Auth | |
