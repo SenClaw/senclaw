@@ -1,5 +1,6 @@
 //! `/mcp/{core|kanban}` — MCP Streamable HTTP in front of SenClaw's own stdio
-//! MCP servers, so an interactive Claude Code can `claude mcp add` SenClaw:
+//! MCP servers, so an external agent — an interactive Claude Code, or an app
+//! worker's agent (see `app_space_sdk::worker`) — can use SenClaw's tools:
 //!
 //! ```text
 //! claude mcp add --transport http --scope user senclaw \
@@ -13,8 +14,9 @@
 //! stream: `GET` answers 405, which the spec allows.
 //!
 //! Auth is always required, loopback included (any local web page can POST to
-//! loopback): the daemon API token, or a live Claude Code run token. A session
-//! only answers the token that opened it.
+//! loopback): the daemon API token, or a live dispatch token the daemon minted
+//! for one app-worker job ([`mint_dispatch_token`]). A session only answers the
+//! token that opened it.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -33,6 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::oneshot;
 
+use crate::mcp::bridge_servers;
 use crate::mcp::helper::McpServerConfig;
 
 const SESSION_HEADER: &str = "mcp-session-id";
@@ -43,12 +46,65 @@ const IDLE_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_SESSIONS_PER_OWNER: usize = 8;
 const MAX_SESSIONS: usize = 32;
 
+/// Loopback base URL of the daemon UI server for a given bind host and port —
+/// what a process on this machine (an app worker's agent) should call.
+pub fn local_base_url(bind_host: &str, port: u16) -> String {
+    let h = bind_host.trim();
+    let host = match h {
+        "" | "0.0.0.0" | "::" | "[::]" => "127.0.0.1".to_string(),
+        h if h.contains(':') && !h.starts_with('[') => format!("[{h}]"),
+        h => h.to_string(),
+    };
+    format!("http://{host}:{port}")
+}
+
 /// Who is calling.
 enum Caller {
     /// The daemon API token: may pick the chat with `?chat=`.
     Api,
-    /// A Claude Code run token: pinned to the run's chat.
-    Run(Option<String>),
+    /// A dispatch token: always the chat the daemon pinned it to (`None` = the
+    /// first chat group); `?chat=` is ignored, so an app cannot widen it.
+    Dispatch(Option<String>),
+}
+
+/// Dispatch tokens: one per app-worker job, revoked when the job ends.
+struct DispatchToken {
+    token: String,
+    chat: Option<String>,
+    expires: Instant,
+}
+
+fn dispatch_tokens() -> &'static Mutex<Vec<DispatchToken>> {
+    static T: std::sync::OnceLock<Mutex<Vec<DispatchToken>>> = std::sync::OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Mint a token for one app-worker job: `mdt_` + 64 hex, valid for `ttl` or
+/// until [`revoke_dispatch_token`]. `chat` pins the `core` server's scope.
+pub fn mint_dispatch_token(chat: Option<String>, ttl: Duration) -> String {
+    use rand::RngCore;
+    let mut b = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut b);
+    let token = format!("mdt_{}", hex::encode(b));
+    let mut all = dispatch_tokens().lock().unwrap();
+    all.retain(|t| t.expires > Instant::now());
+    all.push(DispatchToken { token: token.clone(), chat, expires: Instant::now() + ttl });
+    token
+}
+
+pub fn revoke_dispatch_token(token: &str) {
+    dispatch_tokens().lock().unwrap().retain(|t| t.token != token);
+}
+
+/// `Some(chat scope)` for a live dispatch token.
+fn dispatch_token_scope(token: &str) -> Option<Option<String>> {
+    let now = Instant::now();
+    dispatch_tokens()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|t| t.expires > now && crate::gateway::ui_server::auth::ct_eq(&t.token, token))
+        .map(|t| t.chat.clone())
 }
 
 pub struct BridgeState {
@@ -61,6 +117,9 @@ pub struct BridgeState {
 
 struct ChildSession {
     owner: String,
+    /// The dispatch token that opened it, if any: once revoked, the reaper
+    /// closes the session (and its child) instead of waiting out the idle TTL.
+    dispatch_token: Option<String>,
     /// Added to the server's `initialize` instructions (chat scope for `core`).
     instructions: Option<String>,
     stdin: tokio::sync::Mutex<ChildStdin>,
@@ -137,7 +196,10 @@ impl BridgeState {
 
     fn reap_idle(&self) {
         let mut map = self.sessions.lock().unwrap();
-        map.retain(|_, s| s.last_used.lock().unwrap().elapsed() < IDLE_TTL);
+        map.retain(|_, s| {
+            s.last_used.lock().unwrap().elapsed() < IDLE_TTL
+                && s.dispatch_token.as_deref().is_none_or(|t| dispatch_token_scope(t).is_some())
+        });
     }
 
     fn authorize(&self, token: &str) -> Option<Caller> {
@@ -146,7 +208,7 @@ impl BridgeState {
                 return Some(Caller::Api);
             }
         }
-        super::registry::by_token(token).map(|e| Caller::Run(e.mcp_chat_jid))
+        dispatch_token_scope(token).map(Caller::Dispatch)
     }
 
     /// Insert `s`, first closing least-recently-used sessions over the caps.
@@ -172,19 +234,23 @@ impl BridgeState {
     /// The child to spawn, plus the scope note for its `initialize` reply.
     fn server_config(&self, kind: &str, chat: Option<&str>) -> Result<(McpServerConfig, Option<String>), String> {
         match kind {
-            "kanban" => Ok((super::senclaw_mcp::kanban_server(), None)),
+            "kanban" => Ok((bridge_servers::kanban_server(), None)),
             "core" => {
                 let db = self.db.as_ref().ok_or("daemon database unavailable")?;
-                let st = super::settings::load(&self.config.paths.global_config_path);
-                let jid = chat.map(str::to_string).or(st.mcp_chat_jid);
-                let g = super::senclaw_mcp::resolve_group(db, jid.as_deref()).ok_or("no chat group to scope SenClaw tools to")?;
-                Ok((super::senclaw_mcp::core_server(&self.config, &g), Some(super::senclaw_mcp::scope_instructions(&g))))
+                let g = bridge_servers::resolve_group(db, chat).ok_or("no chat group to scope SenClaw tools to")?;
+                Ok((bridge_servers::core_server(&self.config, &g), Some(bridge_servers::scope_instructions(&g))))
             }
             other => Err(format!("unknown SenClaw MCP server `{other}` (core, kanban)")),
         }
     }
 
-    fn spawn(&self, cfg: &McpServerConfig, owner: String, instructions: Option<String>) -> std::io::Result<Arc<ChildSession>> {
+    fn spawn(
+        &self,
+        cfg: &McpServerConfig,
+        owner: String,
+        instructions: Option<String>,
+        dispatch_token: Option<String>,
+    ) -> std::io::Result<Arc<ChildSession>> {
         let mut child = tokio::process::Command::new(&cfg.command)
             .args(&cfg.args)
             .envs(&cfg.env)
@@ -198,6 +264,7 @@ impl BridgeState {
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>> = Arc::default();
         let session = Arc::new(ChildSession {
             owner,
+            dispatch_token,
             instructions,
             stdin: tokio::sync::Mutex::new(stdin),
             pending: Arc::clone(&pending),
@@ -296,15 +363,16 @@ async fn post_mcp(
             None => return (StatusCode::NOT_FOUND, Json(rpc_error(Value::Null, -32001, "session not found"))).into_response(),
         },
         None if initializing => {
-            let chat = match caller {
+            let chat = match &caller {
                 Caller::Api => q.get("chat").cloned(),
-                Caller::Run(jid) => jid,
+                Caller::Dispatch(jid) => jid.clone(),
             };
             let (cfg, note) = match st.server_config(&server, chat.as_deref()) {
                 Ok(c) => c,
                 Err(e) => return (StatusCode::NOT_FOUND, Json(json!({ "error": e }))).into_response(),
             };
-            let s = match st.spawn(&cfg, owner, note) {
+            let dispatch = matches!(caller, Caller::Dispatch(_)).then(|| token.clone());
+            let s = match st.spawn(&cfg, owner, note, dispatch) {
                 Ok(s) => s,
                 Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": format!("spawn MCP server: {e}") }))).into_response(),
             };
@@ -382,13 +450,31 @@ mod tests {
         cfg.command = "cat".into();
         cfg.args = vec![];
         for i in 0..(MAX_SESSIONS_PER_OWNER + 3) {
-            let s = st.spawn(&cfg, "owner-a".into(), None).unwrap();
+            let s = st.spawn(&cfg, "owner-a".into(), None, None).unwrap();
             st.insert_capped(format!("s{i}"), s);
         }
         let map = st.sessions.lock().unwrap();
         assert_eq!(map.len(), MAX_SESSIONS_PER_OWNER);
         assert!(!map.contains_key("s0"));
         assert!(map.contains_key(&format!("s{}", MAX_SESSIONS_PER_OWNER + 2)));
+    }
+
+    #[test]
+    fn wildcard_binds_are_reached_over_loopback() {
+        assert_eq!(local_base_url("0.0.0.0", 18788), "http://127.0.0.1:18788");
+        assert_eq!(local_base_url("::1", 2), "http://[::1]:2");
+        assert_eq!(local_base_url("192.168.1.5", 3), "http://192.168.1.5:3");
+    }
+
+    #[test]
+    fn dispatch_tokens_authorize_until_revoked() {
+        let pinned = mint_dispatch_token(Some("web:a".into()), Duration::from_secs(60));
+        assert!(pinned.starts_with("mdt_"));
+        assert_eq!(dispatch_token_scope(&pinned), Some(Some("web:a".into())));
+        revoke_dispatch_token(&pinned);
+        assert_eq!(dispatch_token_scope(&pinned), None);
+        let expired = mint_dispatch_token(None, Duration::from_millis(0));
+        assert_eq!(dispatch_token_scope(&expired), None);
     }
 
     #[test]
@@ -409,7 +495,7 @@ mod tests {
         let mut cfg = McpServerConfig::new("echo", "");
         cfg.command = "cat".into();
         cfg.args = vec![];
-        let s = st.spawn(&cfg, token_hash("tok"), None).unwrap();
+        let s = st.spawn(&cfg, token_hash("tok"), None, None).unwrap();
         // `cat` echoes the request back; an echoed line carrying `method` and
         // `id` is a server→client request and is refused, so send a
         // reply-shaped message to exercise id rewriting and routing.

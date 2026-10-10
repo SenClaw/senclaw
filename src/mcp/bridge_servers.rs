@@ -1,20 +1,15 @@
-//! The SenClaw MCP servers a Claude Code session gets: the aggregated
-//! `core-server` (scoped to one chat, exactly as the daemon scopes it for its
-//! own agents) and the kanban server. Used both for worker sessions (stdio,
-//! via `--mcp-config`) and behind the HTTP bridge (`/mcp/{core|kanban}`).
-
-use std::collections::HashMap;
-
-use serde_json::{json, Value};
+//! The SenClaw MCP servers behind the HTTP bridge (`/mcp/{core|kanban}`): the
+//! aggregated `core-server` (scoped to one chat, exactly as the daemon scopes
+//! it for its own agents) and the kanban server.
 
 use crate::config::Config;
 use crate::mcp::helper::{core_mcp_config, CoreMcpParams, McpServerConfig};
 use crate::types::GroupBinding;
 
-/// Built-in servers worth exposing to Claude Code. Left out on purpose: the
-/// ones duplicating Claude's own tools (workspace files, browser, js, sandbox,
-/// ocr, patterns, litho).
-pub const CLAUDE_CORE_SERVERS: &[&str] = &[
+/// Built-in servers worth exposing to an external coding agent. Left out on
+/// purpose: the ones duplicating its own tools (workspace files, browser, js,
+/// sandbox, ocr, patterns, litho).
+pub const BRIDGE_CORE_SERVERS: &[&str] = &[
     "senclaw-schedule",
     "senclaw-background",
     "senclaw-usage",
@@ -46,7 +41,7 @@ pub fn resolve_group(db: &crate::db::Db, jid: Option<&str>) -> Option<GroupBindi
         .cloned()
 }
 
-/// `senclaw core-server` scoped to `binding`, hosting [`CLAUDE_CORE_SERVERS`].
+/// `senclaw core-server` scoped to `binding`, hosting [`BRIDGE_CORE_SERVERS`].
 pub fn core_server(cfg: &Config, binding: &GroupBinding) -> McpServerConfig {
     let home = crate::util::paths::senclaw_home();
     let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
@@ -92,7 +87,7 @@ pub fn core_server(cfg: &Config, binding: &GroupBinding) -> McpServerConfig {
         user_profile_path: &user_profile,
         js_timeout_ms: 5_000,
         js_memory_mb: 128,
-        servers: CLAUDE_CORE_SERVERS,
+        servers: BRIDGE_CORE_SERVERS,
     });
     c.name = CORE_NAME.into();
     c
@@ -114,20 +109,6 @@ pub fn kanban_server() -> McpServerConfig {
     McpServerConfig::new(KANBAN_NAME, "kanban-server")
 }
 
-/// Claude Code `--mcp-config` JSON for stdio servers.
-pub fn claude_mcp_json(servers: &[McpServerConfig]) -> Value {
-    let map: HashMap<&str, Value> = servers
-        .iter()
-        .map(|s| {
-            (
-                s.name.as_str(),
-                json!({ "type": "stdio", "command": s.command, "args": s.args, "env": s.env }),
-            )
-        })
-        .collect();
-    json!({ "mcpServers": map })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,14 +125,4 @@ mod tests {
         assert!(s.contains("\"fx\"") && s.contains("\"web:x\""));
     }
 
-    #[test]
-    fn mcp_json_has_the_claude_shape() {
-        let mut k = kanban_server();
-        k.env.insert("A".into(), "1".into());
-        let v = claude_mcp_json(&[k]);
-        let s = &v["mcpServers"][KANBAN_NAME];
-        assert_eq!(s["type"], "stdio");
-        assert_eq!(s["args"][0], "kanban-server");
-        assert_eq!(s["env"]["A"], "1");
-    }
 }

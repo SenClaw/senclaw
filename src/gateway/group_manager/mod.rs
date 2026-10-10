@@ -18,7 +18,7 @@ pub mod types;
 // Re-exports for external consumers
 pub use apps::{delete_feishu_app, get_feishu_apps, save_feishu_app};
 pub use browser_agent::save_browser_agent_settings;
-pub use cowork_sections::{save_claude_code_settings, save_sen_link_settings};
+pub use cowork_sections::save_sen_link_settings;
 pub use chat::{delete_telegram_bot, get_telegram_bots, get_wechat_accounts, save_telegram_bot};
 pub use control_plane::{load_control_plane_settings, save_control_plane_settings};
 pub use dirs::{

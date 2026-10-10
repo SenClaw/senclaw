@@ -23,6 +23,7 @@ pub mod prepare;
 pub mod requirements;
 pub mod sandbox_decl;
 pub mod token;
+pub mod workers;
 
 pub use manifest::{LlmDecl, Requires, RunMode, Runner, RuntimeSpec, SandboxDecl};
 pub use requirements::{CheckResult, RequirementsReport};

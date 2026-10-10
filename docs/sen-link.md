@@ -4,7 +4,7 @@ sen-link lets two SenClaw daemons (two machines, two people) delegate tasks to e
 [A2A protocol](https://a2a-protocol.org) v1.0, JSON-RPC binding. Code: `src/sen_link/`.
 
 Incoming tasks become **kanban cards** on the `sen-link` board, so the existing dispatcher — a SenClaw persona or
-Claude Code (assignee `claude-code`, see `claude-code-cowork.md`) — does the work, and the result goes back as the
+Claude Code (assignee `claude-code`, run by the `app-claude` app worker — see `app-workers.md`) — does the work, and the result goes back as the
 A2A task's artifacts.
 
 ## Enable and pair
@@ -53,7 +53,7 @@ tasks run immediately, set `PATCH /api/sen-link/peers/:id {"autoRun": true}` (op
 The assignee is always yours to set (per peer, else `defaultAssignee`); a peer cannot pick it.
 
 **`autoRun` with assignee `claude-code` gives that peer a shell on this machine**: its text becomes the prompt of a
-worker that runs with `Bash` as you (see the trust boundary in `claude-code-cowork.md`). Use it only for peers you
+worker that runs with `Bash` as you (see `app-workers.md` and the app-claude README). Use it only for peers you
 control, and prefer Triage — a person reads the task before moving it to Ready.
 
 ## Delegating

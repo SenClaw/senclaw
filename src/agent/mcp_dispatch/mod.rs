@@ -16,6 +16,8 @@ use app_space_sdk::dispatch::{
     Capacity, DispatchSource, McpServerSpec, Outcome, WorkItem, Workspace,
 };
 
+pub mod app_worker;
+
 use crate::agent::isolated_runner::{run_one_shot, McpInject, OneShotOptions};
 use crate::agent::persona_registry::PersonaRegistry;
 use crate::zen_core::McpServerConfig;
@@ -44,9 +46,9 @@ pub struct MCPDispatcher {
     personas: Arc<Mutex<PersonaRegistry>>,
     cfg: DispatcherConfig,
     active: AtomicUsize,
-    /// Runs items assigned to Claude Code (`crate::claude_code::worker::handles`).
-    /// Unset = those assignees fall through to the persona path like any other.
-    claude_code: OnceLock<Arc<crate::claude_code::ClaudeCodeWorker>>,
+    /// Hands items whose assignee an installed app declares as a worker to
+    /// that app (`app_worker`). Unset = every item takes the persona path.
+    app_workers: OnceLock<app_worker::AppWorkerContext>,
 }
 
 impl MCPDispatcher {
@@ -60,13 +62,13 @@ impl MCPDispatcher {
             personas,
             cfg,
             active: AtomicUsize::new(0),
-            claude_code: OnceLock::new(),
+            app_workers: OnceLock::new(),
         })
     }
 
-    /// Route Claude Code assignees to `worker`. First call wins.
-    pub fn set_claude_code(&self, worker: Arc<crate::claude_code::ClaudeCodeWorker>) {
-        let _ = self.claude_code.set(worker);
+    /// Enable app workers. First call wins.
+    pub fn set_app_workers(&self, ctx: app_worker::AppWorkerContext) {
+        let _ = self.app_workers.set(ctx);
     }
 
     /// Spawn the poll loop. The spawned task holds an `Arc<Self>`, so the loop
@@ -157,14 +159,30 @@ impl MCPDispatcher {
 
     /// Run one item as a tool-enabled agent and map the result to an [`Outcome`].
     async fn execute(&self, item: &WorkItem) -> Outcome {
-        if let Some(cc) = self.claude_code.get().filter(|_| crate::claude_code::worker::handles(item.assignee.as_deref())) {
-            let (working_dir, worktree) = match self.resolve_workspace(item) {
-                Ok(d) => d,
-                Err(e) => return Outcome::Failed { error: format!("workspace: {e}") },
-            };
-            let timeout = Duration::from_secs(item.timeout_secs.unwrap_or(self.cfg.default_timeout_secs));
-            let outcome = cc.execute(item, &working_dir, timeout).await;
-            return with_worktree(outcome, worktree.as_ref());
+        if let (Some(ctx), Some(assignee)) = (self.app_workers.get(), item.assignee.as_deref()) {
+            // A SenClaw persona of that name always wins: an installed app
+            // must not be able to take over a persona's work by declaring it.
+            let is_persona = self.personas.lock().unwrap().get(assignee).is_some();
+            match crate::apps::workers::resolve(&ctx.db, assignee) {
+                crate::apps::workers::Resolved::One(target) if !is_persona => {
+                    let (working_dir, worktree) = match self.resolve_workspace(item) {
+                        Ok(d) => d,
+                        Err(e) => return Outcome::Failed { error: format!("workspace: {e}") },
+                    };
+                    let timeout = Duration::from_secs(item.timeout_secs.unwrap_or(self.cfg.default_timeout_secs));
+                    let outcome = app_worker::run(ctx, &target, item, assignee, &working_dir, worktree.as_ref(), timeout).await;
+                    return with_worktree(outcome, worktree.as_ref());
+                }
+                crate::apps::workers::Resolved::One(target) => {
+                    tracing::warn!(app = %target.app_id, assignee, "[mcp-dispatch] app worker shadows a persona; the persona runs");
+                }
+                crate::apps::workers::Resolved::Conflict(apps) if !is_persona => {
+                    return Outcome::Blocked {
+                        reason: format!("assignee '{assignee}' is declared by several apps ({}); keep one enabled", apps.join(", ")),
+                    };
+                }
+                _ => {}
+            }
         }
         // Resolve the persona (clone out from behind the lock).
         let persona = {

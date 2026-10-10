@@ -5,6 +5,7 @@ pub mod events;
 pub mod fs;
 pub mod llm;
 pub mod net;
+pub mod worker;
 
 pub use bridge::{
     API_VERSION, ENV_API_VERSION, ENV_APP_TOKEN, HEADER_API_VERSION, HEADER_APP_TOKEN, LlmReply,
