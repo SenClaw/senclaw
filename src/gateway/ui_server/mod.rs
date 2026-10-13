@@ -24,6 +24,7 @@ mod control_plane;
 pub mod core;
 mod cowork;
 pub mod cowork_runtime;
+mod datagen;
 mod decision;
 mod dispatch;
 mod watches;

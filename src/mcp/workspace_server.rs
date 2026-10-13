@@ -130,6 +130,11 @@ impl WorkspaceServer {
         }
     }
 
+    /// The folder the chat is working in now (the default until switched).
+    pub fn current_dir(&self) -> PathBuf {
+        PathBuf::from(self.read_state().current_dir)
+    }
+
     fn read_state(&self) -> WorkspaceState {
         fs::read_to_string(&self.state_file)
             .ok()

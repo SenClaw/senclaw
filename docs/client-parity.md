@@ -43,6 +43,7 @@ Seven cells are `—` with no reason found: background tasks on Web; kanban, wor
 | workflow runs | ✅ | ✅ | ✅ | `WorkflowRunsPage.tsx` / `workflow/workflow_runs_screen.dart` / `workflow/workflow_screen.dart` (start, cancel, rename, delete) |
 | workflow editor | ✅ | ✅ | — | No reason found — candidate work; `services/workflow_api.dart` already exposes `draft()` and `create()`, no screen calls them |
 | background tasks | ✅ | ✅ | ✅ | `pages/BackgroundPage.tsx` (list, runs, run-now, pause, edit, delete) / `background/background_screen.dart` / `screens/background/background_screen.dart` |
+| datagen | ✅ | ✅ | N/A | `pages/DatagenPage.tsx` / `datagen/datagen_screen.dart` (start any pipeline, progress + rejection reasons, cancel, records, delete; added 2026-10-13). Mobile: a dataset job is pasted seeds, folders and long forms — from a phone it is asked for in chat, where the agent has `datagen_*` (scoped to that chat) |
 | patterns | ✅ | ✅ | ✅ | `plugins/PatternsPanel.tsx` / `plugins/patterns_panel.dart` / `patterns/{patterns,pattern_run,pattern_sources_tab}` |
 | kits | ✅ | ✅ | ✅ | `plugins/KitsPanel.tsx` / `plugins/kits_panel.dart` / `kits/kits_screen.dart` + `kit_install_sheet.dart` |
 | workbench | ✅ | ✅ | ✅ | `Workbench.tsx` / `dock/right_dock.dart` `_WorkbenchTab` / `workbench/workbench_screen.dart` (history is device-local there) |

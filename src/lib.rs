@@ -27,6 +27,7 @@ pub mod clawhub;
 pub mod cli;
 pub mod config;
 pub mod control_plane;
+pub mod datagen;
 pub mod db;
 pub mod decision;
 pub mod docs;

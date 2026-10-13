@@ -199,6 +199,7 @@ mcp__senclaw-<domain>__<tool-prefix>_<verb>[_<modifier>]
 | **sandbox** | `senclaw-sandbox` | **`sbx_`** (not `sandbox_`) | `mcp__senclaw-sandbox__sbx_run` |
 | usage | `senclaw-usage` | `usage_` | `mcp__senclaw-usage__usage_overview` |
 | link | `senclaw-link` | `link_` | `mcp__senclaw-link__link_send` |
+| datagen | `senclaw-datagen` | `datagen_` | `mcp__senclaw-datagen__datagen_start` |
 | admin | `senclaw-admin` | (varies) | — |
 
 Source of truth: server names live in [`src/mcp/helper.rs`](src/mcp/helper.rs) `*_mcp_config()` builders; tool names are the `#[rmcp::tool] async fn <name>` definitions in `src/mcp/*_server.rs`.
@@ -1289,6 +1290,42 @@ real, because the run needs the machine's model config. Cases grade the
 afterwards), not the tool path: a path-graded case fails an agent that found a
 different correct route and passes one that made every right call and still
 broke the file. See [docs/evals.md](docs/evals.md).
+
+## Datagen (`src/datagen/`)
+
+Background jobs that write a dataset folder (`$SENCLAW_DATA_HOME/datasets/<name>/data.jsonl` + `manifest.json`):
+`expand_seeds` (grow labelled example requests, e.g. a flow-router eval set), `doc_qa` (multi-hop Q&A grounded in
+documents), `reasoning_traces` (judged step-by-step solutions), `executable_qa` (computable problems labelled by
+running their Python in the sandbox) and `export_logs` (trajectories → sharegpt / alpaca / messages, no LLM). REST
+`/api/datagen/*`, MCP `senclaw-datagen`, web page Datagen. Guide: [docs/datagen.md](docs/datagen.md).
+
+Rules for Claude:
+
+- **The label check fails closed.** An unreadable classifier reply rejects the batch (`label_check_error`); never
+  default it to accepted — CAMEL's quality gate defaults a parse failure to a passing score, which is the bug.
+- **The classifier must not see the intended label.** It is what makes an accepted record evidence of its label.
+- **Records are appended and flushed one line at a time** and dataset files are 0600 in a 0700 folder: an export
+  carries files the agent read, same as the trajectories it comes from.
+- **The job registry is process-global** (`datagen::registry()`), not a `UiState` field. Live status is memory
+  only; the manifest is the durable record, and a `running` manifest with no live job reads as `interrupted`.
+- **The MCP server only forwards** to the daemon, and scopes everything to its own chat (`SENCLAW_CHAT_JID` from its
+  env, never a tool parameter): jobs are stamped with an `owner`, status/cancel send `?owner=`, and `export_logs`
+  from a chat exports that chat only — a group chat must not be able to dump the owner's other conversations.
+- **A relative `seeds_file` resolves against the chat's working folder** (workspace state file), never the process
+  cwd: MCP children are spawned without `current_dir`, so their cwd is the daemon's — the app bundle on a desktop
+  install. With no working folder known, a relative path is refused.
+- **Model-written code never runs unconfined.** `executable_qa` refuses the job without an enforced sandbox
+  (Seatbelt / bubblewrap / AppContainer / container) and stops if a run reports any other isolation. Never add a
+  "run on the host" fallback — CAMEL's host-venv verifier is exactly what this replaces.
+- **Grounding and answer checks are code, not model opinions, wherever they can be**: `doc_qa` verifies each quoted
+  fact as an in-order match inside a short passage window (scattered words do not count) and counts multi-hop by
+  distinct sentences; `reasoning_traces` compares answers itself. Neither the generator nor the judge sees the
+  reference answer — the judge's feedback goes back to the generator — and the reference is struck out of that
+  feedback anyway.
+- **`doc_qa` never reads SenClaw's own folder** (`senclaw_home()`: keys, tokens, every chat), follows no symlinks,
+  and reads only `.md`/`.markdown`/`.txt` — a named file of another type is refused, not read.
+- **A run that accepts nothing is `failed`, with the reasons** — a dataset with zero records is not a success, and
+  "the model kept failing" must read differently from "every candidate was too similar".
 
 ## Where a model-supplied path is resolved
 

@@ -381,6 +381,25 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(super::kits::kits_available_install),
         )
         .route("/api/kits/:id", delete(super::kits::kits_uninstall))
+        // ===== Datagen =====
+        .route(
+            "/api/datagen/jobs",
+            get(super::datagen::datagen_jobs)
+                .post(super::datagen::datagen_start)
+                // Inline documents and seed lists: more than axum's 2 MB default.
+                .layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route("/api/datagen/jobs/:id", get(super::datagen::datagen_job))
+        .route("/api/datagen/jobs/:id/cancel", post(super::datagen::datagen_cancel))
+        .route("/api/datagen/datasets", get(super::datagen::datagen_datasets))
+        .route(
+            "/api/datagen/datasets/:name",
+            delete(super::datagen::datagen_delete_dataset),
+        )
+        .route(
+            "/api/datagen/datasets/:name/records",
+            get(super::datagen::datagen_records),
+        )
         // ===== Zen Patterns =====
         .route(
             "/api/patterns",

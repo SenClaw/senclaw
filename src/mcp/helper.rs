@@ -354,6 +354,31 @@ pub fn patterns_mcp_config(ui_port: u16) -> McpServerConfig {
     cfg
 }
 
+// ===== Datagen =====
+
+/// Build the MCP config for the Datagen subprocess. Jobs run in the daemon
+/// (`/api/datagen/*`); the subprocess only forwards. It carries the chat jid
+/// (the owner of its jobs) and the chat's workspace, which a relative
+/// `seeds_file` / `paths` resolves against — the subprocess has no cwd of
+/// its own.
+pub fn datagen_mcp_config(
+    ui_port: u16,
+    chat_jid: &str,
+    workspace_state_file: &str,
+    default_workspace: &str,
+) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-datagen", "datagen-server");
+    cfg.env.insert(
+        "SENCLAW_DATAGEN_API_URL".into(),
+        format!("http://127.0.0.1:{ui_port}"),
+    );
+    cfg.env.insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
+    cfg.env.insert("SENCLAW_WORKSPACE_STATE_FILE".into(), workspace_state_file.to_owned());
+    cfg.env.insert("SENCLAW_DEFAULT_WORKSPACE".into(), default_workspace.to_owned());
+    with_daemon_token(&mut cfg);
+    cfg
+}
+
 // ===== OCR =====
 
 /// Build the MCP config for the OCR subprocess. The subprocess does not link
@@ -520,6 +545,7 @@ pub const DEFAULT_CORE_SERVERS: &[&str] = &[
     "senclaw-browser",
     "senclaw-ocr",
     "senclaw-patterns",
+    "senclaw-datagen",
     "senclaw-js",
     "senclaw-sandbox",
     "senclaw-profile",
@@ -579,6 +605,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         browser_mcp_config(p.ws_port, p.ui_port, p.agent_id, p.browser_v2),
         ocr_mcp_config(p.ui_port),
         patterns_mcp_config(p.ui_port),
+        datagen_mcp_config(p.ui_port, p.chat_jid, p.workspace_state_file, p.default_workspace),
         js_mcp_config(p.js_timeout_ms, p.js_memory_mb),
         sandbox_mcp_config(),
         user_profile_mcp_config(p.user_profile_path, p.chat_jid),

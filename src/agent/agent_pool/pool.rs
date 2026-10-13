@@ -1195,6 +1195,12 @@ impl AgentPool {
                 ));
                 mcp_servers.push(browser_mcp_config(cfg.ws_port, cfg.ui_server.port, &binding.jid, browser_v2));
                 mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
+                mcp_servers.push(crate::mcp::helper::datagen_mcp_config(
+                    cfg.ui_server.port,
+                    &binding.jid,
+                    &state_file_s,
+                    &workspace_s,
+                ));
                 // Sandboxed JS executor — no shared state, just default limits.
                 mcp_servers.push(js_mcp_config(5_000, 128));
                 // OS-sandbox executor (sbx_* tools) — Seatbelt/bubblewrap/docker

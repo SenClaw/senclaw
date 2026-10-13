@@ -16,6 +16,7 @@ pub mod litho_server;
 pub mod manager;
 pub mod memory_server;
 pub mod ocr_server;
+pub mod datagen_server;
 pub mod patterns_server;
 pub mod sandbox_server;
 pub mod schedule_server;

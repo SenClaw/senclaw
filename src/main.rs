@@ -152,6 +152,8 @@ enum Command {
     /// Start the OCR MCP server — PaddleOCR + MNN (stdio JSON-RPC)
     OcrServer,
     PatternsServer,
+    /// Start the dataset-generation MCP server — datagen_* tools (stdio JSON-RPC)
+    DatagenServer,
     /// Start the sandboxed JavaScript executor MCP server (stdio JSON-RPC)
     JsServer,
     /// Start the OS-sandbox MCP server — sbx_* tools (stdio JSON-RPC)
@@ -227,6 +229,7 @@ async fn main() -> Result<()> {
                 | Command::CognitiveServer
                 | Command::OcrServer
                 | Command::PatternsServer
+                | Command::DatagenServer
                 | Command::JsServer
                 | Command::UsageServer
                 | Command::LinkServer
@@ -309,6 +312,7 @@ async fn main() -> Result<()> {
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
         Command::OcrServer => senclaw::mcp::ocr_server::run_stdio_server().await,
         Command::PatternsServer => senclaw::mcp::patterns_server::run_stdio_server().await,
+        Command::DatagenServer => senclaw::mcp::datagen_server::run_stdio_server().await,
         Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
         Command::SandboxServer => senclaw::mcp::sandbox_server::run_stdio_server().await,
         Command::UsageServer => senclaw::mcp::usage_server::run_stdio_server().await,

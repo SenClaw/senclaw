@@ -46,6 +46,16 @@ pub fn chat_dir(jid: &str) -> PathBuf {
     root().join(safe(jid))
 }
 
+/// The folder holding every chat's trajectories.
+pub fn root_dir() -> PathBuf {
+    root()
+}
+
+/// The folder name a chat's trajectories live under (see [`chat_dir`]).
+pub fn dir_name(jid: &str) -> String {
+    safe(jid)
+}
+
 // ----- enablement -----
 
 struct Enabled {

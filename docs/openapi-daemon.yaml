@@ -2891,6 +2891,160 @@ paths:
       - cowork
       x-handler: update_template
       x-untyped: true
+  /api/datagen/datasets:
+    get:
+      operationId: get_api_datagen_datasets
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen datasets
+      tags:
+      - datagen
+      x-handler: datagen_datasets
+      x-untyped: true
+  /api/datagen/datasets/{name}:
+    delete:
+      operationId: delete_api_datagen_datasets_name
+      parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen delete dataset
+      tags:
+      - datagen
+      x-handler: datagen_delete_dataset
+      x-untyped: true
+  /api/datagen/datasets/{name}/records:
+    get:
+      operationId: get_api_datagen_datasets_name_records
+      parameters:
+      - in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen records
+      tags:
+      - datagen
+      x-handler: datagen_records
+      x-untyped: true
+  /api/datagen/jobs:
+    get:
+      operationId: get_api_datagen_jobs
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen jobs
+      tags:
+      - datagen
+      x-handler: datagen_jobs
+      x-untyped: true
+    post:
+      operationId: post_api_datagen_jobs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen start
+      tags:
+      - datagen
+      x-handler: datagen_start
+      x-untyped: true
+  /api/datagen/jobs/{id}:
+    get:
+      operationId: get_api_datagen_jobs_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen job
+      tags:
+      - datagen
+      x-handler: datagen_job
+      x-untyped: true
+  /api/datagen/jobs/{id}/cancel:
+    post:
+      operationId: post_api_datagen_jobs_id_cancel
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen cancel
+      tags:
+      - datagen
+      x-handler: datagen_cancel
+      x-untyped: true
   /api/decision/gate:
     get:
       operationId: get_api_decision_gate
@@ -10727,6 +10881,7 @@ tags:
 - name: config
 - name: control-plane
 - name: cowork
+- name: datagen
 - name: decision
 - name: defaults
 - name: dispatch
@@ -10770,5 +10925,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 383
-x-untyped-operations: 472
+x-route-count: 389
+x-untyped-operations: 479
