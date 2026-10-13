@@ -256,7 +256,7 @@ Response luôn HTTP 200 dạng `{ "appId", "status": "ok" | "error", ...}` (400 
 | Action | Payload | Trả về | App thật đang dùng |
 |---|---|---|---|
 | `capabilities` | — | danh sách action khả dụng | (probe) |
-| `llm.request` | `prompt`*, `system?`, `maxTokens?`, `profile?` | `text, model, finish, usage\|null` | ~40 app (mọi app có AI) |
+| `llm.request` | `prompt`*, `system?`, `maxTokens?`, `profile?`, `thinking?` | `text, model, finish, usage\|null` | ~40 app (mọi app có AI) |
 | `agent.run` | `prompt`*, `system?`, `tools?[]`, `model?`, `space?`, `workspace?`, `timeoutSeconds?` | `text, durationMs, usage` | ai-chat, ai-office, discuss, rule-engine, search, video-flow, zeach |
 | `knowledge.save` | `text`*, `space?`, `tags?[]`, `source?` | `chunksAdded, entitiesAdded` | ai-chat, ai-office, crm, lakehouse, moltbook, rule-engine, search, tiktok-activity, youtube, zeach |
 | `knowledge.search` | `query`*, `space?`, `mode?`, `limit?` (1–30, mặc định 6) | `hits[{id,kind,name,summary,score}]` | (như trên) |
@@ -293,7 +293,14 @@ curl -s http://127.0.0.1:18788/api/space/apps/my-app/bridge \
 
 Điều phải biết (đúc từ các app thật):
 
-- **Không có `temperature`** — payload chỉ nhận system/prompt/maxTokens/profile.
+- **Không có `temperature`** — payload chỉ nhận system/prompt/maxTokens/profile/thinking.
+- `thinking: false` xin model trả lời **không qua bước suy nghĩ**. Dùng khi app cần một câu trả lời ngắn, có cấu trúc
+  (một object JSON). Chỉ model chạy trên máy này nhận được cờ này, tức là endpoint OpenAI-compatible trên loopback:
+  model local của SenClaw, model do Space App phục vụ, Ollama, LM Studio. Daemon gửi nó xuống thành
+  `chat_template_kwargs.enable_thinking`. Model cloud thì bỏ qua cờ: API của OpenAI trả 400 khi gặp tham số lạ, còn
+  nhánh Anthropic vốn không bật thinking. Không gửi cờ này thì model theo cài đặt chat của người dùng: Qwen3.5 local
+  bật thinking sẽ suy nghĩ hàng nghìn token và vượt hạn 120 s ở mỗi lời gọi. Daemon cũ lặng lẽ bỏ qua trường này.
+  Với model MLX, cần bản sen-mlx sau 0.1.1: bản 0.1.1 bỏ qua cả cờ này lẫn `maxTokens`.
 - `maxTokens` để rộng (nhiều app dùng tới 32000); `finish == "length"` phải xử lý như lỗi, đừng lặng lẽ nhận text cụt. Input quá to có thể bị tóm tắt ngầm — tự chia chunk trước.
 - `usage` là `null` khi provider không báo (một số model local) — lúc đó app tự ước lượng nếu cần.
 - **Daemon tự ghi usage** của call này vào jid `app:{id}` (hiện trên trang `/usage`) — **đừng** gọi `usage.report` thêm cho cùng call, sẽ đếm đôi.

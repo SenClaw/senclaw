@@ -53,7 +53,7 @@ fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
 /// be conservative in one specific direction: `http://127.0.0.1.evil.com/` is
 /// **not** loopback, and a prefix test would say it is. The host is isolated
 /// first (scheme, userinfo, port, path all stripped), then matched whole.
-fn is_loopback_endpoint(base_url: &str) -> bool {
+pub(crate) fn is_loopback_endpoint(base_url: &str) -> bool {
     let rest = base_url.split_once("://").map_or(base_url, |(_, r)| r);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     // `user:pass@host` — the last `@` wins, since userinfo may contain one.

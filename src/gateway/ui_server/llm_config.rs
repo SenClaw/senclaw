@@ -510,6 +510,16 @@ async fn dispatch_completion(
     })
 }
 
+/// What a caller may ask of one completion beyond the prompt and its cap.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct CompletionOptions {
+    /// `Some(false)` asks a reasoning model to answer without a thinking pass.
+    /// Only an OpenAI-compatible server on this machine is told
+    /// ([`openai_completion_body`]); elsewhere it is ignored, and the Anthropic
+    /// path never enables thinking to begin with.
+    pub thinking: Option<bool>,
+}
+
 /// `caller_app` is the Space App on whose behalf this runs, when there is one.
 /// It exists only for [`reject_self_routing`]; pass `None` from anywhere that is
 /// not an app's bridge call.
@@ -520,6 +530,60 @@ pub(crate) async fn chat_completion(
     user: &str,
     max_tokens: u32,
     caller_app: Option<&str>,
+) -> Result<ChatCompletionResult, String> {
+    chat_completion_with(
+        config_path,
+        profile,
+        system,
+        user,
+        max_tokens,
+        caller_app,
+        CompletionOptions::default(),
+    )
+    .await
+}
+
+/// The body of a one-shot OpenAI-compatible completion.
+///
+/// `chat_template_kwargs.enable_thinking` is the spelling sen-mlx, vLLM, SGLang
+/// and llama.cpp's server read, and it goes only to a **loopback** endpoint
+/// (a SenClaw local model, an app-served model, Ollama / LM Studio): OpenAI's
+/// own API answers an argument it does not know with a 400. Without it, a
+/// Space App asking a local Qwen3.5 for one JSON object got the user's chat
+/// setting — thinking on — and every call ran past the 120 s deadline below.
+fn openai_completion_body(
+    cfg: &LlmConfig,
+    system: &str,
+    user: &str,
+    cap: u32,
+    opts: CompletionOptions,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "model": cfg.model_name,
+        "max_tokens": cap,
+        "temperature": 0.2,
+        "stream": false,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+    });
+    if let Some(thinking) = opts.thinking {
+        if crate::zen_core::query_llm::is_loopback_endpoint(&cfg.base_url) {
+            body["chat_template_kwargs"] = serde_json::json!({ "enable_thinking": thinking });
+        }
+    }
+    body
+}
+
+pub(crate) async fn chat_completion_with(
+    config_path: &std::path::Path,
+    profile: Option<&str>,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    caller_app: Option<&str>,
+    opts: CompletionOptions,
 ) -> Result<ChatCompletionResult, String> {
     let started = std::time::Instant::now();
     let stored = load_llm_configs(config_path);
@@ -569,16 +633,7 @@ pub(crate) async fn chat_completion(
             .trim_end_matches('/')
             .trim_end_matches("/chat/completions");
         let url = format!("{base}/chat/completions");
-        let body = serde_json::json!({
-            "model": cfg.model_name,
-            "max_tokens": cap,
-            "temperature": 0.2,
-            "stream": false,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user },
-            ],
-        });
+        let body = openai_completion_body(cfg, system, user, cap, opts);
         let req = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", cfg.api_key));
@@ -863,6 +918,31 @@ async fn fetch_models(base_url: &str, api_key: &str, adapt: &str) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinking_off_reaches_only_a_server_on_this_machine() {
+        let off = CompletionOptions {
+            thinking: Some(false),
+        };
+        let mut local = cfg("local:mlx-qwen", "Qwen");
+        local.base_url = "http://127.0.0.1:18788/api/runtimes/models/mlx-qwen/v1".into();
+        let body = openai_completion_body(&local, "s", "u", 1500, off);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
+        assert_eq!(body["max_tokens"], 1500);
+
+        let cloud = cfg("c1", "Cloud");
+        let body = openai_completion_body(&cloud, "s", "u", 1500, off);
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "a cloud API 400s on an argument it does not know"
+        );
+
+        let body = openai_completion_body(&local, "s", "u", 1500, CompletionOptions::default());
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "no option, no change to what is sent"
+        );
+    }
 
     fn cfg(id: &str, label: &str) -> LlmConfig {
         LlmConfig {

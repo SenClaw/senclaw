@@ -2290,7 +2290,13 @@ pub(crate) async fn space_apps_bridge(
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty());
-            match super::llm_config::chat_completion(
+            // Optional: `false` asks a reasoning model on this machine to skip
+            // its thinking pass — an app that wants one short structured answer
+            // otherwise inherits the user's chat setting.
+            let opts = super::llm_config::CompletionOptions {
+                thinking: payload.get("thinking").and_then(|v| v.as_bool()),
+            };
+            match super::llm_config::chat_completion_with(
                 &s.config.paths.global_config_path,
                 profile,
                 system,
@@ -2298,6 +2304,7 @@ pub(crate) async fn space_apps_bridge(
                 max_tokens,
                 // The caller is this app: refuse a model it serves itself.
                 Some(id.as_str()),
+                opts,
             )
             .await
             {
