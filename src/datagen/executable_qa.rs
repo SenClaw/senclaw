@@ -258,7 +258,7 @@ pub async fn run(params: Params, llm: Arc<dyn Llm>, runner: Arc<dyn CodeRunner>,
              program. {lang}"
         ));
 
-        let reply = match call(llm.as_ref(), &ctx.cancel, GENERATE_SYSTEM, &user, 512 + n * 400).await {
+        let reply = match call(llm.as_ref(), &ctx.cancel, GENERATE_SYSTEM, &user, 512 + common::THINKING_ROOM + n * 400).await {
             Ok(r) => r,
             Err(CallError::Cancelled) => {
                 ctx.publish(&l);
@@ -275,7 +275,7 @@ pub async fn run(params: Params, llm: Arc<dyn Llm>, runner: Arc<dyn CodeRunner>,
         l.record_call(&reply);
         ctx.set_model(&reply.model);
         let Some(items) = parse_json::<Items>(&reply.text) else {
-            l.reject("unparseable_output");
+            l.reject(common::unreadable(&reply));
             l.end_round(0);
             ctx.publish(&l);
             continue;

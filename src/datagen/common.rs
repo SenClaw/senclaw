@@ -12,6 +12,22 @@ use super::verdict::Verdict;
 
 /// Default call budget is this many times the calls a perfect run needs.
 pub const BUDGET_FACTOR: u32 = 3;
+/// Output tokens added to every call's cap for a model that reasons before it
+/// answers. gemma-4-e4b on LM Studio spent 943–1016 of them on one doc_qa call
+/// before writing any JSON, so a cap sized for the JSON alone (1112) ended
+/// every reply mid-object and the whole run failed as "unparseable".
+pub const THINKING_ROOM: u32 = 1024;
+
+/// The reason a reply that would not parse is rejected under: `truncated`
+/// when the provider stopped at the cap, so the fix (a bigger budget, a model
+/// that thinks less) is not mistaken for a format problem.
+pub fn unreadable(reply: &super::llm::LlmReply) -> &'static str {
+    if reply.truncated {
+        "truncated"
+    } else {
+        "unparseable_output"
+    }
+}
 pub const DEFAULT_MAX_CALLS_CAP: u32 = 500;
 pub const MAX_LLM_CALLS: u32 = 2000;
 
@@ -98,6 +114,9 @@ pub async fn checked_call<T: DeserializeOwned>(
                 match parse_json::<T>(&reply.text) {
                     Some(v) if accept(&v) => return Ok(v),
                     Some(_) => Verdict::Error("the check returned an answer of the wrong shape".into()),
+                    None if reply.truncated => Verdict::Error(
+                        "the check's reply was cut off at its token cap — the model may be spending it thinking".into(),
+                    ),
                     None => Verdict::Error("the check's reply was not JSON".into()),
                 }
             }
@@ -121,6 +140,14 @@ mod tests {
         assert_eq!(budget(None, 1000, 2), DEFAULT_MAX_CALLS_CAP);
         assert_eq!(budget(Some(0), 5, 5), 1);
         assert_eq!(budget(Some(99_999), 5, 5), MAX_LLM_CALLS);
+    }
+
+    #[test]
+    fn a_reply_cut_at_the_cap_is_rejected_as_truncated() {
+        let mut reply = super::super::llm::LlmReply { text: "{\"items\": [".into(), ..Default::default() };
+        assert_eq!(unreadable(&reply), "unparseable_output");
+        reply.truncated = true;
+        assert_eq!(unreadable(&reply), "truncated");
     }
 
     #[test]

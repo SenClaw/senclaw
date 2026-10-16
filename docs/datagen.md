@@ -368,6 +368,19 @@ Ví dụ sinh bộ eval cho router:
 }
 ```
 
+## Model có bước suy nghĩ
+
+Model local như `gemma-4-e4b` trên LM Studio suy nghĩ khoảng 1000 token trước khi viết JSON. Vì vậy trần token của mỗi
+lần gọi có thêm `THINKING_ROOM` (1024).
+
+Một trả lời bị nhà cung cấp cắt ở trần (`finish_reason: "length"`) và không đọc được thì bị loại với lý do `truncated`,
+không phải `unparseable_output`. Hai lý do này cần cách sửa khác nhau:
+- `truncated`: tăng trần, hoặc dùng model ít suy nghĩ hơn;
+- `unparseable_output`: model không viết đúng định dạng.
+
+Đo ngày 16/10/2026: `doc_qa` trên `docs/zen-kits.md` lên từ 0/6 (5 `unparseable_output`) thành 6/6 sau khi thêm phần
+này.
+
 ## Giới hạn
 
 - Tối đa **2 job chạy cùng lúc**.

@@ -232,7 +232,7 @@ pub async fn run(params: Params, llm: Arc<dyn Llm>, ctx: &mut JobCtx) -> Result<
             // The judge rates the reasoning; whether the final answer is right
             // is decided above, in code.
             let judge_user = format!("Problem:\n{}\n\nSolution:\n{trace}", problem.problem);
-            let scores = match checked_call(llm.as_ref(), ctx, &mut l, JUDGE_SYSTEM, &judge_user, 512, |s: &Scores| {
+            let scores = match checked_call(llm.as_ref(), ctx, &mut l, JUDGE_SYSTEM, &judge_user, 512 + common::THINKING_ROOM, |s: &Scores| {
                 [s.correctness, s.clarity, s.completeness].iter().all(|v| (0.0..=1.0).contains(v))
             })
             .await

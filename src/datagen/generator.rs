@@ -126,7 +126,7 @@ mod tests {
     use super::*;
 
     fn reply() -> LlmReply {
-        LlmReply { text: String::new(), model: "m".into(), input_tokens: 10, output_tokens: 5 }
+        LlmReply { text: String::new(), model: "m".into(), input_tokens: 10, output_tokens: 5, truncated: false }
     }
 
     #[test]

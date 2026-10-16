@@ -26,6 +26,9 @@ pub struct LlmReply {
     pub model: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// The provider stopped at the token cap (`finish_reason: "length"`): an
+    /// unreadable reply is then a budget problem, not the model's format.
+    pub truncated: bool,
 }
 
 #[async_trait]
@@ -54,7 +57,7 @@ impl Llm for DaemonLlm {
             .as_ref()
             .map(|u| (u.prompt_tokens.or(u.input_tokens).unwrap_or(0), u.output()))
             .unwrap_or((0, 0));
-        Ok(LlmReply { text: r.text, model: r.model, input_tokens, output_tokens })
+        Ok(LlmReply { truncated: r.finish == "length", text: r.text, model: r.model, input_tokens, output_tokens })
     }
 }
 
@@ -128,7 +131,7 @@ pub mod fake {
         async fn complete(&self, system: &str, user: &str, _max: u32) -> Result<LlmReply, String> {
             self.prompts.lock().unwrap().push((system.to_string(), user.to_string()));
             let next = self.answers.lock().unwrap().pop_front().unwrap_or_else(|| Err("script exhausted".into()));
-            next.map(|text| LlmReply { text, model: "scripted".into(), input_tokens: 3, output_tokens: 2 })
+            next.map(|text| LlmReply { text, model: "scripted".into(), input_tokens: 3, output_tokens: 2, truncated: false })
         }
     }
 }

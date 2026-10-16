@@ -1336,6 +1336,9 @@ Rules for Claude:
   and reads only `.md`/`.markdown`/`.txt` — a named file of another type is refused, not read.
 - **A run that accepts nothing is `failed`, with the reasons** — a dataset with zero records is not a success, and
   "the model kept failing" must read differently from "every candidate was too similar".
+- **Every call's token cap includes `common::THINKING_ROOM`**, and a reply cut at the cap is rejected as `truncated`
+  (`LlmReply::truncated`, from `finish_reason: "length"`), never `unparseable_output`. A cap sized for the JSON alone
+  failed every `doc_qa` reply on gemma-4-e4b, which thinks ~1000 tokens first.
 - **Only MIT / Apache / CC BY or SenClaw-written data is compiled into the binary** (`assets/datasets/`, catalog
   entries with `source.bundled`). Share-alike, non-commercial, research-only and evaluation-only entries download on
   install, need `acceptLicense: true`, and carry a `notice` — a test enforces all three. Record the **source's**
