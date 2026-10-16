@@ -102,7 +102,11 @@ impl From<SeedInput> for Seed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Params {
+    #[serde(default)]
     pub seeds: Vec<Seed>,
+    /// Seeds read from a dataset on disk instead of `seeds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeds_from: Option<super::from_dataset::DatasetRef>,
     /// Optional description per label, shown to the generator and the
     /// classifier.
     #[serde(default)]

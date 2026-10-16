@@ -25,7 +25,9 @@ use super::generator::AcceptLoop;
 use super::llm::Llm;
 use super::store::{self, DatasetWriter};
 use super::executable_qa::CodeRunner;
-use super::{doc_qa, executable_qa, expand_seeds, export_logs, reasoning_traces};
+use super::from_dataset::{self, DatasetRef};
+use super::hf::{HfClient, PublicHf};
+use super::{doc_qa, executable_qa, expand_seeds, export_logs, import, reasoning_traces};
 
 /// Jobs allowed to run at once. Each one is a stream of LLM calls on the
 /// user's account; a third is almost always a mistake.
@@ -41,6 +43,7 @@ pub enum Pipeline {
     DocQa(doc_qa::Params),
     ReasoningTraces(reasoning_traces::Params),
     ExecutableQa(executable_qa::Params),
+    Import(import::Params),
 }
 
 impl Pipeline {
@@ -51,7 +54,54 @@ impl Pipeline {
             Pipeline::DocQa(_) => "doc_qa",
             Pipeline::ReasoningTraces(_) => "reasoning_traces",
             Pipeline::ExecutableQa(_) => "executable_qa",
+            Pipeline::Import(_) => "import",
         }
+    }
+
+    /// The dataset name when the caller gave none.
+    fn default_name(&self) -> String {
+        match self {
+            Pipeline::Import(p) => p.default_name(),
+            _ => format!("{}-{}", self.name(), chrono::Local::now().format("%Y%m%d-%H%M")),
+        }
+    }
+
+    /// Replace `seedsFrom` / `problemsFrom` with the records they name, so
+    /// the pipeline and the manifest see ordinary seeds or problems.
+    fn resolve_inputs(&mut self, root: &Path, owner: Option<&str>, writing: impl Fn(&str) -> bool) -> Result<(), String> {
+        fn both(field: &str) -> String {
+            format!("give {field} or {field}From, not both")
+        }
+        let pick = |r: &DatasetRef, cap: usize| from_dataset::pick(root, owner, r, cap, &writing);
+        match self {
+            Pipeline::ExpandSeeds(p) => {
+                if let Some(r) = &p.seeds_from {
+                    if !p.seeds.is_empty() {
+                        return Err(both("seeds"));
+                    }
+                    p.seeds = from_dataset::convert(pick(r, expand_seeds::MAX_SEEDS)?, &r.dataset, "a text field")?;
+                }
+            }
+            Pipeline::ExecutableQa(p) => {
+                if let Some(r) = &p.seeds_from {
+                    if !p.seeds.is_empty() {
+                        return Err(both("seeds"));
+                    }
+                    p.seeds = from_dataset::convert(pick(r, executable_qa::MAX_SEEDS)?, &r.dataset, "a question or text field")?;
+                }
+            }
+            Pipeline::ReasoningTraces(p) => {
+                if let Some(r) = &p.problems_from {
+                    if !p.problems.is_empty() {
+                        return Err(both("problems"));
+                    }
+                    p.problems =
+                        from_dataset::convert(pick(r, reasoning_traces::MAX_PROBLEMS)?, &r.dataset, "a problem or question field")?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The LLM profile the pipeline asked for, when it calls a model at all.
@@ -61,14 +111,14 @@ impl Pipeline {
             Pipeline::DocQa(p) => p.profile.as_deref(),
             Pipeline::ReasoningTraces(p) => p.profile.as_deref(),
             Pipeline::ExecutableQa(p) => p.profile.as_deref(),
-            Pipeline::ExportLogs(_) => None,
+            Pipeline::ExportLogs(_) | Pipeline::Import(_) => None,
         }
         .map(str::trim)
         .filter(|v| !v.is_empty())
     }
 
     pub fn uses_llm(&self) -> bool {
-        !matches!(self, Pipeline::ExportLogs(_))
+        !matches!(self, Pipeline::ExportLogs(_) | Pipeline::Import(_))
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -78,6 +128,7 @@ impl Pipeline {
             Pipeline::DocQa(p) => p.validate(),
             Pipeline::ReasoningTraces(p) => p.validate(),
             Pipeline::ExecutableQa(p) => p.validate(),
+            Pipeline::Import(p) => p.validate(),
         }
     }
 }
@@ -133,6 +184,10 @@ pub struct JobStatus {
     pub dir: String,
     pub started_at: u64,
     pub finished_at: Option<u64>,
+    /// `import` only: where the records came from, under what license, and
+    /// the sha256 of what was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Value>,
 }
 
 /// Why a job did not start; each maps to its own HTTP status.
@@ -169,6 +224,8 @@ pub struct Deps {
     pub llm: Option<Arc<dyn Llm>>,
     /// Where `executable_qa` runs programs.
     pub runner: Option<Arc<dyn CodeRunner>>,
+    /// Where `import` reads Hugging Face datasets; `None` = the public Hub.
+    pub hf: Option<Arc<dyn HfClient>>,
 }
 
 /// The handle a running pipeline reports through.
@@ -216,6 +273,10 @@ impl JobCtx {
         self.status.lock().unwrap().note = Some(note.to_string());
     }
 
+    pub fn set_provenance(&self, provenance: Value) {
+        self.status.lock().unwrap().provenance = Some(provenance);
+    }
+
     pub fn snapshot(&self) -> JobStatus {
         self.status.lock().unwrap().clone()
     }
@@ -252,7 +313,11 @@ fn visible(owner_filter: Option<&str>, owner: Option<&str>) -> bool {
 
 impl Registry {
     /// Validate, create the dataset folder, and start the job.
-    pub fn start(&self, spec: JobSpec, deps: Deps) -> Result<JobStatus, StartError> {
+    pub fn start(&self, mut spec: JobSpec, deps: Deps) -> Result<JobStatus, StartError> {
+        let owner = spec.owner.clone().filter(|o| !o.trim().is_empty());
+        spec.pipeline
+            .resolve_inputs(&deps.datasets_root, owner.as_deref(), |job| self.is_running(job))
+            .map_err(StartError::Invalid)?;
         spec.pipeline.validate().map_err(StartError::Invalid)?;
         let llm = match (spec.pipeline.uses_llm(), deps.llm) {
             (false, _) => None,
@@ -264,12 +329,7 @@ impl Registry {
             return Err(StartError::Invalid("no code sandbox is available for executable_qa".into()));
         }
         let job_id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
-        let name = spec
-            .name
-            .clone()
-            .filter(|n| !n.trim().is_empty())
-            .unwrap_or_else(|| format!("{}-{}", spec.pipeline.name(), chrono::Local::now().format("%Y%m%d-%H%M")));
-        let owner = spec.owner.clone().filter(|o| !o.trim().is_empty());
+        let name = spec.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| spec.pipeline.default_name());
         // The cap check and the insert share one lock, so two requests at the
         // same moment cannot both slip under it.
         let mut jobs = self.jobs.lock().unwrap();
@@ -294,6 +354,7 @@ impl Registry {
         let snapshot = status.lock().unwrap().clone();
         let mut ctx = JobCtx { job_id, cancel, status: status.clone(), writer };
         let trajectories_root = deps.trajectories_root;
+        let hf: Arc<dyn HfClient> = deps.hf.unwrap_or_else(|| Arc::new(PublicHf::new()));
         // The pipeline runs in its own task so a panic in it still ends the
         // job as `failed` — otherwise it would hold a running slot until the
         // daemon restarts.
@@ -301,6 +362,7 @@ impl Registry {
             let no_model = || Err::<Outcome, String>("no model is configured for this job".into());
             match (spec.pipeline, llm) {
                 (Pipeline::ExportLogs(p), _) => export_logs::run(p, &trajectories_root, &mut ctx).await,
+                (Pipeline::Import(p), _) => import::run(p, hf, &mut ctx).await,
                 (_, None) => no_model(),
                 (Pipeline::ExpandSeeds(p), Some(llm)) => expand_seeds::run(p, llm, &mut ctx).await,
                 (Pipeline::DocQa(p), Some(llm)) => doc_qa::run(p, llm, &mut ctx).await,
@@ -339,6 +401,10 @@ impl Registry {
         Ok(snapshot)
     }
 
+    fn is_running(&self, job_id: &str) -> bool {
+        self.status(job_id, None).is_some_and(|s| s.state == JobState::Running)
+    }
+
     pub fn status(&self, job_id: &str, owner: Option<&str>) -> Option<JobStatus> {
         let jobs = self.jobs.lock().unwrap();
         let s = jobs.get(job_id)?.status.lock().unwrap().clone();
@@ -371,8 +437,9 @@ impl Registry {
         CancelResult::Cancelled
     }
 
-    /// Dataset manifests under `root`, with a `running` one this process is
-    /// not running shown as `interrupted`.
+    /// Dataset manifests under `root` the caller may read (its own, and the
+    /// catalog imports every chat may use), with a `running` one this process
+    /// is not running shown as `interrupted`.
     pub fn datasets(&self, root: &Path, owner: Option<&str>) -> Vec<Value> {
         let live: Vec<String> = self
             .list(None)
@@ -382,7 +449,7 @@ impl Registry {
             .collect();
         store::list(root)
             .into_iter()
-            .filter(|m| visible(owner, m.get("owner").and_then(Value::as_str)))
+            .filter(|m| from_dataset::readable_by(m, owner))
             .map(|mut m| {
                 let running = m.get("state").and_then(Value::as_str) == Some("running");
                 let id = m.get("jobId").and_then(Value::as_str).unwrap_or_default();
@@ -416,6 +483,7 @@ fn new_status(job_id: String, name: String, pipeline: &str, owner: Option<String
         dir: dir.to_string_lossy().into_owned(),
         started_at: now_ms(),
         finished_at: None,
+        provenance: None,
     }
 }
 
@@ -473,7 +541,7 @@ mod tests {
     }
 
     fn deps(root: &Path, llm: Option<Arc<dyn Llm>>) -> Deps {
-        Deps { datasets_root: root.join("datasets"), trajectories_root: root.join("trajectories"), llm, runner: None }
+        Deps { datasets_root: root.join("datasets"), trajectories_root: root.join("trajectories"), llm, runner: None, hf: None }
     }
 
     #[test]
@@ -617,6 +685,53 @@ mod tests {
         assert!(done.error.unwrap().contains("stopped unexpectedly"));
         let m = reg.datasets(&tmp.path().join("datasets"), None);
         assert_eq!(m[0]["state"], "failed");
+    }
+
+    #[tokio::test]
+    async fn an_import_is_named_after_its_source_and_its_provenance_reaches_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = Registry::default();
+        let st = reg.start(spec(json!({"pipeline": "import", "source": {"catalog": "senclaw-flows-vi"}})), deps(tmp.path(), None)).unwrap();
+        assert_eq!(st.name, "senclaw-flows-vi");
+        let done = wait(&reg, &st.job_id).await;
+        assert_eq!((done.state, done.accepted), (JobState::Done, 144));
+        let root = tmp.path().join("datasets");
+        let m = &reg.datasets(&root, Some("web:any-chat"))[0];
+        assert_eq!(m["provenance"]["source"]["catalog"], "senclaw-flows-vi", "catalog imports are readable by every chat");
+        assert_eq!(m["provenance"]["license"], "MIT");
+        assert_eq!(crate::datagen::catalog::listing(&reg.datasets(&root, None))[0]["installed"], true);
+    }
+
+    #[tokio::test]
+    async fn seeds_from_a_dataset_become_ordinary_seeds_in_the_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = Registry::default();
+        let imp = reg.start(spec(json!({"pipeline": "import", "source": {"catalog": "senclaw-flows-vi"}})), deps(tmp.path(), None)).unwrap();
+        wait(&reg, &imp.job_id).await;
+
+        let llm: Arc<dyn Llm> = Arc::new(Never);
+        let st = reg
+            .start(
+                spec(json!({"pipeline": "expand_seeds", "seedsFrom": {"dataset": "senclaw-flows-vi", "perLabel": 2}, "target": 5, "owner": "web:a"})),
+                deps(tmp.path(), Some(llm.clone())),
+            )
+            .unwrap();
+        let root = tmp.path().join("datasets");
+        let dir = store::dataset_dir(&root, &st.name).unwrap();
+        let params = &store::read_manifest(&dir).unwrap()["params"];
+        assert_eq!(params["seeds"].as_array().unwrap().len(), 24, "two per label, twelve labels");
+        assert_eq!(params["seedsFrom"]["dataset"], "senclaw-flows-vi");
+        reg.cancel(&st.job_id, None);
+        wait(&reg, &st.job_id).await;
+
+        let both = reg
+            .start(spec(json!({"pipeline": "expand_seeds", "seeds": ["x y z"], "seedsFrom": {"dataset": "senclaw-flows-vi"}})), deps(tmp.path(), Some(llm.clone())))
+            .unwrap_err();
+        assert!(both.message().contains("not both"));
+        let wrong = reg
+            .start(spec(json!({"pipeline": "reasoning_traces", "problemsFrom": {"dataset": "senclaw-flows-vi"}})), deps(tmp.path(), Some(llm)))
+            .unwrap_err();
+        assert!(wrong.message().contains("no records with a problem"), "{}", wrong.message());
     }
 
     #[test]

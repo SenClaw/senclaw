@@ -1,0 +1,130 @@
+[
+  {
+    "id": "senclaw-flows-vi",
+    "title": "SenClaw flows (vi)",
+    "description": "144 yêu cầu tiếng Việt, 12 câu cho mỗi skill có sẵn (web-research, agent-browser, calendar, schedule, note, space, wiki, pattern, ocr, code, workflow) và nhãn none cho chuyện phiếm. Làm seed hoặc bộ đo cho skill router.",
+    "kind": "labeled_text",
+    "lang": "vi",
+    "rows": 144,
+    "license": "MIT",
+    "attribution": "SenClaw",
+    "source": { "bundled": "senclaw-flows-vi.jsonl" },
+    "mapping": { "text": "text", "label": "label" },
+    "flags": {},
+    "uses": ["seeds", "eval"]
+  },
+  {
+    "id": "massive-vi",
+    "title": "MASSIVE · tiếng Việt",
+    "description": "Tập test tiếng Việt của MASSIVE: 2.974 câu do người bản ngữ viết, 59 intent. Nhãn được đổi sang skill SenClaw theo bảng massive-senclaw; intent không có câu trả lời rõ trong SenClaw bị bỏ.",
+    "kind": "labeled_text",
+    "lang": "vi",
+    "rows": 2974,
+    "license": "CC-BY-4.0",
+    "attribution": "MASSIVE, Amazon (FitzGerald et al., 2022), mirror mteb/amazon_massive_intent",
+    "homepage": "https://github.com/alexa/massive",
+    "source": {
+      "hf": {
+        "dataset": "mteb/amazon_massive_intent",
+        "config": "vi",
+        "split": "test",
+        "revision": "940fd47a81eaa7f2cc7b129674d945d618ac38c2"
+      }
+    },
+    "mapping": { "id": "id", "text": "text", "label": "label" },
+    "labelMap": "massive-senclaw",
+    "flags": { "noTraining": true },
+    "notice": "Bản mirror ghi apache-2.0, license gốc của Amazon là CC BY 4.0. Tập test của MASSIVE chỉ để đo, không dùng để huấn luyện.",
+    "uses": ["eval", "seeds"]
+  },
+  {
+    "id": "xquad-vi",
+    "title": "XQuAD · tiếng Việt",
+    "description": "1.190 câu hỏi tiếng Việt kèm đoạn văn chứa câu trả lời. Đo tìm kiếm: đoạn văn làm kho, câu hỏi làm truy vấn.",
+    "kind": "qa_context",
+    "lang": "vi",
+    "rows": 1190,
+    "license": "CC-BY-SA-4.0",
+    "attribution": "XQuAD, Google (Artetxe et al., 2020)",
+    "homepage": "https://github.com/google-deepmind/xquad",
+    "source": {
+      "hf": {
+        "dataset": "google/xquad",
+        "config": "xquad.vi",
+        "split": "validation",
+        "revision": "51adfef1c1287aab1d2d91b5bead9bcfb9c68583"
+      }
+    },
+    "mapping": { "id": "id", "question": "question", "answer": "answers.text.0", "context": "context" },
+    "flags": { "shareAlike": true },
+    "notice": "CC BY-SA: dùng lại phải ghi nguồn và giữ cùng license. SenClaw không nhúng sẵn, chỉ tải về khi bạn bấm Cài.",
+    "uses": ["eval", "corpus", "seeds"]
+  },
+  {
+    "id": "gsm8k",
+    "title": "GSM8K",
+    "description": "1.319 bài toán tiếng Anh cấp tiểu học kèm đáp án số, làm đầu vào cho reasoning_traces và executable_qa.",
+    "kind": "problem_answer",
+    "lang": "en",
+    "rows": 1319,
+    "license": "MIT",
+    "attribution": "GSM8K, OpenAI (Cobbe et al., 2021)",
+    "homepage": "https://github.com/openai/grade-school-math",
+    "source": {
+      "hf": {
+        "dataset": "openai/gsm8k",
+        "config": "main",
+        "split": "test",
+        "revision": "740312add88f781978c0658806c59bc2815b9866"
+      }
+    },
+    "mapping": { "problem": "question", "answer": { "from": "answer", "after": "####" } },
+    "flags": {},
+    "uses": ["problems", "seeds"]
+  },
+  {
+    "id": "self-instruct-seed",
+    "title": "Self-Instruct seed",
+    "description": "175 yêu cầu tiếng Anh đủ thể loại do người viết, bộ seed gốc của Self-Instruct. Dùng cho expand_seeds, nhất là mode evolve.",
+    "kind": "labeled_text",
+    "lang": "en",
+    "rows": 175,
+    "license": "Apache-2.0",
+    "attribution": "Self-Instruct (Wang et al., 2022), HuggingFaceH4/self-instruct-seed",
+    "homepage": "https://github.com/yizhongw/self-instruct",
+    "source": {
+      "hf": {
+        "dataset": "HuggingFaceH4/self-instruct-seed",
+        "config": "default",
+        "split": "train",
+        "revision": "853eb0af253a307ead4db0a80e03d86d3ec436e2"
+      }
+    },
+    "mapping": { "id": "id", "text": "instruction" },
+    "flags": {},
+    "uses": ["seeds"]
+  },
+  {
+    "id": "dolly-15k",
+    "title": "Dolly 15k",
+    "description": "15.011 yêu cầu tiếng Anh do nhân viên Databricks viết, chia 8 loại việc (brainstorming, open_qa, closed_qa, summarization…). Nhãn là loại việc.",
+    "kind": "labeled_text",
+    "lang": "en",
+    "rows": 15011,
+    "license": "CC-BY-SA-3.0",
+    "attribution": "databricks-dolly-15k, Databricks (2023)",
+    "homepage": "https://huggingface.co/datasets/databricks/databricks-dolly-15k",
+    "source": {
+      "hf": {
+        "dataset": "databricks/databricks-dolly-15k",
+        "config": "default",
+        "split": "train",
+        "revision": "bdd27f4d94b9c1f951818a7da7fd7aeea5dbff1a"
+      }
+    },
+    "mapping": { "text": "instruction", "label": "category" },
+    "flags": { "shareAlike": true },
+    "notice": "CC BY-SA: dùng lại phải ghi nguồn và giữ cùng license. Dùng thương mại được.",
+    "uses": ["seeds"]
+  }
+]

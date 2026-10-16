@@ -1,5 +1,6 @@
-//! `/api/datagen/*` — start, watch and cancel dataset-generation jobs, and
-//! list the datasets on disk. The jobs themselves are [`crate::datagen`].
+//! `/api/datagen/*` — start, watch and cancel dataset-generation jobs, list
+//! the datasets on disk, and the catalog and preview behind importing one.
+//! The jobs themselves are [`crate::datagen`].
 //!
 //! Every read and the cancel take an optional `?owner=<chat jid>`: the
 //! `senclaw-datagen` MCP server always sends its chat, so a chat's tools reach
@@ -15,9 +16,11 @@ use serde_json::{json, Value};
 
 use super::core::{AppError, UiState};
 use crate::datagen::executable_qa::{CodeRunner, SandboxRunner};
+use crate::datagen::hf::PublicHf;
+use crate::datagen::import::{self, PreviewRequest};
 use crate::datagen::jobs::{CancelResult, JobState, StartError};
 use crate::datagen::llm::{DaemonLlm, Llm};
-use crate::datagen::{registry, store, Deps, JobSpec, Pipeline};
+use crate::datagen::{catalog, registry, store, Deps, JobSpec, Pipeline};
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct OwnerQuery {
@@ -53,6 +56,7 @@ pub(crate) async fn datagen_start(
         trajectories_root: crate::trajectory::root_dir(),
         llm,
         runner,
+        hf: None,
     };
     let status = registry().start(spec, deps).map_err(|e| {
         let code = match e {
@@ -115,6 +119,31 @@ pub(crate) async fn datagen_datasets(State(_s): State<Arc<UiState>>, Query(q): Q
     .await
     .unwrap_or_default();
     Json(json!({ "root": root.to_string_lossy(), "datasets": datasets }))
+}
+
+/// GET /api/datagen/catalog — datasets people wrote, ready to import with
+/// `POST /api/datagen/jobs {"pipeline": "import", "source": {"catalog": id}}`,
+/// each marked installed when a finished import of it exists.
+pub(crate) async fn datagen_catalog(State(_s): State<Arc<UiState>>, Query(q): Query<OwnerQuery>) -> Json<Value> {
+    let owner = q.owner().map(str::to_string);
+    let datasets = tokio::task::spawn_blocking(move || registry().datasets(&store::default_root(), owner.as_deref()))
+        .await
+        .unwrap_or_default();
+    Json(json!({ "entries": catalog::listing(&datasets) }))
+}
+
+/// POST /api/datagen/import/preview — body `{source, kind?, mapping?,
+/// labelMap?}`. Reads the first rows and writes nothing: columns, rows, a
+/// guessed kind and mapping, and those rows as records (or why each would be
+/// dropped).
+pub(crate) async fn datagen_import_preview(
+    State(_s): State<Arc<UiState>>,
+    Json(req): Json<PreviewRequest>,
+) -> Result<Json<Value>, AppError> {
+    import::preview(req, &PublicHf::new())
+        .await
+        .map(Json)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))
 }
 
 #[derive(Debug, Deserialize)]

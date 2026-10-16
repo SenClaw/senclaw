@@ -11,6 +11,10 @@
 //! `watch_stop` follows. `export_logs` from a chat exports that chat only; a
 //! group chat must not be able to dump the owner's other conversations.
 //!
+//! `import` with `source: {"file": "<path>"}` reads that file here and sends
+//! its text inline — the daemon never opens a chat's path itself — and
+//! refuses anything inside SenClaw's own folder, as `doc_qa` does.
+//!
 //! A relative `seeds_file` is resolved against the chat's working folder
 //! (the workspace state file), **not** this process's cwd: MCP children are
 //! spawned without one, so they inherit the daemon's — on a desktop install
@@ -29,6 +33,8 @@ use crate::mcp::workspace_server::WorkspaceServer;
 const CALL_TIMEOUT_SECS: u64 = 60;
 /// Largest seeds file read; a seed set is examples, not a corpus.
 const MAX_SEEDS_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// Largest file `import` sends inline; the daemon's request cap is 8 MB.
+const MAX_IMPORT_FILE_BYTES: u64 = 7 * 1024 * 1024;
 
 #[derive(Debug, Clone, Default, serde::Deserialize, schemars::JsonSchema)]
 struct DatagenStartParams {
@@ -36,8 +42,39 @@ struct DatagenStartParams {
     /// labelled), "doc_qa" (multi-hop Q&A grounded in documents),
     /// "reasoning_traces" (checked step-by-step solutions to problems),
     /// "executable_qa" (computable problems labelled by running their program
-    /// in the sandbox) or "export_logs" (this chat's recorded turns).
+    /// in the sandbox), "export_logs" (this chat's recorded turns) or
+    /// "import" (an existing dataset written by people).
     pipeline: String,
+    /// import: {"catalog": id} (ids: senclaw-flows-vi, massive-vi, xquad-vi,
+    /// gsm8k, self-instruct-seed, dolly-15k), {"hf": {"dataset", "config"?,
+    /// "split"?}}, {"url": "https://…"} or {"file": "<.jsonl/.json/.csv/.tsv path>"}.
+    #[serde(default)]
+    source: Option<Value>,
+    /// import (not catalog): "labeled_text", "qa_context", "problem_answer" or "chat".
+    #[serde(default)]
+    kind: Option<String>,
+    /// import (not catalog): field → column, e.g. {"text": "utterance", "label": "intent"}. Default: guessed.
+    #[serde(default)]
+    mapping: Option<Value>,
+    /// import (not catalog): source label → label, labels left out are dropped.
+    #[serde(default)]
+    label_map: Option<Value>,
+    /// import (not catalog): the dataset's license, or "unknown" / "private".
+    #[serde(default)]
+    license: Option<String>,
+    /// import: true only after the user agreed to a catalog entry's terms
+    /// (share-alike, evaluation-only) — the refusal says which.
+    #[serde(default)]
+    accept_license: Option<bool>,
+    /// expand_seeds / executable_qa: take seeds from this dataset (its name in datagen_status) instead of `seeds`.
+    #[serde(default)]
+    seeds_from: Option<String>,
+    /// reasoning_traces: take problems from this dataset instead of `problems`.
+    #[serde(default)]
+    problems_from: Option<String>,
+    /// With seeds_from / problems_from: at most this many records per label.
+    #[serde(default)]
+    per_label: Option<u32>,
     /// Dataset folder name. Default: pipeline + date.
     #[serde(default)]
     name: Option<String>,
@@ -113,7 +150,7 @@ struct DatagenStartParams {
     /// export_logs: "sharegpt" (default), "alpaca" or "messages".
     #[serde(default)]
     format: Option<String>,
-    /// export_logs: most records to write.
+    /// export_logs / import: most records to write.
     #[serde(default)]
     max_records: Option<u32>,
 }
@@ -218,7 +255,7 @@ impl McpDatagenServer {
 #[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpDatagenServer {
     #[rmcp::tool(
-        description = "Start a background job that builds a dataset (JSONL + manifest under ~/senclaw/datasets). Pipelines: expand_seeds (example requests → many new varied ones, optionally labelled), doc_qa (documents → multi-hop Q&A grounded in them), reasoning_traces (problems → judged step-by-step solutions), executable_qa (example problems → new ones labelled by running their Python in the sandbox), export_logs (this chat's recorded turns → sharegpt/alpaca/messages, no LLM). Generating pipelines cost LLM calls, capped by max_llm_calls. Returns a job id at once; check it with datagen_status, never by waiting in this turn."
+        description = "Start a background job that builds a dataset (JSONL + manifest under ~/senclaw/datasets). Pipelines: expand_seeds (example requests → many new varied ones, optionally labelled), doc_qa (documents → multi-hop Q&A grounded in them), reasoning_traces (problems → judged step-by-step solutions), executable_qa (example problems → new ones labelled by running their Python in the sandbox), export_logs (this chat's recorded turns → sharegpt/alpaca/messages, no LLM), import (a dataset people wrote — catalog entry, Hugging Face, URL or file — no LLM). seeds_from / problems_from feed a generating pipeline from a dataset already imported. Generating pipelines cost LLM calls, capped by max_llm_calls. Returns a job id at once; check it with datagen_status, never by waiting in this turn."
     )]
     async fn datagen_start(
         &self,
@@ -234,7 +271,7 @@ impl McpDatagenServer {
     }
 
     #[rmcp::tool(
-        description = "Progress of a datagen job started from this chat (accepted / target, LLM calls, why candidates were rejected, the dataset folder). Without job_id: this chat's recent jobs and saved datasets."
+        description = "Progress of a datagen job started from this chat (accepted / target, LLM calls, why candidates were rejected, the dataset folder). Without job_id: this chat's recent jobs, its datasets and the catalog imports, and the dataset catalog."
     )]
     async fn datagen_status(
         &self,
@@ -256,10 +293,16 @@ impl McpDatagenServer {
                 if datasets.is_error {
                     return datasets.content;
                 }
+                let catalog = self.bridge().send(reqwest::Method::GET, "/catalog", None).await;
                 let field = |r: &ToolResult, k: &str| {
                     serde_json::from_str::<Value>(&r.content).ok().and_then(|v| v.get(k).cloned()).unwrap_or(Value::Null)
                 };
-                json!({ "jobs": field(&jobs, "jobs"), "datasets": brief(field(&datasets, "datasets")) }).to_string()
+                json!({
+                    "jobs": field(&jobs, "jobs"),
+                    "datasets": brief(field(&datasets, "datasets")),
+                    "catalog": brief_catalog(field(&catalog, "entries")),
+                })
+                .to_string()
             }
         }
     }
@@ -300,6 +343,44 @@ fn brief(datasets: Value) -> Value {
         ),
         other => other,
     }
+}
+
+/// Catalog entries as a chat needs them: what each is and whether it is in.
+fn brief_catalog(entries: Value) -> Value {
+    let keep = ["id", "title", "kind", "lang", "rows", "license", "needsConsent", "installed", "dataset", "uses"];
+    match entries {
+        Value::Array(list) => Value::Array(
+            list.into_iter()
+                .map(|e| Value::Object(keep.iter().filter_map(|k| e.get(*k).map(|v| (k.to_string(), v.clone()))).collect()))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// `import`'s source with a `{"file": path}` read into `{"file": {name, content}}`.
+fn import_source(source: Value, working_dir: Option<&std::path::Path>) -> Result<Value, String> {
+    let Some(path) = source.get("file").and_then(Value::as_str) else { return Ok(source) };
+    let p = resolve(path, working_dir)?;
+    let real = p.canonicalize().map_err(|e| format!("cannot read {}: {e}", p.display()))?;
+    // The daemon's own folder holds API keys, tokens and every chat.
+    if let Ok(home) = crate::util::paths::senclaw_home().canonicalize() {
+        if real.starts_with(&home) {
+            return Err(format!("{} is inside SenClaw's own data folder, which is never imported", p.display()));
+        }
+    }
+    let len = std::fs::metadata(&real).map_err(|e| format!("cannot read {}: {e}", p.display()))?.len();
+    if len > MAX_IMPORT_FILE_BYTES {
+        return Err(format!(
+            "{} is larger than {} MB — import it from a URL instead",
+            p.display(),
+            MAX_IMPORT_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    let bytes = std::fs::read(&real).map_err(|e| format!("cannot read {}: {e}", p.display()))?;
+    let content = crate::datagen::tabular::utf8(bytes)?;
+    let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "import".into());
+    Ok(json!({ "file": { "name": name, "content": content } }))
 }
 
 /// The REST body for `datagen_start`: the tool's snake_case fields renamed
@@ -363,6 +444,22 @@ fn build_start_body(p: DatagenStartParams, chat_jid: Option<&str>, working_dir: 
     }
     put("format", p.format.map(Value::from));
     put("maxRecords", p.max_records.map(Value::from));
+    let source = p.source.map(|s| import_source(s, working_dir)).transpose()?;
+    put("source", source);
+    put("kind", p.kind.map(Value::from));
+    put("mapping", p.mapping);
+    put("labelMap", p.label_map);
+    put("license", p.license.map(Value::from));
+    put("acceptLicense", p.accept_license.map(Value::from));
+    let from = |dataset: String| {
+        let mut r = json!({ "dataset": dataset });
+        if let Some(n) = p.per_label {
+            r["perLabel"] = json!(n);
+        }
+        r
+    };
+    put("seedsFrom", p.seeds_from.map(from));
+    put("problemsFrom", p.problems_from.map(from));
     Ok(Value::Object(b))
 }
 
@@ -494,6 +591,47 @@ mod tests {
         assert_eq!(b["paths"], json!([tmp.path().join("notes").to_string_lossy(), "/abs/doc.md"]));
         assert_eq!(b["verify"], false);
         assert!(build_start_body(p, Some("web:abc"), None).unwrap_err().contains("relative"));
+    }
+
+    #[test]
+    fn an_import_file_is_read_here_and_sent_inline_never_from_senclaws_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("khach.csv"), "noi_dung,loai\nđơn hàng đâu,tra_don\n").unwrap();
+        let p = DatagenStartParams {
+            pipeline: "import".into(),
+            source: Some(json!({"file": "khach.csv"})),
+            kind: Some("labeled_text".into()),
+            license: Some("private".into()),
+            ..Default::default()
+        };
+        let b = build_start_body(p, Some("web:abc"), Some(tmp.path())).unwrap();
+        assert_eq!(b["source"]["file"]["name"], "khach.csv");
+        assert!(b["source"]["file"]["content"].as_str().unwrap().contains("đơn hàng"));
+        assert_eq!(b["license"], "private");
+
+        let home = crate::util::paths::senclaw_home();
+        if home.join("config.json").is_file() {
+            let p = DatagenStartParams {
+                pipeline: "import".into(),
+                source: Some(json!({"file": home.join("config.json").to_string_lossy()})),
+                ..Default::default()
+            };
+            assert!(build_start_body(p, None, None).unwrap_err().contains("never imported"));
+        }
+        let catalog = DatagenStartParams { pipeline: "import".into(), source: Some(json!({"catalog": "gsm8k"})), ..Default::default() };
+        assert_eq!(build_start_body(catalog, None, None).unwrap()["source"], json!({"catalog": "gsm8k"}));
+    }
+
+    #[test]
+    fn seeds_from_names_a_dataset() {
+        let p = DatagenStartParams {
+            pipeline: "expand_seeds".into(),
+            seeds_from: Some("massive-vi".into()),
+            per_label: Some(3),
+            ..Default::default()
+        };
+        let b = build_start_body(p, Some("web:abc"), None).unwrap();
+        assert_eq!(b["seedsFrom"], json!({"dataset": "massive-vi", "perLabel": 3}));
     }
 
     #[test]

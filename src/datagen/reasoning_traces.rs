@@ -76,7 +76,11 @@ impl From<ProblemInput> for Problem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Params {
+    #[serde(default)]
     pub problems: Vec<Problem>,
+    /// Problems read from a dataset on disk instead of `problems`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problems_from: Option<super::from_dataset::DatasetRef>,
     /// Traces wanted; default = every problem.
     #[serde(default)]
     pub target: Option<u32>,

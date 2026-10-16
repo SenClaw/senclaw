@@ -1,0 +1,144 @@
+{"text": "so sánh giá iPhone 17 ở ba hệ thống bán lẻ lớn tuần này", "label": "web-research"}
+{"text": "tìm hiểu xem lãi suất tiết kiệm 12 tháng của các ngân hàng hiện nay thế nào", "label": "web-research"}
+{"text": "tổng hợp các đánh giá mới nhất về xe điện VinFast VF 6", "label": "web-research"}
+{"text": "nghiên cứu giúp tôi các quy định mới về thuế thu nhập cá nhân năm nay", "label": "web-research"}
+{"text": "những nguồn nào nói về tác động của AI tới thị trường việc làm ở Việt Nam, tóm tắt có dẫn nguồn", "label": "web-research"}
+{"text": "giá vàng SJC hôm nay bao nhiêu, so với tuần trước tăng hay giảm", "label": "web-research"}
+{"text": "kiểm chứng giúp tôi tin đồn Hà Nội sắp cấm xe máy vào năm 2026", "label": "web-research"}
+{"text": "tình hình bão số 5 đang ở đâu và dự báo đổ bộ khi nào", "label": "web-research"}
+{"text": "liệt kê các framework web Rust phổ biến nhất hiện nay kèm ưu nhược điểm từ nhiều bài viết", "label": "web-research"}
+{"text": "tìm các nghiên cứu gần đây về lợi ích của nhịn ăn gián đoạn", "label": "web-research"}
+{"text": "thị trường chứng khoán Việt Nam tuần này có tin gì đáng chú ý", "label": "web-research"}
+{"text": "what are the latest benchmarks comparing small open-weight language models", "label": "web-research"}
+{"text": "mở shopee tìm tai nghe bluetooth dưới 500 nghìn và lọc theo đánh giá 5 sao", "label": "agent-browser"}
+{"text": "vào trang vnexpress chụp màn hình trang chủ cho tôi", "label": "agent-browser"}
+{"text": "điền giúp tôi form đăng ký sự kiện ở đường link này với tên Nguyễn Văn An", "label": "agent-browser"}
+{"text": "mở tab mới vào github.com rồi tìm repo có tên senclaw", "label": "agent-browser"}
+{"text": "bấm nút tải về trên trang đang mở", "label": "agent-browser"}
+{"text": "đọc nội dung bài viết ở link tôi vừa gửi và trích bảng giá trong đó", "label": "agent-browser"}
+{"text": "vào trang tra cứu hoá đơn điện tử, nhập mã tra cứu ABC123 rồi xem kết quả", "label": "agent-browser"}
+{"text": "cuộn xuống cuối trang và lấy danh sách bình luận", "label": "agent-browser"}
+{"text": "mở youtube tìm video hướng dẫn nấu phở bò", "label": "agent-browser"}
+{"text": "trên trang tiki hiện tại, thêm sản phẩm đầu tiên vào giỏ hàng", "label": "agent-browser"}
+{"text": "lấy tiêu đề và giá của 10 sản phẩm trên trang danh mục này", "label": "agent-browser"}
+{"text": "open the booking page in my browser and check which dates are available", "label": "agent-browser"}
+{"text": "thêm lịch họp với khách hàng lúc 9 giờ sáng thứ ba tuần sau", "label": "calendar"}
+{"text": "chiều nay tôi có cuộc hẹn nào không", "label": "calendar"}
+{"text": "nhắc tôi đi khám răng vào 15 giờ ngày 20 tháng này", "label": "calendar"}
+{"text": "dời cuộc họp nhóm sáng mai sang 2 giờ chiều", "label": "calendar"}
+{"text": "xoá lịch ăn tối thứ sáu khỏi lịch của tôi", "label": "calendar"}
+{"text": "tuần sau tôi rảnh vào buổi nào để xếp một buổi phỏng vấn", "label": "calendar"}
+{"text": "tạo sự kiện sinh nhật mẹ ngày 3 tháng 12, nhắc trước một ngày", "label": "calendar"}
+{"text": "lịch của tôi ngày mai có bị trùng giờ không", "label": "calendar"}
+{"text": "đặt nhắc nhở uống thuốc lúc 8 giờ tối nay", "label": "calendar"}
+{"text": "tìm trong lịch cuộc họp nào có tên dự án Alpha", "label": "calendar"}
+{"text": "liệt kê các sự kiện trong tháng này", "label": "calendar"}
+{"text": "add a dentist appointment on friday at 4pm", "label": "calendar"}
+{"text": "mỗi sáng 7 giờ tự động tóm tắt tin công nghệ rồi gửi cho tôi", "label": "schedule"}
+{"text": "cứ 30 phút kiểm tra giá bitcoin một lần, nếu dưới 60 nghìn đô thì báo tôi", "label": "schedule"}
+{"text": "tạo tác vụ định kỳ mỗi thứ hai tổng hợp email tuần trước", "label": "schedule"}
+{"text": "lên lịch chạy báo cáo doanh thu vào 18 giờ hằng ngày", "label": "schedule"}
+{"text": "tạm dừng tác vụ tự động gửi bản tin buổi sáng", "label": "schedule"}
+{"text": "xoá lịch chạy định kỳ kiểm tra website", "label": "schedule"}
+{"text": "mỗi cuối tháng tự động xuất bảng chi tiêu ra file", "label": "schedule"}
+{"text": "hằng giờ theo dõi trang tuyển dụng này và báo khi có tin mới", "label": "schedule"}
+{"text": "đổi tác vụ tóm tắt tin tức từ 7 giờ sang 6 giờ 30", "label": "schedule"}
+{"text": "liệt kê các tác vụ định kỳ đang chạy", "label": "schedule"}
+{"text": "chạy kịch bản sao lưu ghi chú vào 2 giờ sáng mỗi ngày", "label": "schedule"}
+{"text": "every weekday at 9am, check my open pull requests and summarize them", "label": "schedule"}
+{"text": "ghi chú lại ý tưởng: làm app theo dõi chi tiêu cho sinh viên", "label": "note"}
+{"text": "tạo một ghi chú danh sách đồ cần mua: sữa, trứng, bánh mì", "label": "note"}
+{"text": "tìm lại ghi chú về cuộc họp với anh Minh hôm qua", "label": "note"}
+{"text": "ghi lại số điện thoại của thợ sửa điều hoà vào ghi chú", "label": "note"}
+{"text": "sắp xếp các ghi chú học tiếng Anh theo phương pháp Cornell", "label": "note"}
+{"text": "xoá ghi chú cũ về chuyến đi Đà Lạt", "label": "note"}
+{"text": "thêm vào ghi chú dự án: deadline lùi sang thứ sáu", "label": "note"}
+{"text": "ghi chú nhanh: mật độ khách tăng vào cuối tuần, cần thêm nhân viên", "label": "note"}
+{"text": "liệt kê các ghi chú tôi tạo trong tuần này", "label": "note"}
+{"text": "cập nhật ghi chú công thức nấu ăn, thêm bước ướp thịt", "label": "note"}
+{"text": "chuyển đoạn tôi vừa nói thành một ghi chú có tiêu đề", "label": "note"}
+{"text": "take a note: call the bank about the card renewal", "label": "note"}
+{"text": "gửi email cho anh Nam báo là cuộc họp lùi sang thứ năm", "label": "space"}
+{"text": "kiểm tra hộp thư xem có email nào từ phòng nhân sự không", "label": "space"}
+{"text": "soạn và gửi email cảm ơn khách hàng sau buổi demo hôm nay", "label": "space"}
+{"text": "trả lời email mới nhất của chị Lan là tôi đồng ý", "label": "space"}
+{"text": "tìm email có hoá đơn tiền điện tháng trước", "label": "space"}
+{"text": "có bao nhiêu email chưa đọc trong hộp thư", "label": "space"}
+{"text": "chuyển tiếp email báo giá cho bộ phận kế toán", "label": "space"}
+{"text": "gửi mail cho cả nhóm kèm lịch trực tuần sau", "label": "space"}
+{"text": "đọc cho tôi email quan trọng nhất sáng nay", "label": "space"}
+{"text": "đánh dấu tất cả email quảng cáo là đã đọc", "label": "space"}
+{"text": "viết email xin nghỉ phép hai ngày gửi quản lý", "label": "space"}
+{"text": "send an email to the team saying the release is postponed", "label": "space"}
+{"text": "lưu bài nghiên cứu vừa rồi vào wiki cá nhân", "label": "wiki"}
+{"text": "tìm trong wiki xem tôi đã ghi gì về kiến trúc microservice", "label": "wiki"}
+{"text": "tạo trang wiki mới về quy trình triển khai server", "label": "wiki"}
+{"text": "cập nhật trang wiki về Rust async với phần tôi vừa học", "label": "wiki"}
+{"text": "kho kiến thức của tôi có tài liệu nào về Kubernetes không", "label": "wiki"}
+{"text": "đưa bản tóm tắt cuốn sách này vào wiki mục Đọc sách", "label": "wiki"}
+{"text": "tạo thư mục wiki cho dự án mới tên là Hệ thống điểm thưởng", "label": "wiki"}
+{"text": "liệt kê các trang wiki trong mục học máy", "label": "wiki"}
+{"text": "wiki của tôi có bao nhiêu trang rồi", "label": "wiki"}
+{"text": "lưu kết luận buổi thảo luận này thành một mục trong wiki", "label": "wiki"}
+{"text": "tìm trang wiki nói về cấu hình nginx", "label": "wiki"}
+{"text": "save this explanation of vector databases to my wiki", "label": "wiki"}
+{"text": "tóm tắt đoạn sau thành 3 ý chính: Công ty ghi nhận doanh thu quý ba tăng 12% nhờ mảng xuất khẩu, trong khi chi phí vận chuyển giảm.", "label": "pattern"}
+{"text": "trích các ý chính trong bài báo tôi dán dưới đây", "label": "pattern"}
+{"text": "phân tích đoạn log lỗi này và cho biết nguyên nhân có thể: ERROR connection refused at 10:02:11", "label": "pattern"}
+{"text": "viết lại đoạn văn sau cho trang trọng hơn: mai họp nha mọi người nhớ tới đúng giờ", "label": "pattern"}
+{"text": "rút ra các hành động cần làm từ biên bản họp sau đây", "label": "pattern"}
+{"text": "tóm tắt bản ghi cuộc gọi này thành biên bản ngắn", "label": "pattern"}
+{"text": "chạy pattern summarize trên đoạn văn bản tôi vừa gửi", "label": "pattern"}
+{"text": "trích tất cả các con số và chỉ số quan trọng trong báo cáo này", "label": "pattern"}
+{"text": "phân tích lập luận trong bài xã luận tôi dán bên dưới, chỉ ra điểm yếu", "label": "pattern"}
+{"text": "tạo danh sách câu hỏi ôn tập từ đoạn bài giảng sau", "label": "pattern"}
+{"text": "viết lại email này ngắn gọn hơn mà giữ đủ ý", "label": "pattern"}
+{"text": "extract the key insights from the article text below", "label": "pattern"}
+{"text": "đọc chữ trong ảnh chụp hoá đơn này giúp tôi", "label": "ocr"}
+{"text": "trích văn bản từ ảnh chụp màn hình vừa gửi", "label": "ocr"}
+{"text": "ảnh này là trang sách scan, chuyển nó thành chữ", "label": "ocr"}
+{"text": "lấy số tài khoản trong tấm ảnh chụp giấy chuyển khoản", "label": "ocr"}
+{"text": "nhận dạng chữ trên biển hiệu trong ảnh", "label": "ocr"}
+{"text": "chuyển ảnh chụp bảng điểm thành văn bản để tôi chép lại", "label": "ocr"}
+{"text": "đọc giúp tôi chữ viết tay trong ảnh này", "label": "ocr"}
+{"text": "trích nội dung từ file ảnh danh thiếp", "label": "ocr"}
+{"text": "ảnh chụp menu tiếng Trung này ghi gì", "label": "ocr"}
+{"text": "lấy toàn bộ chữ trong ảnh chụp tài liệu hợp đồng", "label": "ocr"}
+{"text": "OCR tấm ảnh chụp màn hình lỗi để tôi tìm trên mạng", "label": "ocr"}
+{"text": "extract the text from this scanned receipt image", "label": "ocr"}
+{"text": "sửa lỗi null pointer trong file main.rs", "label": "code"}
+{"text": "thêm cờ --verbose vào cli.py", "label": "code"}
+{"text": "viết unit test cho hàm tính thuế trong thư mục src", "label": "code"}
+{"text": "refactor module thanh toán tách phần gọi API ra file riêng", "label": "code"}
+{"text": "tìm chỗ nào trong project đang gọi hàm parse_config", "label": "code"}
+{"text": "chạy cargo test rồi sửa các test đang lỗi", "label": "code"}
+{"text": "thêm endpoint GET /health vào server express của dự án", "label": "code"}
+{"text": "đổi tên biến userList thành users trong toàn bộ thư mục components", "label": "code"}
+{"text": "giải thích hàm handle_message trong file router.rs làm gì", "label": "code"}
+{"text": "cập nhật dependency tokio lên bản mới nhất và sửa lỗi biên dịch", "label": "code"}
+{"text": "viết script migration thêm cột email vào bảng users", "label": "code"}
+{"text": "fix the failing lint errors in the web-app folder", "label": "code"}
+{"text": "tạo một workflow: ba agent viết ba phần báo cáo song song rồi gộp lại", "label": "workflow"}
+{"text": "lưu chuỗi bước nghiên cứu, viết nháp, biên tập này thành quy trình chạy lại được", "label": "workflow"}
+{"text": "chạy lại workflow viết bản tin tuần với chủ đề mới", "label": "workflow"}
+{"text": "dựng quy trình tái sử dụng: nhận link sản phẩm, một agent phân tích, một agent viết mô tả", "label": "workflow"}
+{"text": "liệt kê các workflow tôi đã lưu", "label": "workflow"}
+{"text": "sửa workflow tổng hợp báo cáo, thêm bước kiểm tra chính tả", "label": "workflow"}
+{"text": "tạo quy trình nhiều bước có tham số tên khách hàng để soạn hồ sơ", "label": "workflow"}
+{"text": "chia việc phân tích đối thủ cho nhiều chuyên gia chạy song song rồi tổng hợp, lưu thành workflow", "label": "workflow"}
+{"text": "xoá workflow cũ tên onboarding-v1", "label": "workflow"}
+{"text": "chạy workflow dịch tài liệu với file đầu vào mới", "label": "workflow"}
+{"text": "biến cách tôi vừa làm bài đánh giá sản phẩm thành một routine dùng lại", "label": "workflow"}
+{"text": "create a reusable workflow that drafts, reviews and publishes a blog post", "label": "workflow"}
+{"text": "chào bạn", "label": "none"}
+{"text": "cảm ơn nhé", "label": "none"}
+{"text": "bạn là ai", "label": "none"}
+{"text": "giải thích đệ quy là gì bằng ví dụ đơn giản", "label": "none"}
+{"text": "viết một bài thơ ngắn về mùa thu Hà Nội", "label": "none"}
+{"text": "12 nhân 15 bằng bao nhiêu", "label": "none"}
+{"text": "kể cho tôi một câu chuyện cười", "label": "none"}
+{"text": "dịch câu 'good morning' sang tiếng Việt", "label": "none"}
+{"text": "sự khác nhau giữa TCP và UDP là gì", "label": "none"}
+{"text": "gợi ý tên cho một quán cà phê nhỏ", "label": "none"}
+{"text": "tôi buồn quá, nói chuyện với tôi chút", "label": "none"}
+{"text": "how are you today", "label": "none"}

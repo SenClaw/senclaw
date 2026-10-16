@@ -86,7 +86,11 @@ impl From<SeedInput> for QaSeed {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Params {
+    #[serde(default)]
     pub seeds: Vec<QaSeed>,
+    /// Seeds read from a dataset on disk instead of `seeds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeds_from: Option<super::from_dataset::DatasetRef>,
     #[serde(default = "default_target")]
     pub target: u32,
     #[serde(default)]

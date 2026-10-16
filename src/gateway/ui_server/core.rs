@@ -400,6 +400,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/datagen/datasets/:name/records",
             get(super::datagen::datagen_records),
         )
+        .route("/api/datagen/catalog", get(super::datagen::datagen_catalog))
+        .route(
+            "/api/datagen/import/preview",
+            post(super::datagen::datagen_import_preview)
+                // An inline file to preview: the same cap as starting its import.
+                .layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         // ===== Zen Patterns =====
         .route(
             "/api/patterns",

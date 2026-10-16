@@ -2891,6 +2891,23 @@ paths:
       - cowork
       x-handler: update_template
       x-untyped: true
+  /api/datagen/catalog:
+    get:
+      operationId: get_api_datagen_catalog
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen catalog
+      tags:
+      - datagen
+      x-handler: datagen_catalog
+      x-untyped: true
   /api/datagen/datasets:
     get:
       operationId: get_api_datagen_datasets
@@ -2953,6 +2970,29 @@ paths:
       tags:
       - datagen
       x-handler: datagen_records
+      x-untyped: true
+  /api/datagen/import/preview:
+    post:
+      operationId: post_api_datagen_import_preview
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Datagen import preview
+      tags:
+      - datagen
+      x-handler: datagen_import_preview
       x-untyped: true
   /api/datagen/jobs:
     get:
@@ -10925,5 +10965,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 389
-x-untyped-operations: 479
+x-route-count: 391
+x-untyped-operations: 481
