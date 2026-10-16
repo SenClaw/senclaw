@@ -1348,6 +1348,10 @@ Rules for Claude:
 - **An inline file's `content` never reaches the manifest** (`skip_serializing`); the provenance keeps its sha256.
 - **A label map drops what it does not map.** Map only intents whose SenClaw answer is clear, and list the other right
   answers in `accept`; a guessed label makes the eval measure the guess.
+- **A kit's `datasets` register catalog entries and download nothing** (`<kits_dir>/datasets/<kit>.json`, receipt
+  kind `dataset`). The person installs each from Datagen, where its terms are shown — a kit install must never accept
+  a license on their behalf. `catalog::check_kit_entry` refuses bundled data, and the manifest parser runs it so a
+  broken entry fails the kit, not the person's click later.
 
 ## Where a model-supplied path is resolved
 

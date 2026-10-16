@@ -76,6 +76,16 @@ Code: [`src/kits/`](../src/kits/) · HTTP: [`src/gateway/ui_server/kits.rs`](../
     "syncOnInstall": true           // default — clone during install
   }],
 
+  "datasets": [{                    // Datagen catalog entries — see docs/datagen.md
+    "id": "router-eval",            // listed as <kit>/router-eval
+    "title": "Router eval",
+    "kind": "labeled_text",         // labeled_text | qa_context | problem_answer | chat
+    "license": "MIT",               // required; the source's own license
+    "source": { "url": "https://…/router-eval.jsonl" },   // or {"hf": {dataset, config, split, revision}}
+    "mapping": { "text": "text", "label": "label" },
+    "notice": "…"                   // required when "flags" (shareAlike, noTraining…) need agreeing to
+  }],
+
   "params": [{                      // asked before install — see "Params"
     "key": "workdir",               // fills {{param.workdir}}
     "label": "Working folder",
@@ -203,6 +213,7 @@ security boundary — the substituted value still lives wherever the kit put it.
 | skill | `<managed_skills_dir>/<name>/` + `.senclaw-kit.json` marker |
 | workflow | `<workflows_dir>/<name>.md` |
 | hook | `<kits_dir>/hooks/<kit>.json` |
+| datasets | `<kits_dir>/datasets/<kit>.json` — catalog entries only; nothing is downloaded until the person installs one from Datagen → Source datasets, where its license is shown |
 | job | a `background_tasks` row, `owner_kind=app`, `owner_id=<kit>` |
 | receipt | `<kits_dir>/installed.json` (plus the non-secret param answers) |
 

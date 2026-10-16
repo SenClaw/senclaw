@@ -251,6 +251,15 @@ Các mục khai trong [`assets/datasets/catalog.json`](../assets/datasets/catalo
 - mục nào có điều kiện thì có `notice`;
 - mục có điều kiện không bao giờ được nhúng sẵn.
 
+Một Zen Kit có thể thêm mục vào catalog qua khối `datasets` trong manifest ([zen-kits.md](zen-kits.md)):
+- cài kit chỉ ghi các mục vào `<kits_dir>/datasets/<kit>.json`, không tải gì;
+- mục hiện trong catalog với id `<kit>/<id>` và nhãn "Kit · <kit>";
+- nguồn là Hugging Face hoặc URL, không bao giờ là dữ liệu nhúng sẵn;
+- gỡ kit thì các mục biến khỏi catalog; dataset đã nhập từ chúng vẫn giữ lại.
+
+Manifest có mục không cài được (nhúng dữ liệu, ánh xạ sai dạng, cần đồng ý mà không có `notice`, URL nội bộ) bị từ chối
+ngay khi đọc kit.
+
 Dataset nhập từ catalog đọc được từ **mọi** chat (dữ liệu công khai). Dataset khác chỉ chat tạo ra nó thấy.
 
 #### Xem trước
