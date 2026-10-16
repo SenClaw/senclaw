@@ -1781,7 +1781,26 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // now managed explicitly via Settings → Profile UI.)
 
     // ===== 3f. MCP Manager =====
-    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let working_dir = mcp::config::project_scope_dir(
+        &cwd,
+        cfg.mcp.project_dir.as_deref(),
+        &crate::util::paths::senclaw_home(),
+        &crate::util::paths::senclaw_data_home(),
+        crate::util::paths::senclaw_home_is_relocated(),
+    );
+    if working_dir != cwd {
+        let why = if cfg.mcp.project_dir.is_some() {
+            "set by SENCLAW_MCP_PROJECT_DIR"
+        } else {
+            "SENCLAW_HOME is relocated and cwd is outside it; SENCLAW_MCP_PROJECT_DIR picks a project"
+        };
+        tracing::info!(
+            "[SenClaw] MCP project scope: {}, not cwd {} ({why})",
+            working_dir.display(),
+            cwd.display()
+        );
+    }
     let user_config_dir = cfg
         .paths
         .global_config_path

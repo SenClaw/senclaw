@@ -33,7 +33,15 @@ senclaw runtime list         # installed runtimes / slots (see `senclaw runtime 
 
 Never develop against a live install: use `SENCLAW_HOME=<scratch dir>` (every daemon path derives from it; user data
 defaults to `$SENCLAW_HOME/data`, else `SENCLAW_DATA_HOME`) plus `SENCLAW_UI_PORT`/`SENCLAW_WS_PORT` on other ports, and pin client tools to them explicitly — `senclaw acp` takes
-`--gateway ws://127.0.0.1:<ws port>` and does not read `SENCLAW_WS_PORT`.
+`--gateway ws://127.0.0.1:<ws port>` and does not read `SENCLAW_WS_PORT`. **Start a test daemon from a scratch cwd as
+well.** The process cwd is not covered by `SENCLAW_HOME`: the daemon loads `.env` from it, and its
+`.senclaw/mcp.json` is the MCP project scope. Every Space App registers its server in that file, and the user's
+real daemon once ran from this repo, so `./.senclaw/mcp.json` here lists ~55 of the real install's apps, many behind
+`127.0.0.1:18788`. A test daemon that loaded it connected to all of them and started the user's session apps.
+`mcp::config::project_scope_dir` now ignores the cwd's file when `SENCLAW_HOME` is moved off `~/.senclaw` and cwd
+is outside that home and its data folder. The project scope then lives at `$SENCLAW_HOME/.senclaw/mcp.json`, and
+`SENCLAW_MCP_PROJECT_DIR` opts a project back in. The guard does not apply with `HOME=<scratch>` alone, or with
+`SENCLAW_HOME` set to the default.
 
 The web UI is built in `../web-app` (`npm run build`); the daemon serves `SENCLAW_WEB_DIST`, else `./web/dist`, else
 `../web-app/dist`.

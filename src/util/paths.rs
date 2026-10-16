@@ -24,6 +24,13 @@ pub fn senclaw_data_home() -> PathBuf {
     resolve_dirs(env_value(SENCLAW_HOME_ENV), env_value(SENCLAW_DATA_HOME_ENV), &user_home(), &cwd()).1
 }
 
+/// Whether `SENCLAW_HOME` moves the state folder away from `~/.senclaw` — an
+/// install of its own. Naming the default explicitly is not a move, the same
+/// rule [`resolve_dirs`] applies to the data folder.
+pub fn senclaw_home_is_relocated() -> bool {
+    senclaw_home() != user_home().join(".senclaw")
+}
+
 /// Rewrite a relative or `~`-prefixed `SENCLAW_HOME` / `SENCLAW_DATA_HOME` in
 /// this process's environment to the absolute folder it resolved to.
 ///

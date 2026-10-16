@@ -31,7 +31,8 @@ pub struct McpManager {
     /// External server runtime state, keyed by name.
     external: RwLock<HashMap<String, ExternalServerState>>,
 
-    /// Working directory for project-scope config.
+    /// Directory whose `.senclaw/mcp.json` is the project scope — the daemon
+    /// picks it with [`crate::mcp::config::project_scope_dir`].
     working_dir: PathBuf,
 
     /// How to spawn SenClaw's own MCP servers on demand.

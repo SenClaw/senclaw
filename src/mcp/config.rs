@@ -3,7 +3,8 @@
 //! Mirrors sema-core `MCPManager` config loading/saving pattern.
 //! Config is stored as JSON on disk:
 //!   - `~/.senclaw/mcp.json` — user scope
-//!   - `{working_dir}/.senclaw/mcp.json` — project scope
+//!   - `{working_dir}/.senclaw/mcp.json` — project scope, where the daemon's
+//!     `working_dir` is chosen by [`project_scope_dir`]
 //!
 //! File format per sema-core convention:
 //! ```json
@@ -210,6 +211,44 @@ pub struct McpServerInfo {
 pub struct McpConfigFile {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub mcp_servers: HashMap<String, ExternalMcpServerConfig>,
+}
+
+// ---------------------------------------------------------------------------
+// Project scope location
+// ---------------------------------------------------------------------------
+
+/// The directory whose `.senclaw/mcp.json` is the daemon's project scope.
+///
+/// The project file is not only something a person writes: every Space App
+/// registers its MCP server there, with that install's URLs and app tokens. So
+/// a file left in a folder by one install is that install's registry. A daemon
+/// started there with a different `SENCLAW_HOME` used to load it anyway and
+/// connect to every entry at boot — through the other daemon's app proxy,
+/// which starts that daemon's apps — and wrote its own registrations into the
+/// same file.
+///
+/// - `explicit` (`SENCLAW_MCP_PROJECT_DIR`) always wins; a relative value is
+///   taken from `cwd`.
+/// - Default install (`home_relocated == false`): `cwd`, unchanged. The desktop
+///   app starts the daemon in its bundle's `Resources`, and `senclaw start`
+///   run inside a project picks up that project's servers.
+/// - Relocated `SENCLAW_HOME`: `cwd` only when it lies inside this install's
+///   state or data folder; anywhere else the scope is kept in `state_home`, so
+///   it still persists across restarts but never meets another install's.
+pub fn project_scope_dir(
+    cwd: &Path,
+    explicit: Option<&str>,
+    state_home: &Path,
+    data_home: &Path,
+    home_relocated: bool,
+) -> PathBuf {
+    if let Some(dir) = explicit {
+        return crate::util::paths::resolve_in_workspace(dir, &cwd.to_string_lossy());
+    }
+    if !home_relocated || cwd.starts_with(state_home) || cwd.starts_with(data_home) {
+        return cwd.to_path_buf();
+    }
+    state_home.to_path_buf()
 }
 
 // ---------------------------------------------------------------------------
@@ -602,5 +641,67 @@ mod tests {
         let shared = merged.mcp_servers.get("shared").unwrap();
         assert_eq!(shared.description.as_deref(), Some("project version"));
         assert_eq!(shared.command.as_deref(), Some("proj_cmd"));
+    }
+
+    /// A daemon with its own `SENCLAW_HOME`, started in a folder where another
+    /// install left its Space-App registry, must neither load that registry
+    /// nor write into it. The default install keeps reading its cwd.
+    #[test]
+    fn a_relocated_home_ignores_another_installs_project_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().join("repo");
+        let state = dir.path().join("scratch");
+        let data = state.join("data");
+
+        // The other install's registry, as its Space Apps write it.
+        let other = McpConfigManager::new(dir.path().join("other-home/mcp.json"));
+        let entry = ExternalMcpServerConfig {
+            name: "zeach-mcp".into(),
+            transport: McpTransportType::Http,
+            description: None,
+            enabled: true,
+            use_tools: None,
+            command: None,
+            args: vec![],
+            env: HashMap::new(),
+            url: Some("http://127.0.0.1:18788/api/space/apps/zeach/proxy/api/mcp/sse".into()),
+            headers: HashMap::new(),
+        };
+        other
+            .add_or_update_server(&repo, McpScopeType::Project, &entry)
+            .unwrap();
+
+        // Relocated home, cwd = that folder: the scope moves into the home.
+        let scope = project_scope_dir(&repo, None, &state, &data, true);
+        assert_eq!(scope, state);
+        let mine = McpConfigManager::new(state.join("mcp.json"));
+        assert!(mine.load_merged(&scope).mcp_servers.is_empty());
+
+        // A registration of its own lands in its home, not in the folder.
+        let own = ExternalMcpServerConfig { name: "own-mcp".into(), ..entry.clone() };
+        mine.add_or_update_server(&scope, McpScopeType::Project, &own)
+            .unwrap();
+        let theirs = other.load_project_config(&repo).mcp_servers;
+        assert_eq!(theirs.keys().collect::<Vec<_>>(), vec!["zeach-mcp"]);
+
+        // Inside its own state or data folder, cwd is still the project.
+        let inside = data.join("workspace/proj");
+        assert_eq!(project_scope_dir(&inside, None, &state, &data, true), inside);
+        assert_eq!(project_scope_dir(&state, None, &state, &data, true), state);
+
+        // An explicit project dir is honoured, relative to cwd.
+        assert_eq!(
+            project_scope_dir(&repo, Some("."), &state, &data, true),
+            repo
+        );
+        assert_eq!(
+            project_scope_dir(&state, Some(repo.to_str().unwrap()), &state, &data, true),
+            repo
+        );
+
+        // Default install (desktop: cwd = bundle Resources): cwd, unchanged.
+        let default = project_scope_dir(&repo, None, &state, &data, false);
+        assert_eq!(default, repo);
+        assert!(mine.load_merged(&default).mcp_servers.contains_key("zeach-mcp"));
     }
 }

@@ -302,6 +302,10 @@ pub struct McpConfig {
     /// restores the per-server spawn — worth having, because bundled children
     /// share a process and a crash takes all of them down together.
     pub bundled: bool,
+    /// Directory whose `.senclaw/mcp.json` is the project scope
+    /// (`SENCLAW_MCP_PROJECT_DIR`). Unset: chosen by
+    /// [`crate::mcp::config::project_scope_dir`].
+    pub project_dir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -818,6 +822,10 @@ impl Config {
                 litho_binary: env_or("SENCLAW_LITHO_BINARY", "deepwiki-rs"),
                 litho_model_efficient: env_or("SENCLAW_LITHO_MODEL_EFFICIENT", ""),
                 bundled: env_bool("SENCLAW_MCP_BUNDLED", true),
+                project_dir: env::var("SENCLAW_MCP_PROJECT_DIR")
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty()),
             },
             dispatch: DispatchConfig {
                 enabled: env_bool("SENCLAW_DISPATCH_ENABLED", false),

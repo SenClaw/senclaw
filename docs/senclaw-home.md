@@ -58,6 +58,11 @@ nó vào sandbox. Muốn gắn thì đặt `SENCLAW_DATA_HOME` ra ngoài.
 
 ## Không thay đổi
 
+- Ngoại lệ: MCP project scope của daemon (`<cwd>/.senclaw/mcp.json`, nơi mọi Space App đăng ký server của nó) chỉ đọc
+  theo cwd khi `SENCLAW_HOME` là mặc định, hoặc khi cwd nằm trong `SENCLAW_HOME` / `SENCLAW_DATA_HOME`. Nếu
+  `SENCLAW_HOME` đã dời đi và cwd ở ngoài, project scope là `$SENCLAW_HOME/.senclaw/mcp.json`; nhờ vậy một daemon
+  thử nghiệm chạy trong thư mục mà bản cài khác để lại registry sẽ không nối vào app của bản cài đó.
+  `SENCLAW_MCP_PROJECT_DIR=<thư mục>` chọn thẳng một dự án (`mcp::config::project_scope_dir`).
 - Thư mục `.senclaw/` **theo dự án** hoặc **theo app** (`<workspace>/.senclaw/hooks.json`, `<project>/.senclaw/mcp.json`,
   `<app>/.senclaw/mcp-tools.json`, `runtime.log`) không phải thư mục gốc, nên không đi theo các biến này.
 - `scripts/install.sh` vẫn cài binary vào `~/.senclaw/bin` (đổi bằng `SENCLAW_INSTALL_DIR`).
