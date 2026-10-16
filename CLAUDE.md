@@ -1316,6 +1316,8 @@ running their Python in the sandbox), `export_logs` (trajectories → sharegpt /
 (datasets people wrote — a catalog entry, a public Hugging Face dataset, a URL or a file — normalised to four record
 kinds, no LLM). `seedsFrom` / `problemsFrom` feed a generating pipeline from a dataset on disk. REST
 `/api/datagen/*`, MCP `senclaw-datagen`, web and desktop page Datagen. Guide: [docs/datagen.md](docs/datagen.md).
+Two bundled skills teach agents to use it: `skills/datagen` (pick the pipeline, call it, arm a watch, report) and
+`skills/datagen-author` (write a small labelled set yourself, save it, import it, then grow it).
 
 Rules for Claude:
 

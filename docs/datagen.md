@@ -312,6 +312,18 @@ Hai trang hiển thị mọi job, không lọc theo chat.
 
 Gọi `datagen_start` đi qua permission prompt như mọi tool MCP khác.
 
+Hai skill có sẵn dạy agent dùng các tool này:
+
+| Skill | Agent làm gì |
+|---|---|
+| [`datagen`](../skills/datagen/SKILL.md) | chọn pipeline (ưu tiên catalog, 0 lời gọi LLM), gọi `datagen_start`, đặt `schedule_watch` trên `datagen_status` rồi kết thúc lượt, khi được đánh thức thì báo số liệu thật và 2–3 bản ghi mẫu. Không tự đồng ý license thay người dùng |
+| [`datagen-author`](../skills/datagen-author/SKILL.md) | tự soạn bộ nhỏ: taxonomy nhãn có định nghĩa, câu đa dạng và câu đối lập. Lưu JSONL vào thư mục làm việc, nhập bằng `import` (license `private`), rồi đề xuất `expand_seeds` |
+
+Đã chạy thử qua `senclaw acp` với model local `google/gemma-4-e4b` (16/10/2026):
+- `datagen`: agent tự nạp skill, nhập 40 bài GSM8K, đặt watch; khi watch xong thì báo 40/40 kèm 3 bản ghi thật đọc từ
+  `data.jsonl`.
+- `datagen-author`: agent soạn 3 nhãn × 4 câu, ghi file, nhập 12/12, rồi hỏi trước khi mở rộng.
+
 Đường dẫn tương đối (`seeds_file`, `problems_file`, `paths`) được tính theo **thư mục làm việc của chat**
 (workspace), không theo thư mục của tiến trình. Nếu không biết thư mục của chat thì đường dẫn tương đối bị từ chối; khi
 đó hãy đưa đường dẫn tuyệt đối.
