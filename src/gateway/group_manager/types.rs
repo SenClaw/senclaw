@@ -375,6 +375,16 @@ pub(super) struct GlobalConfig {
         rename = "memoryRecall"
     )]
     pub(super) memory_recall: Option<bool>,
+    /// Unified memory engine: when enabled, the notes and the graph that
+    /// `memoryRecall` / `preCognitive` allow are fused into ONE budgeted
+    /// `<memory_context>` block instead of two independent ones. Off by
+    /// default — it changes the prompt shape.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "memoryEngine"
+    )]
+    pub(super) memory_engine: Option<bool>,
     /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
     /// (e.g. the Kanban board) are auto-run by persona worker agents.
     #[serde(

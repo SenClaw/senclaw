@@ -112,6 +112,21 @@ pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
+/// Unified memory engine. Default OFF: turning it on replaces the
+/// `<cognitive_memory>` and `<memory_recall>` blocks with one
+/// `<memory_context>` block, so it is opt-in like `preCognitive`.
+pub fn get_memory_engine_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path)
+        .memory_engine
+        .unwrap_or(false)
+}
+
+pub fn save_memory_engine_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.memory_engine = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== Default flows + widget disable list (global, user-set) =====
 
 /// The `defaults` section (open-link / media / search / note handlers + the
@@ -362,4 +377,45 @@ pub fn save_decision_settings(config_path: &Path, s: &crate::decision::settings:
     s.merge_into_raw(&mut raw);
     cfg.decision_config = Some(raw);
     save_global_config(config_path, &cfg)
+}
+
+#[cfg(test)]
+mod memory_toggle_tests {
+    use super::*;
+
+    #[test]
+    fn the_unified_engine_is_off_until_asked_for_and_independent_of_the_other_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+
+        // Nothing stored: engine off, curated recall on (its documented default).
+        assert!(!get_memory_engine_enabled(&path));
+        assert!(get_memory_recall_enabled(&path));
+
+        save_memory_engine_enabled(&path, true).unwrap();
+        assert!(get_memory_engine_enabled(&path));
+        assert!(get_memory_recall_enabled(&path), "turning the engine on must not touch recall");
+
+        // The engine reads the other two switches as "which stores may I read",
+        // so flipping one must leave the engine as it was.
+        save_memory_recall_enabled(&path, false).unwrap();
+        save_pre_cognitive_enabled(&path, true).unwrap();
+        assert!(get_memory_engine_enabled(&path));
+        assert!(!get_memory_recall_enabled(&path));
+        assert!(get_pre_cognitive_enabled(&path));
+
+        save_memory_engine_enabled(&path, false).unwrap();
+        assert!(!get_memory_engine_enabled(&path));
+        assert!(get_pre_cognitive_enabled(&path));
+    }
+
+    #[test]
+    fn the_stored_key_is_the_one_the_agent_behavior_api_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        save_memory_engine_enabled(&path, true).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["memoryEngine"], serde_json::json!(true));
+    }
 }

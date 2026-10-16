@@ -76,7 +76,10 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
-    fn new(db: Arc<Db>, config: &Config) -> Self {
+    /// A manager that is not the process-wide one. The daemon goes through
+    /// [`init`]; this exists so an eval or a test can hold its own, over its
+    /// own database and profiles directory.
+    pub(crate) fn new(db: Arc<Db>, config: &Config) -> Self {
         let emb = create_embedding_provider(config, Arc::clone(&db));
         Self {
             db,

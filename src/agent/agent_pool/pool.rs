@@ -1792,15 +1792,24 @@ impl AgentPool {
         //                    search over curated memory/*.md, per-memory hits)
         // The memory backend now loads `~/senclaw/profiles/<folder>/MEMORY.md`
         // verbatim instead of FTS-searching chunks + daily history.
+        // With the global `memoryEngine` toggle on, the last two backends are
+        // read together and fused into one budgeted `<memory_context>` block
+        // (`memory::engine`); MEMORY.md stays pinned either way.
         let full_prompt = {
-            let (do_memory, max_results) = {
+            let (do_memory, max_results, engine_max_tokens) = {
                 let cfg = self.config.lock().unwrap();
                 let c = cfg.as_ref();
                 (
                     c.map(|c| c.memory.pre_retrieval).unwrap_or(false),
                     c.map(|c| c.memory.search_max_results as usize).unwrap_or(5),
+                    c.map(|c| c.memory.engine_max_tokens as usize)
+                        .unwrap_or(crate::memory::engine::RecallConfig::default().max_tokens),
                 )
             };
+            let do_engine = global_config_path
+                .as_deref()
+                .map(crate::gateway::group_manager::get_memory_engine_enabled)
+                .unwrap_or(false);
             let do_cognitive = global_config_path
                 .as_deref()
                 .map(crate::gateway::group_manager::get_pre_cognitive_enabled)
@@ -1839,18 +1848,44 @@ impl AgentPool {
                 String::new()
             };
 
-            // Cognitive-graph backend (pre-cognitive stage).
-            let cog_context = if do_cognitive {
-                cognitive_pre_retrieval(prompt, &group.folder, max_results).await
+            // The searchable stores, read one of two ways. With `memoryEngine`
+            // on they are fused into ONE budgeted block (same two switches
+            // still decide which stores may be read); with it off each store
+            // injects its own block, as before.
+            let (cog_context, recall_context, engine_context) = if do_engine {
+                let query = crate::memory::engine::RecallQuery {
+                    text: prompt.to_string(),
+                    folder: group.folder.clone(),
+                    chat_jid: jid.to_string(),
+                    limit: max_results,
+                };
+                let cfg = crate::memory::engine::RecallConfig {
+                    max_tokens: engine_max_tokens,
+                    ..Default::default()
+                };
+                let selection = crate::memory::engine::ArmSelection {
+                    curated: do_recall,
+                    cognitive: do_cognitive,
+                };
+                (
+                    String::new(),
+                    String::new(),
+                    crate::memory::engine::pre_retrieval(selection, &query, &cfg).await,
+                )
             } else {
-                String::new()
-            };
-
-            // Curated-memory backend (`memoryRecall` toggle).
-            let recall_context = if do_recall {
-                curated_pre_retrieval(prompt, &group.folder, jid, max_results).await
-            } else {
-                String::new()
+                // Cognitive-graph backend (pre-cognitive stage).
+                let cog = if do_cognitive {
+                    cognitive_pre_retrieval(prompt, &group.folder, max_results).await
+                } else {
+                    String::new()
+                };
+                // Curated-memory backend (`memoryRecall` toggle).
+                let recall = if do_recall {
+                    curated_pre_retrieval(prompt, &group.folder, jid, max_results).await
+                } else {
+                    String::new()
+                };
+                (cog, recall, String::new())
             };
 
             let mut blocks = String::new();
@@ -1866,6 +1901,10 @@ impl AgentPool {
                 blocks.push_str(&format!(
                     "<memory_recall>\n{recall_context}\n</memory_recall>\n"
                 ));
+            }
+            if !engine_context.is_empty() {
+                let tag = crate::memory::engine::WRAPPER_TAG;
+                blocks.push_str(&format!("<{tag}>\n{engine_context}\n</{tag}>\n"));
             }
             if blocks.is_empty() {
                 prompt.to_string()
@@ -3522,24 +3561,7 @@ async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: 
     let Some(sys) = crate::memory::cognitive::try_get_instance() else {
         return String::new();
     };
-    let mut q =
-        crate::memory::cognitive::SearchQuery::spreading(prompt.to_string(), max_results, 2);
-    q.node_sets = vec![crate::memory::cognitive::NodeSet::group(
-        group_folder,
-        "default_memory",
-    )];
-    match sys.search(&q).await {
-        Ok(hits) => {
-            // Drop very-low-confidence hits — at <0.1 score the LLM context
-            // budget is better spent on the user prompt itself.
-            let filtered: Vec<_> = hits.into_iter().filter(|h| h.score >= 0.1).collect();
-            crate::memory::cognitive::format_hits_for_prompt(&filtered, 200)
-        }
-        Err(e) => {
-            tracing::warn!("[AgentPool] Cognitive pre-retrieval failed: {e}");
-            String::new()
-        }
-    }
+    crate::memory::engine::legacy::cognitive_block(&sys, prompt, group_folder, max_results).await
 }
 
 /// Curated-memory pre-retrieval (the `memoryRecall` toggle). Hybrid FTS5 +
@@ -3561,96 +3583,8 @@ async fn curated_pre_retrieval(
     max_results: usize,
 ) -> String {
     let mgr = crate::memory::manager::get_instance();
-    let opts = crate::memory::fts_search::SearchOptions {
-        max_results: (max_results + 5) * 2,
-        min_score: 0.25,
-        source: Some("memory".to_owned()),
-    };
-    let results = match mgr.search(group_folder, query, Some(opts)).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!("[AgentPool] Curated pre-retrieval failed: {e}");
-            return String::new();
-        }
-    };
-
-    // Curated files only: skip daily logs (YYYY-MM-DD.md) and the index.
-    let today_file = format!("{}.md", chrono::Utc::now().format("%Y-%m-%d"));
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut ranked: Vec<(i32, String, String)> = Vec::new();
-    for r in results {
-        let file_name = std::path::Path::new(&r.path)
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if file_name == today_file
-            || file_name == "MEMORY.md"
-            || is_daily_log_name(&file_name)
-            || !seen.insert(r.path.clone())
-        {
-            continue;
-        }
-        let meta = crate::memory::curated::read_meta(std::path::Path::new(&r.path));
-        let rank = match &meta {
-            Some(m) => crate::memory::curated::memory_session_rank(
-                &m.origin_session_id,
-                chat_jid,
-                group_folder,
-            ),
-            None => 1, // no frontmatter → treat as shared
-        };
-        if rank < 0 {
-            continue; // other chat's session-scoped memory
-        }
-        let header = match meta {
-            Some(m) => format!(
-                "{} ({}) — {}",
-                m.name,
-                if m.mem_type.is_empty() {
-                    "memory"
-                } else {
-                    &m.mem_type
-                },
-                m.description
-            ),
-            None => file_name,
-        };
-        let snippet: String = r.text.chars().take(300).collect();
-        ranked.push((rank, header, snippet));
-    }
-
-    // Same-session first, then shared; preserve search relevance within a tier.
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
-
-    let mut out = String::new();
-    let mut n = 0usize;
-    for (_rank, header, snippet) in ranked.into_iter().take(max_results) {
-        n += 1;
-        out.push_str(&format!("[{n}] {header}\n{snippet}\n\n"));
-    }
-
-    if n == 0 {
-        return String::new();
-    }
-    format!(
-        "Saved memories relevant to this request (point-in-time notes — verify before asserting):\n\n{}\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).",
-        out.trim()
-    )
-}
-
-/// `YYYY-MM-DD.md` daily-log filename check (any date, not just today).
-fn is_daily_log_name(file_name: &str) -> bool {
-    let Some(stem) = file_name.strip_suffix(".md") else {
-        return false;
-    };
-    let b = stem.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && stem
-            .chars()
-            .enumerate()
-            .all(|(i, c)| matches!(i, 4 | 7) || c.is_ascii_digit())
+    crate::memory::engine::legacy::curated_block(&mgr, query, group_folder, chat_jid, max_results)
+        .await
 }
 
 /// Filter for the auto-reflection path (P14).

@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "about": "Retrieval-level eval for what the agent is shown before a turn. Each query is graded by whether the injected context contains the strings that answer it (must_include), leaks a string from another chat (must_exclude), and how often an answer is repeated. No model is called: the graph is built from canned triplets and search is FTS-only, so numbers are reproducible and say nothing about embedding quality.",
+  "folder": "main",
+  "chat": "web:eval",
+  "other_chat": "web:other",
+  "now": "2026-10-16",
+  "notes": [
+    {
+      "name": "daemon-ports",
+      "description": "ports the daemon listens on",
+      "type": "reference",
+      "created": "2026-09-12",
+      "body": "The daemon serves the web UI on port 18788 and the websocket gateway on port 18789. Space apps start from port 4800."
+    },
+    {
+      "name": "old-space-app-ports",
+      "description": "superseded space app port range",
+      "type": "reference",
+      "created": "2025-01-10",
+      "body": "Space apps used to start from port 4300 before the range moved."
+    },
+    {
+      "name": "telegram-pairing",
+      "description": "how an unknown telegram chat is admitted",
+      "type": "project",
+      "created": "2026-09-20",
+      "body": "Telegram pairing: an unknown chat gets an 8-character code and nothing is processed until a person approves it with pair approve CODE."
+    },
+    {
+      "name": "sao-luu-co-so-du-lieu",
+      "description": "lịch sao lưu cơ sở dữ liệu",
+      "type": "project",
+      "created": "2026-08-01",
+      "body": "Sao lưu cơ sở dữ liệu: chạy lệnh sao lưu mỗi đêm lúc 02:00, giữ bảy bản gần nhất trong thư mục backups."
+    },
+    {
+      "name": "sandbox-egress",
+      "description": "how the macOS sandbox limits network access",
+      "type": "reference",
+      "created": "2026-09-05",
+      "body": "The OS sandbox on macOS uses Seatbelt; per-site network egress goes through an allowlisting proxy on loopback."
+    },
+    {
+      "name": "daemon-logs",
+      "description": "where daemon logs go",
+      "type": "reference",
+      "created": "2026-07-02",
+      "body": "Daemon logs go to the data folder and rotate daily."
+    },
+    {
+      "name": "daemon-restart-bind-host",
+      "description": "restart after changing the bind host",
+      "type": "reference",
+      "created": "2026-09-30",
+      "body": "Restart the daemon after changing SENCLAW_UI_BIND_HOST; the listener address is fixed at start."
+    },
+    {
+      "name": "daemon-update",
+      "description": "how the daemon updates itself",
+      "type": "reference",
+      "created": "2026-06-15",
+      "body": "The senclaw update command downloads the release binary for the platform and replaces the daemon."
+    },
+    {
+      "name": "staging-vault",
+      "description": "staging credentials rotation",
+      "type": "project",
+      "created": "2026-10-01",
+      "origin": "web:other",
+      "body": "The staging admin password rotation happens every Friday and the vault item is called delta-vault."
+    }
+  ],
+  "chunks": [
+    {
+      "text": "User: deadline của dự án SemaClaw là khi nào? Assistant: Deadline của SemaClaw là cuối tháng 8 năm 2026.",
+      "triplets": [
+        { "subject": "SemaClaw", "predicate": "has_deadline", "object": "cuối tháng 8 năm 2026", "subject_type": "project", "object_type": "date" }
+      ]
+    },
+    {
+      "text": "Telegram pairing: an unknown chat gets an 8-character code and nothing is processed until a person approves it with pair approve CODE.",
+      "triplets": [
+        { "subject": "Telegram pairing", "predicate": "issues", "object": "8-character code", "subject_type": "feature", "object_type": "code" }
+      ]
+    },
+    {
+      "text": "Sao lưu cơ sở dữ liệu: chạy lệnh sao lưu mỗi đêm lúc 02:00, giữ bảy bản gần nhất trong thư mục backups.",
+      "triplets": [
+        { "subject": "sao lưu", "predicate": "runs_at", "object": "02:00", "subject_type": "task", "object_type": "time" }
+      ]
+    },
+    {
+      "text": "Ada invented the compiler.",
+      "triplets": [
+        { "subject": "Ada", "predicate": "invented", "object": "compiler", "subject_type": "person", "object_type": "tool" }
+      ]
+    },
+    {
+      "text": "The compiler first ran on the Analytical Machine.",
+      "triplets": [
+        { "subject": "compiler", "predicate": "ran_on", "object": "Analytical Machine", "subject_type": "tool", "object_type": "machine" }
+      ]
+    },
+    {
+      "text": "User: tôi thích dùng cổng 4801 cho app thử nghiệm của mình.",
+      "triplets": [
+        { "subject": "User", "predicate": "prefers_port", "object": "4801", "subject_type": "person", "object_type": "port" }
+      ]
+    },
+    {
+      "text": "The weather in Hanoi is rainy through October.",
+      "triplets": [
+        { "subject": "Hanoi", "predicate": "has_weather", "object": "rainy", "subject_type": "city", "object_type": "weather" }
+      ]
+    },
+    {
+      "text": "Thanks, that is all for today.",
+      "triplets": []
+    }
+  ],
+  "queries": [
+    {
+      "id": "ports-en",
+      "text": "Which ports does the daemon use for the web UI and the websocket gateway?",
+      "must_include": ["18788", "18789"],
+      "why": "answer lives only in a curated note"
+    },
+    {
+      "id": "telegram-pairing-both-stores",
+      "text": "How does telegram pairing work for an unknown chat?",
+      "must_include": ["8-character"],
+      "why": "the same fact is a curated note and a graph chunk: should arrive once"
+    },
+    {
+      "id": "backup-vi-both-stores",
+      "text": "Khi nào chạy sao lưu cơ sở dữ liệu?",
+      "must_include": ["02:00"],
+      "why": "Vietnamese, in both stores: should arrive once"
+    },
+    {
+      "id": "deadline-vi-chat-only",
+      "text": "Deadline của dự án SemaClaw là khi nào?",
+      "must_include": ["tháng 8"],
+      "why": "answer lives only in a conversation the graph ingested"
+    },
+    {
+      "id": "compiler-machine-hops",
+      "text": "What machine did the compiler Ada invented run on?",
+      "must_include": ["Analytical Machine"],
+      "why": "two facts joined through the compiler entity"
+    },
+    {
+      "id": "port-preference-vi",
+      "text": "Tôi thích cổng nào cho app thử nghiệm?",
+      "must_include": ["4801"],
+      "why": "a stated user preference, only in the graph"
+    },
+    {
+      "id": "space-app-port-current",
+      "text": "Which port do space apps start from?",
+      "must_include": ["4800"],
+      "why": "an older note says 4300; the current one must still be present"
+    },
+    {
+      "id": "restart-bind-host",
+      "text": "How do I restart the daemon after the bind host changes?",
+      "must_include": ["SENCLAW_UI_BIND_HOST"],
+      "why": "four notes mention the daemon; the right one must survive the competition"
+    },
+    {
+      "id": "other-chat-secret",
+      "text": "What is the staging admin password rotation schedule?",
+      "must_include": [],
+      "must_exclude": ["delta-vault"],
+      "why": "a note written in another chat must never be shown here"
+    },
+    {
+      "id": "sandbox-egress-en",
+      "text": "How does the sandbox limit network egress per site?",
+      "must_include": ["allowlisting proxy"],
+      "why": "answer lives only in a curated note"
+    },
+    {
+      "id": "weather-chat-only",
+      "text": "What is the weather like in Hanoi?",
+      "must_include": ["rainy"],
+      "why": "answer lives only in a graph chunk"
+    }
+  ]
+}

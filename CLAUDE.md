@@ -610,6 +610,37 @@ Rules for Claude:
 
 Full guide: [docs/zen-patterns.md](docs/zen-patterns.md).
 
+## Unified memory recall (`src/memory/engine/`)
+
+Notes (`memory/*.md`), the cognitive graph and `MEMORY.md` each used to inject their own prompt block, ranked by their
+own score with no shared budget — the same fact could arrive twice. With the `memoryEngine` switch on
+(`/api/agent-behavior`, **off** by default) the searchable two are read through `RecallArm`s and fused into ONE
+`<memory_context>` block: arms in parallel → reciprocal rank fusion (k=60) → fold near-identical results → recency
+boost → token budget. Design, eval and the traps: [docs/memory-engine.md](docs/memory-engine.md); plan:
+`plans/261016-1441-hindsight-memory-engine/`; the ideas come from Hindsight (MIT).
+
+Rules for Claude:
+
+- **No model call on this path, ever.** It runs on every chat turn and must never fail one: an arm that errors or
+  times out is reported in `Recalled::arms` and costs only its own hits. LLM work (fact extraction, consolidation)
+  belongs off the request path.
+- **`MEMORY.md` is not an arm.** It is pinned context — standing instructions — and a query-dependent retrieval could
+  omit them. The `<memory>` block keeps loading it verbatim.
+- **The engine reads the stores the user left on.** `ArmSelection` is `memoryRecall` (notes) and `preCognitive`
+  (graph); turning the engine on must never read a store those switches turned off.
+- **`engine::legacy` is the old behaviour and the eval baseline — keep it behaving identically.** It is the former
+  `cognitive_pre_retrieval`/`curated_pre_retrieval` bodies taking their store as an argument. Both it and
+  `CuratedArm` go through `arms::curated_candidates`, the one place the curated filters live (index, daily logs,
+  today's file, another chat's notes). Change a filter there, not in a copy.
+- **Spreading activation seeds by vector only.** With no embedding provider (the default) `preCognitive` injects
+  nothing; `CognitiveArm` falls back to hybrid/keyword so the graph's text is still reachable. Do not "fix" the
+  legacy path by making `graph_hits` fall back — that changes the baseline the engine is measured against.
+- **Budgets count words** (`chunker::estimate_tokens`), not model tokens. Quote them as such.
+- **Stored text is data.** `format::render` neutralises the closing wrapper tag in every header and body; any new
+  field that reaches the block goes through `defang`.
+- **Run the eval after touching ranking**: `cargo test --lib memory::engine::eval -- --nocapture`. Its gate (answers
+  ≥ old blocks, repeats ≤ old blocks, no leak from another chat) is the non-regression bar.
+
 ## Waiting on long jobs: watch mode (`src/scheduler/watch.rs`)
 
 An agent that delegated to something slow had no way to come back on its own. It

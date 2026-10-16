@@ -328,6 +328,11 @@ pub struct MemoryConfig {
     pub search_max_results: u32,
     pub search_min_score: f32,
     pub pre_retrieval: bool,
+    /// Token budget for the unified `<memory_context>` block, in estimated
+    /// tokens (words — `chunker::estimate_tokens`), so real model tokens run
+    /// higher. Only read when the `memoryEngine` switch is on.
+    /// `SENCLAW_MEMORY_ENGINE_MAX_TOKENS`.
+    pub engine_max_tokens: u32,
     /// Auto-cognify each user message into the cognitive graph on arrival.
     /// Fires in a background `tokio::spawn` so it never adds latency to the
     /// agent's reply. When disabled, the cognitive graph only grows via
@@ -764,6 +769,8 @@ impl Config {
                 search_max_results: env_int("SENCLAW_SEARCH_MAX_RESULTS", 5),
                 search_min_score: env_int("SENCLAW_SEARCH_MIN_SCORE", 0.5_f32),
                 pre_retrieval: env_bool("SENCLAW_PRE_RETRIEVAL", false),
+                // At least 50: below that the packer would return one item at most.
+                engine_max_tokens: env_int::<u32>("SENCLAW_MEMORY_ENGINE_MAX_TOKENS", 600).max(50),
                 cognitive_reflection: env_bool("SENCLAW_COGNITIVE_REFLECTION", true),
             },
             cognitive: CognitiveConfig {

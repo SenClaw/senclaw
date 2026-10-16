@@ -249,6 +249,9 @@ pub struct MemoryMeta {
     pub mem_type: String,
     /// Chat JID (or legacy agent folder) that authored this memory.
     pub origin_session_id: String,
+    /// Unix seconds (UTC midnight) of the `createdAt` date, when the file
+    /// carries a parseable absolute one. Lets recall weigh how old a note is.
+    pub created_at: Option<i64>,
 }
 
 /// Parse the YAML frontmatter of a curated memory file. Returns `None` if the file has
@@ -263,9 +266,12 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
     let mut description = String::new();
     let mut mem_type = String::new();
     let mut origin_session_id = String::new();
+    let mut created_at = None;
     for line in front.lines() {
         let t = line.trim();
-        if let Some(v) = t.strip_prefix("name:") {
+        if let Some(v) = t.strip_prefix("createdAt:") {
+            created_at = parse_created_at(&unquote(v.trim()));
+        } else if let Some(v) = t.strip_prefix("name:") {
             name = unquote(v.trim());
         } else if let Some(v) = t.strip_prefix("description:") {
             description = unquote(v.trim());
@@ -284,7 +290,31 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
         description,
         mem_type,
         origin_session_id,
+        created_at,
     })
+}
+
+/// `YYYY-MM-DD` (the only form `save` writes) or a longer ISO timestamp whose
+/// first ten characters are that date → unix seconds at UTC midnight.
+fn parse_created_at(raw: &str) -> Option<i64> {
+    let date = raw.get(..10)?;
+    let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()?;
+    Some(day.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
+}
+
+/// `YYYY-MM-DD.md` daily-log filename check (any date, not just today).
+pub fn is_daily_log_name(file_name: &str) -> bool {
+    let Some(stem) = file_name.strip_suffix(".md") else {
+        return false;
+    };
+    let b = stem.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && stem
+            .chars()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 4 | 7) || c.is_ascii_digit())
 }
 
 /// Rank a curated memory for recall into `chat_jid`.
@@ -328,6 +358,45 @@ mod tests {
         p.push(format!("curated-test-{}", std::process::id()));
         // fresh per-test subdir via a counter-ish nonce from the call site
         p
+    }
+
+    #[test]
+    fn a_saved_note_reports_its_created_date_as_midnight_utc() {
+        let base = tmp().join("created-at");
+        let _ = fs::remove_dir_all(&base);
+        save(
+            &base,
+            "dated note",
+            "hook",
+            "body",
+            "project",
+            None,
+            "group-1",
+            "2026-07-01",
+            false,
+        )
+        .unwrap();
+        let meta = read_meta(&base.join("memory/dated-note.md")).unwrap();
+        // 2026-07-01T00:00:00Z
+        assert_eq!(meta.created_at, Some(1_782_864_000));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_created_date_that_does_not_parse_is_unknown_not_an_error() {
+        assert_eq!(parse_created_at("2026-07-01T10:20:30Z"), Some(1_782_864_000));
+        assert_eq!(parse_created_at("yesterday"), None);
+        assert_eq!(parse_created_at("2026-13-45"), None);
+        assert_eq!(parse_created_at(""), None);
+    }
+
+    #[test]
+    fn daily_logs_are_told_apart_from_curated_notes() {
+        assert!(is_daily_log_name("2026-10-16.md"));
+        assert!(!is_daily_log_name("2026-10-16.txt"));
+        assert!(!is_daily_log_name("daemon-ports.md"));
+        assert!(!is_daily_log_name("MEMORY.md"));
+        assert!(!is_daily_log_name("2026-10-1x.md"));
     }
 
     #[test]

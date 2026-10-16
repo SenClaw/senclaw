@@ -7,6 +7,7 @@ pub mod curated;
 pub mod daily_logger;
 pub mod embedding;
 pub mod embedding_providers;
+pub mod engine;
 pub mod fts_search;
 pub mod manager;
 pub mod query_rewrite;

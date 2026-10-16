@@ -25,9 +25,10 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
 
 use crate::gateway::group_manager::{
-    get_after_process_enabled, get_memory_recall_enabled, get_pre_cognitive_enabled,
-    get_pre_trigger_skill_enabled, save_after_process_enabled, save_memory_recall_enabled,
-    save_pre_cognitive_enabled, save_pre_trigger_skill_enabled,
+    get_after_process_enabled, get_memory_engine_enabled, get_memory_recall_enabled,
+    get_pre_cognitive_enabled, get_pre_trigger_skill_enabled, save_after_process_enabled,
+    save_memory_engine_enabled, save_memory_recall_enabled, save_pre_cognitive_enabled,
+    save_pre_trigger_skill_enabled,
 };
 
 use super::core::{AppError, UiState};
@@ -39,6 +40,7 @@ fn current(s: &UiState) -> serde_json::Value {
         "preCognitive": get_pre_cognitive_enabled(path),
         "afterProcess": get_after_process_enabled(path),
         "memoryRecall": get_memory_recall_enabled(path),
+        "memoryEngine": get_memory_engine_enabled(path),
     })
 }
 
@@ -58,6 +60,8 @@ pub(crate) struct AgentBehaviorBody {
     after_process: Option<bool>,
     #[serde(rename = "memoryRecall")]
     memory_recall: Option<bool>,
+    #[serde(rename = "memoryEngine")]
+    memory_engine: Option<bool>,
 }
 
 pub(crate) async fn agent_behavior_set(
@@ -79,6 +83,10 @@ pub(crate) async fn agent_behavior_set(
     }
     if let Some(v) = body.memory_recall {
         save_memory_recall_enabled(path, v)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(v) = body.memory_engine {
+        save_memory_engine_enabled(path, v)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     Ok(Json(current(&s)))
