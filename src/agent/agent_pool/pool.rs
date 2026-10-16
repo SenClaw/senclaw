@@ -1858,6 +1858,7 @@ impl AgentPool {
                     folder: group.folder.clone(),
                     chat_jid: jid.to_string(),
                     limit: max_results,
+                    now: chrono::Utc::now().timestamp(),
                 };
                 let cfg = crate::memory::engine::RecallConfig {
                     max_tokens: engine_max_tokens,
@@ -1866,6 +1867,7 @@ impl AgentPool {
                 let selection = crate::memory::engine::ArmSelection {
                     curated: do_recall,
                     cognitive: do_cognitive,
+                    facts: true,
                 };
                 (
                     String::new(),

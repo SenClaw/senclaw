@@ -6,8 +6,9 @@
 //! with no shared budget — so the same fact could arrive twice and a long
 //! block starved a short, better one.
 //!
-//! The engine reads the searchable stores through [`RecallArm`]s and turns
-//! their answers into one block:
+//! The engine reads the searchable stores — notes, the graph, and the fact
+//! store ([`facts`]) — through [`RecallArm`]s and turns their answers into one
+//! block:
 //!
 //! ```text
 //! arms (parallel) → reciprocal rank fusion → fold duplicates
@@ -26,6 +27,7 @@
 pub mod arms;
 pub mod boost;
 pub mod budget;
+pub mod facts;
 pub mod format;
 pub mod fusion;
 pub mod legacy;
@@ -50,6 +52,9 @@ pub use types::{ArmStat, Hit, Item, RecallQuery, Recalled};
 pub struct ArmSelection {
     pub curated: bool,
     pub cognitive: bool,
+    /// The fact store. Not tied to an older switch: facts exist only because
+    /// the engine itself was on when they were retained.
+    pub facts: bool,
 }
 
 /// The arms for the stores that are up in this process.
@@ -63,6 +68,14 @@ pub fn default_arms(selection: ArmSelection) -> Vec<Arc<dyn RecallArm>> {
     if selection.cognitive {
         if let Some(sys) = crate::memory::cognitive::try_get_instance() {
             arms.push(Arc::new(CognitiveArm::new(sys)));
+        }
+    }
+    if selection.facts {
+        if let Some(engine) = facts::instance() {
+            arms.push(Arc::new(facts::SemanticArm(Arc::clone(&engine))));
+            arms.push(Arc::new(facts::KeywordArm(Arc::clone(&engine))));
+            arms.push(Arc::new(facts::GraphArm(Arc::clone(&engine))));
+            arms.push(Arc::new(facts::TemporalArm(engine)));
         }
     }
     arms

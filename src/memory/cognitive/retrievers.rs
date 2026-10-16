@@ -29,7 +29,7 @@ use crate::memory::tokenizer::tokenize_optimized;
 /// same pipeline as `memory::fts_search`: rewrite → tokenize → expand → strip
 /// FTS metacharacters → OR-join. Returns `None` when nothing usable remains
 /// (caller treats that as "no FTS hits").
-fn build_fts_match(query: &str) -> Option<String> {
+pub(crate) fn build_fts_match(query: &str) -> Option<String> {
     let rewritten = smart_rewrite_query(query);
     let tokens = tokenize_optimized(&rewritten, true);
     if tokens.is_empty() {

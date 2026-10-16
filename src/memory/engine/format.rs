@@ -1,6 +1,7 @@
 //! The one prompt block unified recall produces.
 
 use super::arms::{COGNITIVE, CURATED};
+use super::facts::FACTS;
 use super::types::Item;
 
 /// Render recalled items as a single numbered block, or an empty string when
@@ -49,6 +50,7 @@ fn label(arm: &str) -> &str {
     match arm {
         CURATED => "note",
         COGNITIVE => "knowledge",
+        FACTS => "fact",
         other => other,
     }
 }

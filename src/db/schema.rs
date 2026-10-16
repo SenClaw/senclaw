@@ -1086,5 +1086,10 @@ pub(crate) fn apply_memory_tables(conn: &mut Connection, config: &Config) -> Res
             "[DB] applyMemorySchema failed, memory search will be unavailable"
         );
     }
+    // The fact store's tables: additive, created whether or not the engine is
+    // on, so switching it on later needs no migration.
+    if let Err(e) = crate::memory::engine::facts::store::apply_fact_schema(conn) {
+        tracing::error!(error = %e, "[DB] fact store schema failed, fact recall will be unavailable");
+    }
     Ok(())
 }

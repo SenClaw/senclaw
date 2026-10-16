@@ -39,6 +39,24 @@ Không gọi model nào.
    (9 note, 8 chunk, DB trong bộ nhớ) — **không ngoại suy lên kho thật**.
 4. **Không rò rỉ** ở cả hai bên: note của chat khác không bao giờ xuất hiện.
 
+## Kho fact (P2)
+
+Cùng harness, thêm 5 cửa sổ hội thoại đi qua **retain thật** (quét secret → parse → embed → dedupe → lưu → liên kết; chỉ câu trả lời
+của model trích xuất là dựng sẵn) và 6 câu hỏi mà note với đồ thị không trả lời được. So engine không và có 4 arm fact.
+
+| chế độ | không kho fact | có kho fact |
+|---|---|---|
+| có vector | 0/6 | **6/6** |
+| không embedding provider | 0/6 | **6/6** |
+
+Mỗi arm có đóng góp riêng (chạy từng arm đơn lẻ, `the_graph_and_temporal_arms_each_find_what_keyword_search_cannot`):
+- `entity-hop-vi` ("Người phụ trách Falcon đang ở đâu?"): câu trả lời "Lan nghỉ phép…" không chung từ nào với câu hỏi; **graph** trả lời (đi qua thực thể Lan), **keyword không**.
+- `yesterday-vi` ("Hôm qua tôi đã làm gì?"): fact ghi "2026-10-15"; **temporal** trả lời, **keyword không**. Với câu không nêu thời gian, arm temporal im lặng.
+- Arm **semantic** im lặng khi không có embedding model và trả lời khi có.
+- Secret `sk-proj-…` gõ cạnh ngày triển khai Orion: ngày được giữ, khoá **không** xuất hiện trong prompt gửi model trích xuất, trong ngữ cảnh, hay kho.
+
+Giới hạn riêng của phần này: câu trả lời của model trích xuất là dựng sẵn, nên eval chứng minh *đường ống* (lưu, liên kết, tìm, ghép) chứ **không** chứng minh một model nhỏ thật trích xuất đúng từ tiếng Việt. Câu hỏi của 6 case được viết sau khi biết fact nào có trong kho — đây là cổng không-thoái-lui, không phải thước đo tổng quát.
+
 ## Giới hạn / điều chưa đo
 
 - `compiler-machine-hops` vẫn trượt ở chế độ keyword-only: hop qua thực thể cần đồ thị đi bộ mà keyword không có. Engine không sửa được cái này.
@@ -59,3 +77,4 @@ Không gọi model nào.
 1. Thêm ngưỡng liên quan tuyệt đối (abstain) ở P1.x hay đợi P2 khi đã có điểm thật từ fact store?
 2. Có muốn một tập eval khó hơn (nhiều nhiễu, ngân sách chặt, câu nhiều bước) trước P2, để P2 có gì chứng minh?
 3. Đồ thị của bản cài thật có embedding provider không? Nếu không, `preCognitive` hiện đang tiêm rỗng cho người dùng đó.
+4. Chạy extractor thật (model local nhỏ) trên vài cửa sổ hội thoại tiếng Việt thật để biết tỉ lệ fact dùng được trước khi bật `memoryEngine` thường trực?

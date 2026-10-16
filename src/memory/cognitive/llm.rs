@@ -75,11 +75,12 @@ pub(crate) struct RawTripletEnvelope {
 }
 
 /// Best-effort JSON extraction — handles models that wrap the JSON in
-/// markdown fences or prose. Returns `Err` if no plausible JSON envelope is
-/// found.
-pub(crate) fn parse_triplets(raw: &str) -> Result<Vec<RawTriplet>> {
-    // Strip ```json fences if present.
+/// markdown fences or prose. Returns the slice from the first `{` to the last
+/// `}` (after stripping a leading code fence); when there is no such pair the
+/// trimmed body is returned and the caller's parse reports the failure.
+pub(crate) fn json_object_slice(raw: &str) -> &str {
     let trimmed = raw.trim();
+    // Strip ```json fences if present.
     let body = if let Some(rest) = trimmed.strip_prefix("```json") {
         rest.trim_start_matches('\n')
             .trim_end_matches("```")
@@ -93,15 +94,19 @@ pub(crate) fn parse_triplets(raw: &str) -> Result<Vec<RawTriplet>> {
     };
 
     // Find the first `{` ... last `}` to allow models that prepend prose.
-    let start = body.find('{');
-    let end = body.rfind('}');
-    let json_slice = match (start, end) {
+    match (body.find('{'), body.rfind('}')) {
         (Some(s), Some(e)) if e >= s => &body[s..=e],
         _ => body,
-    };
+    }
+}
 
-    let env: RawTripletEnvelope = serde_json::from_str(json_slice)
-        .map_err(|e| anyhow::anyhow!("triplet JSON parse failed: {e} — body was: {body}"))?;
+/// Best-effort triplet extraction from a model reply. Returns `Err` if no
+/// plausible JSON envelope is found.
+pub(crate) fn parse_triplets(raw: &str) -> Result<Vec<RawTriplet>> {
+    let json_slice = json_object_slice(raw);
+    let env: RawTripletEnvelope = serde_json::from_str(json_slice).map_err(|e| {
+        anyhow::anyhow!("triplet JSON parse failed: {e} — body was: {}", raw.trim())
+    })?;
     Ok(env.triplets)
 }
 

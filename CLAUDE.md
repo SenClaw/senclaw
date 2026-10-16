@@ -614,9 +614,10 @@ Full guide: [docs/zen-patterns.md](docs/zen-patterns.md).
 
 Notes (`memory/*.md`), the cognitive graph and `MEMORY.md` each used to inject their own prompt block, ranked by their
 own score with no shared budget — the same fact could arrive twice. With the `memoryEngine` switch on
-(`/api/agent-behavior`, **off** by default) the searchable two are read through `RecallArm`s and fused into ONE
+(`/api/agent-behavior`, **off** by default) the searchable stores are read through `RecallArm`s and fused into ONE
 `<memory_context>` block: arms in parallel → reciprocal rank fusion (k=60) → fold near-identical results → recency
-boost → token budget. Design, eval and the traps: [docs/memory-engine.md](docs/memory-engine.md); plan:
+boost → token budget. A third store, the **fact store** (`engine/facts/`: dated, self-contained statements a model
+extracts from conversation windows), feeds four more arms and is filled by the reflection flush. Design, eval and the traps: [docs/memory-engine.md](docs/memory-engine.md); plan:
 `plans/261016-1441-hindsight-memory-engine/`; the ideas come from Hindsight (MIT).
 
 Rules for Claude:
@@ -638,6 +639,22 @@ Rules for Claude:
 - **Budgets count words** (`chunker::estimate_tokens`), not model tokens. Quote them as such.
 - **Stored text is data.** `format::render` neutralises the closing wrapper tag in every header and body; any new
   field that reaches the block goes through `defang`.
+- **Fusion identity is `(hit.arm, hit.key)` across ALL lists.** The four fact arms are four strategies over one store, so
+  they all emit `arm = "facts"` and a fact two of them find is one result with two votes. A new arm over an existing store
+  must reuse that store's label or its votes never merge; `Item::sources` names the *strategy*.
+- **Facts are written off the request path and read on it without a model.** Extraction is one model call per reflection
+  chunk (slot `active_cognitive_id`), run after cognify in `reflect_window_text`; every failure is counted in
+  `RetainReport` and logged, never raised. The fact store runs beside the triplets, not instead of them.
+- **Scrub secrets before anything reads the window.** With the engine on, `reflect_window_text` runs `defense::scrub` once
+  so neither extraction request nor either store sees a pasted key; `retain` scrubs again (idempotent). A new consumer of a
+  window goes through `scrub` first. It removes credentials and card numbers only — never emails, phones or names.
+- **Dates are calendar dates stored as UTC midnights, and a coarse date covers its whole period** (`"2026-03"` is the
+  month, not 1 March). `temporal::parse_window` resolves "yesterday" against `RecallQuery::now` in the machine's
+  timezone; tests use noon UTC so the date is the same in every timezone.
+- **An entity shared by more than 500 facts is a hub** (`HUB_ENTITY_FACTS`) and graph expansion skips it: following
+  "user" joins everything to everything.
+- **Facts are scoped by agent folder, not by chat** (the reflection window carries no chat jid). Unlike curated notes,
+  nothing stops a fact from one chat reaching another chat of the same folder.
 - **Run the eval after touching ranking**: `cargo test --lib memory::engine::eval -- --nocapture`. Its gate (answers
   ≥ old blocks, repeats ≤ old blocks, no leak from another chat) is the non-regression bar.
 

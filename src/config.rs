@@ -333,6 +333,12 @@ pub struct MemoryConfig {
     /// higher. Only read when the `memoryEngine` switch is on.
     /// `SENCLAW_MEMORY_ENGINE_MAX_TOKENS`.
     pub engine_max_tokens: u32,
+    /// What to do when a conversation window about to be kept holds a secret
+    /// (API key, token, private key, card number): `redact` (default) replaces
+    /// it with a marker, `block` keeps nothing from that window, `off` keeps
+    /// it as typed. `SENCLAW_MEMORY_ENGINE_DEFENSE`; parsed by
+    /// `engine::facts::defense::Mode::parse`.
+    pub engine_defense: String,
     /// Auto-cognify each user message into the cognitive graph on arrival.
     /// Fires in a background `tokio::spawn` so it never adds latency to the
     /// agent's reply. When disabled, the cognitive graph only grows via
@@ -771,6 +777,7 @@ impl Config {
                 pre_retrieval: env_bool("SENCLAW_PRE_RETRIEVAL", false),
                 // At least 50: below that the packer would return one item at most.
                 engine_max_tokens: env_int::<u32>("SENCLAW_MEMORY_ENGINE_MAX_TOKENS", 600).max(50),
+                engine_defense: env_or("SENCLAW_MEMORY_ENGINE_DEFENSE", "redact"),
                 cognitive_reflection: env_bool("SENCLAW_COGNITIVE_REFLECTION", true),
             },
             cognitive: CognitiveConfig {

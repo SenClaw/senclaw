@@ -1477,6 +1477,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }
     }
 
+    // ===== 1c-bis. Fact store (memory engine) =====
+    // Shares the cognitive layer's embedding model when it has one; without
+    // one, facts are still stored and found by keyword, graph and date.
+    {
+        let embedder = memory::cognitive::try_get_instance()
+            .map(|sys| Arc::clone(&sys.embedder.provider));
+        memory::engine::facts::init(Arc::clone(&db), embedder);
+    }
+
     // ===== 1c. Ensure main agent directory =====
     // Ensure main agent skeleton exists (missing dirs + SOUL.md/MEMORY.md templates),
     // avoiding the case where the user accidentally deletes the main group.

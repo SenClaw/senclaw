@@ -187,5 +187,82 @@
       "must_include": ["rainy"],
       "why": "answer lives only in a graph chunk"
     }
+  ],
+  "fact_windows": [
+    {
+      "match": "sửa lỗi đăng nhập",
+      "text": "User: hôm qua tôi sửa lỗi đăng nhập của app thanh toán\nAssistant: Bạn sửa bằng cách nào?\nUser: xoá cookie cũ rồi cấu hình lại phiên, mất khoảng hai tiếng",
+      "facts": [
+        { "text": "Vào ngày 2026-10-15, người dùng sửa lỗi đăng nhập của app thanh toán bằng cách xoá cookie cũ và cấu hình lại phiên, mất khoảng hai tiếng.", "kind": "world", "when": "2026-10-15", "entities": ["user", "app thanh toán", "lỗi đăng nhập"] }
+      ]
+    },
+    {
+      "match": "Emily chuyển nhà",
+      "text": "User: Emily chuyển nhà rồi\nAssistant: Chuyển đi đâu vậy?\nUser: Huế, hồi tháng 3 năm nay, cô ấy làm ở FPT",
+      "facts": [
+        { "text": "Emily chuyển đến Huế vào tháng 3 năm 2026 và làm việc tại FPT.", "kind": "world", "when": "2026-03", "entities": ["Emily", "Huế", "FPT"] }
+      ]
+    },
+    {
+      "match": "đổi cổng mặc định",
+      "text": "Assistant: Tôi đã đổi cổng mặc định của app thử nghiệm sang 4802 và khởi động lại daemon\nUser: ok cảm ơn",
+      "facts": [
+        { "text": "Trợ lý đã đổi cổng mặc định của app thử nghiệm sang 4802 và khởi động lại daemon.", "kind": "experience", "when": "2026-10-14", "entities": ["app thử nghiệm", "daemon"] }
+      ]
+    },
+    {
+      "match": "dự án Falcon",
+      "text": "User: dự án Falcon do Lan phụ trách\nUser: Lan đang nghỉ phép đến hết tháng 11",
+      "facts": [
+        { "text": "Lan phụ trách dự án Falcon.", "kind": "world", "when": null, "entities": ["Lan", "Falcon"] },
+        { "text": "Lan nghỉ phép đến hết tháng 11 năm 2026.", "kind": "world", "when": "2026-11", "entities": ["Lan"] }
+      ]
+    },
+    {
+      "match": "Orion triển khai",
+      "text": "User: key của tôi là sk-proj-abcdefghijklmnopqrstuvwxyz1234, dùng cho dự án Orion\nUser: nhớ giúp tôi rằng Orion triển khai vào ngày 2026-11-02",
+      "facts": [
+        { "text": "Dự án Orion triển khai vào ngày 2026-11-02.", "kind": "world", "when": "2026-11-02", "entities": ["Orion"] }
+      ]
+    }
+  ],
+  "fact_queries": [
+    {
+      "id": "yesterday-vi",
+      "text": "Hôm qua tôi đã làm gì?",
+      "must_include": ["xoá cookie cũ"],
+      "why": "a time in the question and no word shared with the answer: only the date finds it"
+    },
+    {
+      "id": "person-lookup-vi",
+      "text": "Emily hiện sống ở đâu và làm ở đâu?",
+      "must_include": ["Huế", "FPT"],
+      "why": "a conversation that spans turns and uses 'cô ấy'; the fact names Emily"
+    },
+    {
+      "id": "month-vi",
+      "text": "Tháng 3 có chuyện gì xảy ra?",
+      "must_include": ["Huế"],
+      "why": "the question names only a month"
+    },
+    {
+      "id": "assistant-did-this-week",
+      "text": "Tuần này trợ lý đã đổi gì với app thử nghiệm?",
+      "must_include": ["4802"],
+      "why": "something the assistant itself did, found by the week it happened"
+    },
+    {
+      "id": "entity-hop-vi",
+      "text": "Người phụ trách Falcon đang ở đâu?",
+      "must_include": ["nghỉ phép"],
+      "why": "the answer shares no word with the question; only the entity Lan joins the two facts"
+    },
+    {
+      "id": "secret-in-the-chat",
+      "text": "Khi nào Orion triển khai?",
+      "must_include": ["2026-11-02"],
+      "must_exclude": ["abcdefghijklmnopqrstuvwxyz1234"],
+      "why": "the date is kept and the API key typed beside it never reaches the model or the store"
+    }
   ]
 }

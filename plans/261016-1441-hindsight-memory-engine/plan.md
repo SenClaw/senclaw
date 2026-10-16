@@ -1,6 +1,6 @@
 # Plan: memory engine lấy ý từ Hindsight
 
-Status: P0–P1 done, P2+ pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
+Status: P0–P2 done, P3+ pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
 Nguồn: [research-261016-1441-hindsight-memory-for-senclaw.md](../reports/research-261016-1441-hindsight-memory-for-senclaw.md)
 
 ## Outcome
@@ -24,7 +24,7 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 ## Quyết định của người dùng
 
 1. Kiến trúc A (port Rust trên SQLite) — **đã chọn 2026-10-16**.
-2. Fact extractor thay triplet cho chat hay chạy song song — còn mở, cần trước P2.
+2. Fact extractor thay triplet cho chat hay chạy song song — **tạm chọn chạy song song** (an toàn, đảo ngược được) để P2 đi tiếp; thay hẳn là quyết định sau khi đo trên hội thoại thật.
 3. Chấp nhận rerank runtime hay dừng ở RRF + boost — còn mở, chỉ ảnh hưởng P5.
 
 ## Phases
@@ -33,7 +33,7 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 |---|---|---|---|
 | P0 | Eval + baseline | done | — |
 | P1 | Recall hợp nhất trên store cũ | done | P0 |
-| P2 | Fact store + retain + defense | pending | P1 |
+| P2 | Fact store + retain + defense | done | P1 |
 | P3 | Observation | pending | P2 |
 | P4 | Mental model + directives | pending | P3 |
 | P5 | Reflect 1-lần, rerank, connector, UI, docs | pending | P1–P4 |
@@ -63,6 +63,9 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 - Recall: thêm arm `facts_vec`, `facts_bm25`, `facts_graph`, `facts_temporal` + parser thời gian VN/EN.
 - Xong khi: eval các case thời gian/đa lượt cải thiện; secret trong chat không vào DB.
 - Rủi ro: chất lượng model nhỏ tiếng Việt → đo trước, có fallback bỏ fact lỗi.
+- **Đã làm** (`src/memory/engine/facts/`): `store` (4 bảng `mem_*`), `defense` (quét secret, 3 chế độ), `extract` (prompt + parser chịu lỗi), `retain`, `temporal` (đọc ngày VN/EN), `arms` (semantic / keyword / graph / temporal), `FactEngine` + khởi tạo lúc boot; móc vào `reflect_window_text` (quét secret một lần cho cả triplet lẫn fact). Eval: không fact 0/6 → có fact 6/6 ở cả hai chế độ; arm graph và temporal mỗi cái trả lời một câu mà keyword một mình không trả lời được.
+- **Lệch kế hoạch (có chủ đích)**: (1) thực thể lưu dạng khoá chữ thường trong `mem_fact_entities`, **chưa** liên kết sang `cog_nodes` nên chưa hưởng gộp alias của đồ thị; (2) chưa có liên kết nhân quả (cần model trả thêm trường); (3) `memory_retain` MCP chưa làm — cần model của daemon, MCP chạy tiến trình riêng, đi cùng REST ở P5; (4) chưa backfill từ chunk đồ thị; (5) fact giới hạn theo agent folder chứ chưa theo chat.
+- **Chưa đo**: chất lượng trích xuất của model nhỏ thật trên tiếng Việt (eval dùng câu trả lời dựng sẵn). Cần chạy thử một lần trên máy thật trước khi bật `memoryEngine` thường trực.
 
 ### P3 — Observation
 - Mới: `engine/observe.rs`, `mem_obs_sources`, `mem_obs_history`; prompt port `_PROCESSING_RULES` (ghi attribution MIT), id ngắn `O#`/`F#`, validate op, fallback không-merge, `consolidated_at` để thử lại.

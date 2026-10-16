@@ -25,9 +25,6 @@ pub struct RecallConfig {
     pub arm_timeout: Duration,
     /// Overlap at which two results are one thing said twice.
     pub duplicate_overlap: f64,
-    /// Unix seconds "now" for the recency boost; injectable so a test is
-    /// deterministic.
-    pub now: i64,
 }
 
 impl Default for RecallConfig {
@@ -36,7 +33,6 @@ impl Default for RecallConfig {
             max_tokens: 600,
             arm_timeout: Duration::from_secs(3),
             duplicate_overlap: DEFAULT_DUPLICATE_OVERLAP,
-            now: chrono::Utc::now().timestamp(),
         }
     }
 }
@@ -53,15 +49,15 @@ pub async fn recall(
     .await;
 
     let mut stats = Vec::with_capacity(runs.len());
-    let mut lists: Vec<Vec<Hit>> = Vec::with_capacity(runs.len());
+    let mut lists: Vec<(&'static str, Vec<Hit>)> = Vec::with_capacity(runs.len());
     for (stat, hits) in runs {
+        lists.push((stat.arm, hits));
         stats.push(stat);
-        lists.push(hits);
     }
 
     let fused = reciprocal_rank_fusion(&lists);
     let (fused, merged_duplicates) = merge_near_duplicates(fused, cfg.duplicate_overlap);
-    let scored = boost::score(fused, cfg.now);
+    let scored = boost::score(fused, query.now);
     let (items, dropped_by_budget) = budget::pack(scored, cfg.max_tokens);
     let tokens = items.iter().map(|i| i.tokens).sum();
 
@@ -183,6 +179,7 @@ mod tests {
             folder: "f".into(),
             chat_jid: "j".into(),
             limit: 5,
+            now: 0,
         }
     }
 

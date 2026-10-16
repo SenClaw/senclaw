@@ -28,6 +28,10 @@ pub struct RecallQuery {
     pub chat_jid: String,
     /// How many results each arm should hand to fusion.
     pub limit: usize,
+    /// Unix seconds "now": the recency boost measures age from it and a
+    /// phrase like "yesterday" resolves against it. A field rather than a
+    /// clock read so a test is deterministic.
+    pub now: i64,
 }
 
 /// A fused, scored, token-counted result.

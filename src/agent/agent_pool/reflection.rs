@@ -140,9 +140,13 @@ async fn flush_window(folder: &str, generation: u64, forced: bool, cooldown: Dur
     reflect_window_text(text, folder.to_string()).await;
 }
 
-/// Cognify one flushed conversation window. Mirrors the old per-message
-/// `cognitive_reflect`, with the size gates applied to the whole window:
-/// enough substance overall, and not a lone unanswered question.
+/// Process one flushed conversation window: extract triplets into the graph,
+/// and — when the memory engine is on — facts into the fact store.
+///
+/// The engine's secret scrub runs first, once, so neither extraction request
+/// nor either store ever sees an API key a user pasted into the chat. Mirrors
+/// the old per-message `cognitive_reflect`, with the size gates applied to the
+/// whole window: enough substance overall, and not a lone unanswered question.
 async fn reflect_window_text(text: String, group_folder: String) {
     let cfg = crate::config::Config::from_env();
     if !cfg.cognitive.enabled {
@@ -151,6 +155,32 @@ async fn reflect_window_text(text: String, group_folder: String) {
     if !should_reflect(&text, cfg.cognitive.reflect_min_chars, usize::MAX) {
         return;
     }
+    let engine_on =
+        crate::gateway::group_manager::get_memory_engine_enabled(&cfg.paths.global_config_path);
+    let text = if engine_on {
+        let mode = crate::memory::engine::facts::defense::Mode::parse(&cfg.memory.engine_defense);
+        match crate::memory::engine::facts::defense::scrub(&text, mode) {
+            crate::memory::engine::facts::defense::Verdict::Clean(t) => t,
+            crate::memory::engine::facts::defense::Verdict::Redacted { text, kinds } => {
+                tracing::info!(?kinds, "[reflection] secrets removed from the window");
+                text
+            }
+            crate::memory::engine::facts::defense::Verdict::Blocked { kinds } => {
+                tracing::info!(?kinds, "[reflection] window held a secret; skipped");
+                return;
+            }
+        }
+    } else {
+        text
+    };
+
+    cognify_window(&text, &group_folder).await;
+    if engine_on {
+        crate::memory::engine::facts::retain_window(&cfg, &group_folder, &text).await;
+    }
+}
+
+async fn cognify_window(text: &str, group_folder: &str) {
     let Some(sys) = crate::memory::cognitive::try_get_instance() else {
         return;
     };
@@ -159,12 +189,12 @@ async fn reflect_window_text(text: String, group_folder: String) {
     }
     let opts = crate::memory::cognitive::CognifyOptions {
         node_sets: vec![crate::memory::cognitive::NodeSet::group(
-            &group_folder,
+            group_folder,
             "default_memory",
         )],
         ..Default::default()
     };
-    match sys.cognify(&text, "reflection", &opts).await {
+    match sys.cognify(text, "reflection", &opts).await {
         Ok(r) => {
             if r.entities_added > 0 || r.edges_added > 0 {
                 tracing::info!(
