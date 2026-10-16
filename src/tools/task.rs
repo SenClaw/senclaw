@@ -331,6 +331,9 @@ impl Tool for TaskTool {
             // scratch context, not the main loop a user watches — no status
             // line for them.
             agent_status: false,
+            // A subagent works from the brief it was given, not the parent
+            // turn's recall.
+            turn_context: None,
             // Subagents spawned via the Task tool run as plain Agent mode —
             // they're best-effort one-shot helpers, not Plan/Dag-style
             // workflows that need task_done enforcement.

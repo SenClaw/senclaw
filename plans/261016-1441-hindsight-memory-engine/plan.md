@@ -1,6 +1,6 @@
 # Plan: memory engine lấy ý từ Hindsight
 
-Status: P0–P2 done, P3+ pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
+Status: P0–P2 done and the old flow replaced, P3+ pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
 Nguồn: [research-261016-1441-hindsight-memory-for-senclaw.md](../reports/research-261016-1441-hindsight-memory-for-senclaw.md)
 
 ## Outcome
@@ -24,7 +24,7 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 ## Quyết định của người dùng
 
 1. Kiến trúc A (port Rust trên SQLite) — **đã chọn 2026-10-16**.
-2. Fact extractor thay triplet cho chat hay chạy song song — **tạm chọn chạy song song** (an toàn, đảo ngược được) để P2 đi tiếp; thay hẳn là quyết định sau khi đo trên hội thoại thật.
+2. Fact extractor thay triplet cho chat hay chạy song song — **đã chọn thay hẳn (2026-10-16, người dùng: "thay thế hoàn toàn luồng cũ")**. Triplet không còn được nuôi từ chat; đồ thị chỉ còn upload / `cog_add` / SOUL.
 3. Chấp nhận rerank runtime hay dừng ở RRF + boost — còn mở, chỉ ảnh hưởng P5.
 
 ## Phases
@@ -87,3 +87,17 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 - Tên MCP: server `senclaw-memory`, tiền tố `memory_`; trong agent hiện là `mcp__core__memory_*`.
 - Route axum 0.7 dùng `:name`.
 - Không đặt mã phase/mã audit vào tên test, comment, commit.
+
+## Thay luồng cũ (2026-10-16)
+
+Người dùng chọn thay hoàn toàn luồng cũ và tối ưu. Đã làm:
+
+- **Đọc**: bỏ công tắc `memoryEngine`; `pre_retrieval` luôn là engine. Bỏ `cognitive_pre_retrieval` / `curated_pre_retrieval`; `engine::legacy` chỉ còn trong test làm mốc.
+  Khối recall đi vào **ngữ cảnh của lượt** (`set_turn_context` → `outgoing_messages`), không dán vào tin nhắn người dùng nên không nằm lại trong lịch sử.
+- **Ghi**: reflection chỉ còn trích xuất fact (một lần gọi/cửa sổ, trước là triplet + fact); compaction retain tóm tắt thành fact, bỏ `memory/consolidate.rs`
+  (chưng cất thành note) và phần `mark_dirty` cho daily log đã tắt từ lâu.
+- **Hiệu quả**: hai công tắc đọc một lần (trước: mỗi công tắc một lần đọc + parse cả file settings); câu hỏi embed một lần cho cả semantic và graph.
+- **Quyền kiểm soát**: `GET /api/memory/facts`, `DELETE /api/memory/facts/:id` — vì fact được rút ra tự động nên phải xem và xoá được.
+- **Đổi hành vi cần biết**: chat không còn nuôi đồ thị (trang Knowledge chỉ còn upload / `cog_add` / SOUL); `SENCLAW_COGNITIVE_ENABLED=false` không còn tắt trích xuất hội thoại
+  (dùng `SENCLAW_COGNITIVE_REFLECTION=false`); `memoryRecall` giờ chỉ bật/tắt recall note, không còn điều khiển chưng cất khi compaction.
+- **Không đổi, có chủ đích**: profile `USER.md` không do engine ghi (xem CLAUDE.md).

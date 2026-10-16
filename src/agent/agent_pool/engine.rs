@@ -589,6 +589,12 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn set_turn_context(&self, jid: &str, block: Option<String>) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_turn_context(block);
+        }
+    }
+
     fn set_model_override(&self, jid: &str, id: Option<String>) {
         // Remember for lazily created engines.
         match &id {

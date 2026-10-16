@@ -30,6 +30,9 @@ pub mod budget;
 pub mod facts;
 pub mod format;
 pub mod fusion;
+/// The blocks recall used to inject on their own: the baseline the eval
+/// measures the engine against. Not compiled into the daemon.
+#[cfg(test)]
 pub mod legacy;
 pub mod recall;
 pub mod types;
@@ -44,16 +47,14 @@ pub use format::WRAPPER_TAG;
 pub use recall::{recall, RecallConfig};
 pub use types::{ArmStat, Hit, Item, RecallQuery, Recalled};
 
-/// Which stores a turn may read. The engine reuses the user's existing
-/// switches — `memoryRecall` for notes, `preCognitive` for the graph — so
-/// turning it on merges and budgets what was already being injected and never
-/// reads a store the user had switched off.
+/// Which stores a turn may read. Notes follow `memoryRecall` and the graph
+/// follows `preCognitive`, so a store the user switched off is never read.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ArmSelection {
     pub curated: bool,
     pub cognitive: bool,
-    /// The fact store. Not tied to an older switch: facts exist only because
-    /// the engine itself was on when they were retained.
+    /// The fact store. No switch of its own: it is what conversations are
+    /// retained into.
     pub facts: bool,
 }
 

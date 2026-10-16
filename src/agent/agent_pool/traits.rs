@@ -140,6 +140,9 @@ pub trait CoreApi: Send + Sync {
     /// existing core (built from the global `defaults` config before each
     /// turn; `None` = user configured nothing). Default no-op.
     fn set_user_defaults(&self, _jid: &str, _block: Option<String>) {}
+    /// What memory recalled for the turn about to start; shown on every model
+    /// call of the turn and not stored in the conversation. `None` clears it.
+    fn set_turn_context(&self, _jid: &str, _block: Option<String>) {}
 
     /// Set the per-group LLM override for a core. `id` is an entry id in the
     /// global `llmConfigs` list, or `None` to use the globally active model.

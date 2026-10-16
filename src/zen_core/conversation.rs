@@ -250,17 +250,28 @@ fn goal_text(messages: &[Message]) -> String {
 
 /// The message list actually sent to the LLM for one call.
 ///
-/// Identical to `messages` — the same borrow, not even a clone — when
-/// `agent_status` is off: the request must be byte-for-byte what it was
-/// before this feature existed. When on, a full clone with one
-/// `<agent_status>` text block appended to the *last user-role* message
-/// (where tool results already live, per the internal message format — see
-/// `docs/control-plane.md` §4). `messages` itself is never touched, so the
-/// persisted history this function's caller eventually returns, the
-/// trajectory recorder and compaction's input are all unaffected regardless
-/// of this switch.
-fn outgoing_messages<'a>(messages: &'a [Message], agent_status_on: bool, input: &AgentStatusInput) -> Cow<'a, [Message]> {
-    if !agent_status_on {
+/// Identical to `messages` — the same borrow, not even a clone — when there is
+/// nothing to add: the request must then be byte-for-byte what it would have
+/// been without these features. Otherwise a full clone with, appended to the
+/// *last user-role* message (where tool results already live, per the internal
+/// message format — see `docs/control-plane.md` §4):
+///
+/// 1. `turn_context` — what memory recalled for this turn, as one text block;
+/// 2. `<agent_status>`, when `agent_status` is on.
+///
+/// `messages` itself is never touched, so the persisted history this
+/// function's caller eventually returns, the trajectory recorder and
+/// compaction's input are all unaffected. That is the point of the first block:
+/// recall is re-derived from every new question, so keeping last turn's in the
+/// history only re-sends it, and brings compaction forward.
+fn outgoing_messages<'a>(
+    messages: &'a [Message],
+    agent_status_on: bool,
+    input: &AgentStatusInput,
+    turn_context: Option<&str>,
+) -> Cow<'a, [Message]> {
+    let context = turn_context.map(str::trim).filter(|c| !c.is_empty());
+    if !agent_status_on && context.is_none() {
         return Cow::Borrowed(messages);
     }
     // No user-role message to attach to should not happen (the loop always
@@ -270,9 +281,16 @@ fn outgoing_messages<'a>(messages: &'a [Message], agent_status_on: bool, input: 
         return Cow::Borrowed(messages);
     };
     let mut clone = messages.to_vec();
-    clone[idx].message.content.push(ContentBlock::Text {
-        text: context_assembler::render(input),
-    });
+    if let Some(context) = context {
+        clone[idx].message.content.push(ContentBlock::Text {
+            text: context.to_string(),
+        });
+    }
+    if agent_status_on {
+        clone[idx].message.content.push(ContentBlock::Text {
+            text: context_assembler::render(input),
+        });
+    }
     Cow::Owned(clone)
 }
 
@@ -673,6 +691,9 @@ pub struct QueryConfig {
     /// Not affected by `SENCLAW_JEV_OFF`: this is code-computed, not a Jev
     /// call. See [`outgoing_messages`].
     pub agent_status: bool,
+    /// Recalled memory for this turn: appended to the last user-role message of
+    /// each call's CLONE, never to `messages`. See [`outgoing_messages`].
+    pub turn_context: Option<String>,
     /// Per-engine turn-budget override (see [`max_agent_turns`]). `None` = default.
     pub max_turns_override: Option<usize>,
     /// Current agent mode (Agent / Plan / Dag). Drives `task_done` enforcement:
@@ -1242,7 +1263,12 @@ pub async fn query(
             pending_events: 0,
             original_goal: original_goal.clone(),
         };
-        let outgoing = outgoing_messages(&messages, config.agent_status, &status_input);
+        let outgoing = outgoing_messages(
+            &messages,
+            config.agent_status,
+            &status_input,
+            config.turn_context.as_deref(),
+        );
         let llm_call = query_llm::query_llm(
             &config.http_client,
             &outgoing,
@@ -2227,9 +2253,62 @@ mod tests {
         // (d): with the switch off, the request is identical to before —
         // not just equal, the *same borrow*, so there is no clone at all.
         let messages = history_ending_in_tool_result();
-        let out = outgoing_messages(&messages, false, &sample_status_input());
+        let out = outgoing_messages(&messages, false, &sample_status_input(), None);
         assert!(matches!(out, Cow::Borrowed(_)), "off must never clone");
         assert_eq!(out.len(), messages.len());
+    }
+
+    #[test]
+    fn turn_context_alone_adds_one_block_to_the_last_user_message_and_nothing_else() {
+        let messages = history_ending_in_tool_result();
+        let before_len = messages.len();
+        let before_last = messages.last().unwrap().message.content.len();
+        let out = outgoing_messages(
+            &messages,
+            false,
+            &sample_status_input(),
+            Some("<memory_context>\n[1] (fact) 2026-03\nEmily moved to Hue\n</memory_context>"),
+        );
+        assert!(matches!(out, Cow::Owned(_)));
+        assert_eq!(out.len(), before_len, "no message is added, only a block");
+        let last = out.last().unwrap();
+        assert_eq!(last.message.role, "user");
+        assert_eq!(last.message.content.len(), before_last + 1);
+        match last.message.content.last().unwrap() {
+            ContentBlock::Text { text } => assert!(text.contains("Emily moved to Hue")),
+            other => panic!("expected a trailing Text block, got {other:?}"),
+        }
+        // Nothing agent-status-shaped appears unless that switch is on.
+        assert!(!format!("{:?}", out.last().unwrap().message.content).contains("agent_status"));
+    }
+
+    #[test]
+    fn turn_context_never_reaches_the_persisted_history() {
+        // The reason for the whole mechanism: recall is shown to the model on
+        // this call and then gone, so it cannot pile up turn after turn.
+        let messages = history_ending_in_tool_result();
+        let snapshot = format!("{messages:?}");
+        let _ = outgoing_messages(&messages, true, &sample_status_input(), Some("recalled"));
+        assert_eq!(format!("{messages:?}"), snapshot);
+    }
+
+    #[test]
+    fn blank_turn_context_is_no_context_and_costs_no_clone() {
+        let messages = history_ending_in_tool_result();
+        for blank in [None, Some(""), Some("  \n ")] {
+            let out = outgoing_messages(&messages, false, &sample_status_input(), blank);
+            assert!(matches!(out, Cow::Borrowed(_)), "{blank:?} must borrow");
+        }
+    }
+
+    #[test]
+    fn recall_comes_before_the_status_line_when_both_are_on() {
+        let messages = history_ending_in_tool_result();
+        let out = outgoing_messages(&messages, true, &sample_status_input(), Some("recalled text"));
+        let content = &out.last().unwrap().message.content;
+        let n = content.len();
+        assert!(matches!(&content[n - 2], ContentBlock::Text { text } if text == "recalled text"));
+        assert!(matches!(&content[n - 1], ContentBlock::Text { text } if text.starts_with("<agent_status>")));
     }
 
     #[test]
@@ -2237,7 +2316,7 @@ mod tests {
         // (b): the outgoing request carries exactly one trailing status block.
         let messages = history_ending_in_tool_result();
         let before_last_len = messages.last().unwrap().message.content.len();
-        let out = outgoing_messages(&messages, true, &sample_status_input());
+        let out = outgoing_messages(&messages, true, &sample_status_input(), None);
         assert!(matches!(out, Cow::Owned(_)), "on must produce an owned clone");
         let last = out.last().unwrap();
         assert_eq!(last.message.role, "user", "tool results live in the user role");
@@ -2259,7 +2338,7 @@ mod tests {
         // pins the *serialized* equality too, in case that ever changes.
         let messages = history_ending_in_tool_result();
         let before = serde_json::to_string(&messages).unwrap();
-        let _ = outgoing_messages(&messages, true, &sample_status_input());
+        let _ = outgoing_messages(&messages, true, &sample_status_input(), None);
         let after = serde_json::to_string(&messages).unwrap();
         assert_eq!(before, after, "messages must be byte-identical after building either outgoing view");
     }
@@ -2274,7 +2353,7 @@ mod tests {
         let system_prompt = "SYSTEM_PROMPT + tool catalogue v1";
         let before = context_assembler::prefix_hash(system_prompt);
         let messages = history_ending_in_tool_result();
-        let _ = outgoing_messages(&messages, true, &sample_status_input());
+        let _ = outgoing_messages(&messages, true, &sample_status_input(), None);
         let after = context_assembler::prefix_hash(system_prompt);
         assert_eq!(before, after);
     }

@@ -1,8 +1,7 @@
-//! Session-window auto-reflection (P14 v2).
+//! Session-window auto-reflection: the conversation becomes memory.
 //!
-//! Instead of firing one cognify call per user message, turns are buffered
-//! per agent folder into a conversation *window* and flushed as ONE
-//! extraction call when either:
+//! Turns are buffered per agent folder into a conversation *window* and
+//! flushed as ONE fact-extraction call (`memory::engine::facts`) when either:
 //!   * the buffered text reaches `reflect_max_chars` (size flush), or
 //!   * the chat goes quiet for `reflect_window_idle_ms` (idle flush), or
 //!   * `reflect_window_idle_ms == 0` → flush on every push (legacy
@@ -10,14 +9,18 @@
 //!
 //! Why a window instead of per-message calls:
 //!   * Facts that span turns ("SemaClaw deadline khi nào?" → "tháng 8")
-//!     arrive in one prompt, so the extractor has enough context to emit
-//!     the triplet — the old per-message path lost them (the question was
+//!     arrive in one prompt, so the extractor has enough context to state
+//!     them — extracting message by message lost them (the question was
 //!     skipped as a pure question, the answer as too short).
-//!   * Speaker prefixes ("User: …" / "Assistant: …") plus the transcript
-//!     guidance in the cognify SYSTEM_PROMPT let the LLM resolve pronouns
-//!     across turns.
+//!   * Speaker prefixes ("User: …" / "Assistant: …") plus the extraction
+//!     prompt's speaker rules let the model resolve pronouns across turns.
 //!   * One system prompt amortises over several turns — fewer total tokens
 //!     than the same content extracted message-by-message.
+//!
+//! This used to feed the knowledge graph with triplets and, when the memory
+//! engine was on, ran a second extraction for facts. There is one extraction
+//! now: facts. The graph is still filled by uploads, `cog_add` and SOUL
+//! ingest; conversations no longer go into it.
 //!
 //! `reflect_cooldown_ms` is enforced here as the minimum gap between two
 //! flushes of the same window: a flush that comes due too early is
@@ -47,10 +50,10 @@ fn windows() -> &'static Mutex<HashMap<String, Window>> {
 }
 
 /// Buffer one conversation turn for the group's reflection window and
-/// schedule the appropriate flush. Cheap and non-blocking — cognify runs
+/// schedule the appropriate flush. Cheap and non-blocking — extraction runs
 /// on a spawned task, never on the caller's path. Callers gate on the
-/// `memory.cognitive_reflection` toggle; this function gates on the
-/// cognitive master switch + size knobs.
+/// `memory.cognitive_reflection` toggle; the size and idle knobs come from
+/// `cognitive.reflect_*`.
 pub(crate) fn reflect_push(group_folder: &str, speaker: &str, text: &str) {
     // Outside a tokio runtime (unit tests, shutdown) there is nowhere to
     // run the flush — drop silently, reflection is best-effort by design.
@@ -58,9 +61,6 @@ pub(crate) fn reflect_push(group_folder: &str, speaker: &str, text: &str) {
         return;
     };
     let cfg = crate::config::Config::from_env();
-    if !cfg.cognitive.enabled {
-        return;
-    }
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return;
@@ -140,75 +140,15 @@ async fn flush_window(folder: &str, generation: u64, forced: bool, cooldown: Dur
     reflect_window_text(text, folder.to_string()).await;
 }
 
-/// Process one flushed conversation window: extract triplets into the graph,
-/// and — when the memory engine is on — facts into the fact store.
-///
-/// The engine's secret scrub runs first, once, so neither extraction request
-/// nor either store ever sees an API key a user pasted into the chat. Mirrors
-/// the old per-message `cognitive_reflect`, with the size gates applied to the
-/// whole window: enough substance overall, and not a lone unanswered question.
+/// Retain one flushed conversation window as facts, if it has enough
+/// substance: not a lone unanswered question, and long enough overall. The
+/// secret scrub happens inside `retain`, before the text reaches the model.
 async fn reflect_window_text(text: String, group_folder: String) {
     let cfg = crate::config::Config::from_env();
-    if !cfg.cognitive.enabled {
-        return;
-    }
     if !should_reflect(&text, cfg.cognitive.reflect_min_chars, usize::MAX) {
         return;
     }
-    let engine_on =
-        crate::gateway::group_manager::get_memory_engine_enabled(&cfg.paths.global_config_path);
-    let text = if engine_on {
-        let mode = crate::memory::engine::facts::defense::Mode::parse(&cfg.memory.engine_defense);
-        match crate::memory::engine::facts::defense::scrub(&text, mode) {
-            crate::memory::engine::facts::defense::Verdict::Clean(t) => t,
-            crate::memory::engine::facts::defense::Verdict::Redacted { text, kinds } => {
-                tracing::info!(?kinds, "[reflection] secrets removed from the window");
-                text
-            }
-            crate::memory::engine::facts::defense::Verdict::Blocked { kinds } => {
-                tracing::info!(?kinds, "[reflection] window held a secret; skipped");
-                return;
-            }
-        }
-    } else {
-        text
-    };
-
-    cognify_window(&text, &group_folder).await;
-    if engine_on {
-        crate::memory::engine::facts::retain_window(&cfg, &group_folder, &text).await;
-    }
-}
-
-async fn cognify_window(text: &str, group_folder: &str) {
-    let Some(sys) = crate::memory::cognitive::try_get_instance() else {
-        return;
-    };
-    if !sys.is_enabled() {
-        return;
-    }
-    let opts = crate::memory::cognitive::CognifyOptions {
-        node_sets: vec![crate::memory::cognitive::NodeSet::group(
-            group_folder,
-            "default_memory",
-        )],
-        ..Default::default()
-    };
-    match sys.cognify(text, "reflection", &opts).await {
-        Ok(r) => {
-            if r.entities_added > 0 || r.edges_added > 0 {
-                tracing::info!(
-                    chunks_added = r.chunks_added,
-                    entities_added = r.entities_added,
-                    edges_added = r.edges_added,
-                    "[reflection] auto-cognified conversation window"
-                );
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "[reflection] window cognify failed");
-        }
-    }
+    crate::memory::engine::facts::retain_text(&cfg, &group_folder, &text, "reflection").await;
 }
 
 #[cfg(test)]

@@ -161,6 +161,14 @@ thành **node bền vững**. → **Không hook nào bắn ở đây.**
 ([src/agent/agent_pool/pool.rs:3102](../src/agent/agent_pool/pool.rs:3102)) kéo node đó
 trở lại prompt ở lượt sau. → **Không hook nào bắn ở đây.**
 
+> **Cập nhật 2026-10-16 (memory engine):** hai giai đoạn này giờ chỉ còn **một đường mỗi bên** — persistence là `facts::retain_text`
+> ([facts/retain.rs](../src/memory/engine/facts/retain.rs), nguồn: cửa sổ reflection và tóm tắt compaction), replication là
+> `engine::pre_retrieval` → `set_turn_context`. Vẫn **chưa có hook**, nhưng đã có ba lớp giảm thiểu: secret bị quét trước khi tới model
+> (`defense::scrub`); khối recall được bọc `<memory_context>` và `format::defang` vô hiệu chuỗi đóng thẻ trong dữ liệu; system prompt nói rõ
+> nội dung đó là dữ liệu quá khứ, không phải chỉ dẫn. Các mục 2.1–2.3 ở dưới (`PreMemoryWrite`, `PostMemoryRetrieve`, gate retrieval) vẫn
+> chưa làm, nhưng nay mỗi mục có đúng một điểm đặt. Fact phạm vi theo agent folder, không theo chat — một chat nhóm có thể đặt fact mà chat riêng của chủ
+> sau này được nhắc lại (xem [memory-engine.md](memory-engine.md), mục Bẫy).
+
 **Giai đoạn 4 — Propagation.** `send_server::validate_target`
 ([src/mcp/send_server.rs:163](../src/mcp/send_server.rs:163)) cho phép gửi tới **bất kỳ
 group nào đã đăng ký**. Comment trong code:

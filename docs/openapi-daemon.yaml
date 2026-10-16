@@ -5690,6 +5690,46 @@ paths:
       - mcp-servers
       x-handler: mcp_servers_tools
       x-untyped: true
+  /api/memory/facts:
+    get:
+      operationId: get_api_memory_facts
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Facts list
+      tags:
+      - memory
+      x-handler: facts_list
+      x-untyped: true
+  /api/memory/facts/{id}:
+    delete:
+      operationId: delete_api_memory_facts_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Fact forget
+      tags:
+      - memory
+      x-handler: fact_forget
+      x-untyped: true
   /api/oauth/accounts:
     get:
       operationId: get_api_oauth_accounts
@@ -10938,6 +10978,7 @@ tags:
 - name: lsp
 - name: marketplace
 - name: mcp-servers
+- name: memory
 - name: oauth
 - name: openapi.json
 - name: pairings
@@ -10965,5 +11006,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 391
-x-untyped-operations: 481
+x-route-count: 393
+x-untyped-operations: 483

@@ -330,7 +330,7 @@ pub struct MemoryConfig {
     pub pre_retrieval: bool,
     /// Token budget for the unified `<memory_context>` block, in estimated
     /// tokens (words — `chunker::estimate_tokens`), so real model tokens run
-    /// higher. Only read when the `memoryEngine` switch is on.
+    /// higher.
     /// `SENCLAW_MEMORY_ENGINE_MAX_TOKENS`.
     pub engine_max_tokens: u32,
     /// What to do when a conversation window about to be kept holds a secret

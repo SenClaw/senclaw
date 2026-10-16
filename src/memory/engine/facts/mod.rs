@@ -125,13 +125,16 @@ pub fn instance() -> Option<Arc<FactEngine>> {
     INSTANCE.get().cloned()
 }
 
-/// Retain a conversation window into the process-wide engine, with the model
-/// the cognitive layer is configured to use. Does nothing — and says so at
-/// debug level — when the engine is not booted or no model is configured.
-pub async fn retain_window(
+/// Retain text into the process-wide engine, with the model the cognitive
+/// layer is configured to use. `source` says where it came from
+/// (`"reflection"` for a conversation window, `"compaction"` for the summary
+/// that replaces history). Does nothing — and says so at debug level — when
+/// the engine is not booted or no model is configured.
+pub async fn retain_text(
     config: &crate::config::Config,
     bank: &str,
     text: &str,
+    source: &str,
 ) -> Option<RetainReport> {
     let engine = instance()?;
     let Some(llm) = crate::memory::cognitive::create_cognitive_llm(config) else {
@@ -142,7 +145,7 @@ pub async fn retain_window(
     let req = RetainRequest {
         bank,
         text,
-        source: "reflection",
+        source,
         now: chrono::Utc::now().timestamp(),
     };
     Some(retain(&engine, llm.as_ref(), mode, &req).await)
@@ -236,9 +239,11 @@ mod tests {
         // has not booted the fact store (a CLI one-shot, an early reflection).
         assert!(instance().is_none());
         let cfg = Config::from_env();
-        assert!(retain_window(&cfg, "main", "User: a conversation window")
-            .await
-            .is_none());
+        assert!(
+            retain_text(&cfg, "main", "User: a conversation window", "reflection")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]

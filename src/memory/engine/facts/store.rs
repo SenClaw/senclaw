@@ -337,6 +337,32 @@ impl FactStore {
             .with_conn(|c| Ok(c.execute("DELETE FROM mem_facts WHERE id = ?1", params![id])? > 0))
     }
 
+    /// Delete a fact only if it belongs to `bank`. A caller that names a bank
+    /// must not be able to reach another agent's memory by guessing an id.
+    pub fn delete_in_bank(&self, bank: &str, id: &str) -> Result<bool> {
+        self.db.with_conn(|c| {
+            Ok(c.execute(
+                "DELETE FROM mem_facts WHERE id = ?1 AND bank = ?2",
+                params![id, bank],
+            )? > 0)
+        })
+    }
+
+    /// The newest facts of the bank, by when they were last said.
+    pub fn recent(&self, bank: &str, limit: usize) -> Result<Vec<StoredFact>> {
+        self.db.with_conn(|c| {
+            let sql = format!(
+                "SELECT {FACT_COLUMNS} FROM mem_facts f WHERE f.bank = ?1 \
+                 ORDER BY f.mentioned_at DESC, f.created_at DESC, f.id LIMIT ?2"
+            );
+            let mut stmt = c.prepare(&sql)?;
+            let rows = stmt
+                .query_map(params![bank, limit as i64], row_to_fact)?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            hydrate_entities(c, rows)
+        })
+    }
+
     pub fn count(&self, bank: &str) -> Result<usize> {
         self.db.with_conn(|c| {
             Ok(c.query_row(
@@ -705,6 +731,38 @@ mod tests {
             s.insert("b", &fact("Secret plan of agent a", &[])).unwrap(),
             Inserted::New(_)
         ));
+    }
+
+    #[test]
+    fn recent_lists_newest_first_and_only_the_banks_own() {
+        let s = store();
+        for (text, at) in [("oldest", 10), ("newest", 30), ("middle", 20)] {
+            let mut f = fact(text, &[]);
+            f.mentioned_at = at;
+            s.insert("main", &f).unwrap();
+        }
+        s.insert("other", &fact("not mine", &[])).unwrap();
+        let got: Vec<String> = s
+            .recent("main", 10)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
+        assert_eq!(got, ["newest", "middle", "oldest"]);
+        assert_eq!(s.recent("main", 2).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn delete_in_bank_refuses_another_banks_fact() {
+        let s = store();
+        let id = new_id(s.insert("a", &fact("agent a private fact", &[])).unwrap());
+        assert!(
+            !s.delete_in_bank("b", &id).unwrap(),
+            "wrong bank must not delete"
+        );
+        assert_eq!(s.count("a").unwrap(), 1);
+        assert!(s.delete_in_bank("a", &id).unwrap());
+        assert_eq!(s.count("a").unwrap(), 0);
     }
 
     #[test]

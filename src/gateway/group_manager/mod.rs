@@ -26,15 +26,15 @@ pub use dirs::{
     write_soul_md,
 };
 pub use llm::{
+    MemoryReadSwitches,
     get_admin_permissions_config, get_after_process_enabled, get_defaults_config,
-    get_dispatch_enabled, get_memory_engine_enabled, get_memory_recall_enabled,
+    get_dispatch_enabled, get_memory_read_switches, get_memory_recall_enabled,
     get_pre_cognitive_enabled,
     get_pre_trigger_skill_enabled, get_thinking_enabled, load_cognitive_config,
     load_decision_settings, load_embedding_config, load_llm_configs, remove_llm_config,
     save_admin_permissions_config, save_after_process_enabled, save_cognitive_config,
     save_decision_settings, save_defaults_config, save_dispatch_enabled, save_embedding_config,
-    save_llm_config, save_memory_engine_enabled, save_memory_recall_enabled,
-    save_pre_cognitive_enabled,
+    save_llm_config, save_memory_recall_enabled, save_pre_cognitive_enabled,
     save_pre_trigger_skill_enabled, save_thinking_enabled, set_active_cognitive_llm_config,
     set_active_llm_config, set_active_quick_llm_config, set_widget_disabled,
 };

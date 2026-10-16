@@ -78,7 +78,7 @@ Releases are tag-driven (`vX.Y.Z` → `.github/workflows/release.yml` publishes 
 - **`gateway/`** — Message routing, group binding management, trigger/mention detection, command dispatch, WebSocket push events, HTTP/WS UI server
 - **`channels/`** — Telegram (teloxide), Feishu/Lark (REST + WS long-connection), WeChat (iLink long-polling) adapters. QQ was removed on 2026-09-12 (never ported past a stub)
 - **`mcp/`** — MCP servers exposed to agents: admin, dispatch, memory, schedule, send, virtual worker, workspace, local Wiki (git)
-- **`memory/`** — FTS5 full-text search + vector similarity (sqlite-vec, not yet wired in Rust). Chunking, embedding cache, query rewrite, daily log indexing. Providers: OpenAI, OpenRouter, Ollama, local (a GGUF embedding model run by the llama.cpp runtime)
+- **`memory/`** — FTS5 full-text search + vector similarity (sqlite-vec, not yet wired in Rust). Chunking, embedding cache, query rewrite. Providers: OpenAI, OpenRouter, Ollama, local (a GGUF embedding model run by the llama.cpp runtime). `memory/engine/` is the write and read path for what the agent remembers (see "Memory engine")
 - **`scheduler/`** — Cron/interval/once task execution with five context modes: `isolated` (fresh session), `group` (shared chat context), `notify` (push-only), `script` (shell), `script-agent` (shell output fed to agent)
 - **`db/`** — rusqlite wrapper (Mutex-protected connection). Tables: `groups`, `channel_messages` (FIFO), `scheduled_tasks`, `task_run_logs`, `router_state`. Memory tables in `memory::schema`
 - **`wiki/`** — Git-backed knowledge base that converts agent outputs into structured, searchable entries
@@ -610,53 +610,56 @@ Rules for Claude:
 
 Full guide: [docs/zen-patterns.md](docs/zen-patterns.md).
 
-## Unified memory recall (`src/memory/engine/`)
+## Memory engine (`src/memory/engine/`)
 
-Notes (`memory/*.md`), the cognitive graph and `MEMORY.md` each used to inject their own prompt block, ranked by their
-own score with no shared budget — the same fact could arrive twice. With the `memoryEngine` switch on
-(`/api/agent-behavior`, **off** by default) the searchable stores are read through `RecallArm`s and fused into ONE
-`<memory_context>` block: arms in parallel → reciprocal rank fusion (k=60) → fold near-identical results → recency
-boost → token budget. A third store, the **fact store** (`engine/facts/`: dated, self-contained statements a model
-extracts from conversation windows), feeds four more arms and is filled by the reflection flush. Design, eval and the traps: [docs/memory-engine.md](docs/memory-engine.md); plan:
+One write path and one read path; there is no switch and no older flow behind it. Design, the update table for
+memory / profile / context, eval and traps: [docs/memory-engine.md](docs/memory-engine.md); plan:
 `plans/261016-1441-hindsight-memory-engine/`; the ideas come from Hindsight (MIT).
+
+- **Write**: a conversation window (`agent_pool/reflection.rs`) or a compaction summary (`compact:exec` in `pool.rs`) →
+  `facts::retain_text` → scrub secrets → one model call per chunk → store **facts** (dated, self-contained statements) in
+  `mem_*`. Conversations no longer feed the knowledge graph; uploads, `cog_add` and SOUL ingest still do.
+- **Read**: `engine::pre_retrieval` runs arms in parallel — notes (`memoryRecall`), graph (`preCognitive`), and four over the
+  facts — → reciprocal rank fusion → fold near-identical → recency boost → token budget → ONE `<memory_context>` block.
+- **The block is the turn's context, not part of the user's message**: `core_api.set_turn_context(jid, …)` → `ZenEngine` →
+  `QueryConfig::turn_context` → `outgoing_messages` appends it to the last user message of each call's CLONE. It is never
+  stored in the conversation, so recall does not pile up in the history until compaction.
 
 Rules for Claude:
 
-- **No model call on this path, ever.** It runs on every chat turn and must never fail one: an arm that errors or
-  times out is reported in `Recalled::arms` and costs only its own hits. LLM work (fact extraction, consolidation)
-  belongs off the request path.
-- **`MEMORY.md` is not an arm.** It is pinned context — standing instructions — and a query-dependent retrieval could
-  omit them. The `<memory>` block keeps loading it verbatim.
-- **The engine reads the stores the user left on.** `ArmSelection` is `memoryRecall` (notes) and `preCognitive`
-  (graph); turning the engine on must never read a store those switches turned off.
-- **`engine::legacy` is the old behaviour and the eval baseline — keep it behaving identically.** It is the former
-  `cognitive_pre_retrieval`/`curated_pre_retrieval` bodies taking their store as an argument. Both it and
-  `CuratedArm` go through `arms::curated_candidates`, the one place the curated filters live (index, daily logs,
-  today's file, another chat's notes). Change a filter there, not in a copy.
-- **Spreading activation seeds by vector only.** With no embedding provider (the default) `preCognitive` injects
-  nothing; `CognitiveArm` falls back to hybrid/keyword so the graph's text is still reachable. Do not "fix" the
-  legacy path by making `graph_hits` fall back — that changes the baseline the engine is measured against.
-- **Budgets count words** (`chunker::estimate_tokens`), not model tokens. Quote them as such.
-- **Stored text is data.** `format::render` neutralises the closing wrapper tag in every header and body; any new
-  field that reaches the block goes through `defang`.
+- **No model call on the read path, ever.** It runs on every chat turn and must never fail one: an arm that errors or times
+  out is reported in `Recalled::arms` and costs only its own hits. Model work (fact extraction) belongs to the write path.
+- **Always call `set_turn_context`, with `None` when nothing was recalled.** The engine keeps the last value, so skipping the
+  call on an empty turn re-shows the previous turn's recall.
+- **Never splice recall into the user message or the persisted history.** That was the old behaviour and the reason a long
+  chat carried the same few hundred words per turn forever.
+- **`MEMORY.md` is not an arm.** It is pinned context — standing instructions — and a query-dependent retrieval could omit
+  them. It rides in the same turn context, verbatim, when `memory.pre_retrieval` is on.
+- **Notes and the graph are read only when the user left them on** (`ArmSelection` from `get_memory_read_switches`, one
+  read of the settings file for both). The fact store has no switch.
 - **Fusion identity is `(hit.arm, hit.key)` across ALL lists.** The four fact arms are four strategies over one store, so
   they all emit `arm = "facts"` and a fact two of them find is one result with two votes. A new arm over an existing store
-  must reuse that store's label or its votes never merge; `Item::sources` names the *strategy*.
-- **Facts are written off the request path and read on it without a model.** Extraction is one model call per reflection
-  chunk (slot `active_cognitive_id`), run after cognify in `reflect_window_text`; every failure is counted in
-  `RetainReport` and logged, never raised. The fact store runs beside the triplets, not instead of them.
-- **Scrub secrets before anything reads the window.** With the engine on, `reflect_window_text` runs `defense::scrub` once
-  so neither extraction request nor either store sees a pasted key; `retain` scrubs again (idempotent). A new consumer of a
-  window goes through `scrub` first. It removes credentials and card numbers only — never emails, phones or names.
-- **Dates are calendar dates stored as UTC midnights, and a coarse date covers its whole period** (`"2026-03"` is the
-  month, not 1 March). `temporal::parse_window` resolves "yesterday" against `RecallQuery::now` in the machine's
-  timezone; tests use noon UTC so the date is the same in every timezone.
-- **An entity shared by more than 500 facts is a hub** (`HUB_ENTITY_FACTS`) and graph expansion skips it: following
-  "user" joins everything to everything.
-- **Facts are scoped by agent folder, not by chat** (the reflection window carries no chat jid). Unlike curated notes,
-  nothing stops a fact from one chat reaching another chat of the same folder.
-- **Run the eval after touching ranking**: `cargo test --lib memory::engine::eval -- --nocapture`. Its gate (answers
-  ≥ old blocks, repeats ≤ old blocks, no leak from another chat) is the non-regression bar.
+  must reuse that store's label; `Item::sources` names the *strategy*.
+- **Scrub secrets before the model sees the text** — `retain` does it; any new consumer of conversation text goes through
+  `defense::scrub` first. It removes credentials and card numbers only, never emails, phones or names.
+- **Retain never raises.** Every failure is counted in `RetainReport` and logged; a conversation that cannot be extracted is
+  skipped and the chat is unaffected.
+- **Dates are calendar dates stored as UTC midnights, and a coarse date covers its whole period** (`"2026-03"` is the month,
+  not 1 March). `temporal::parse_window` resolves "yesterday" against `RecallQuery::now` in the machine's timezone; tests use
+  noon UTC so the date is the same in every timezone.
+- **An entity shared by more than 500 facts is a hub** (`HUB_ENTITY_FACTS`) and graph expansion skips it.
+- **Facts are scoped by agent folder, not by chat** (the reflection window carries no chat jid). Unlike curated notes, nothing
+  stops a fact from one chat reaching another chat of the same folder.
+- **The profile (`USER.md`) is not written by the engine.** It has tiers and a read-only rule for group chats; writing it from
+  extracted text would let anyone in a group set the owner's standing directives. It changes only through `profile_update` and
+  Settings.
+- **Spreading activation seeds by vector only**: with no embedding provider (the default) the graph's spreading returns
+  nothing, and `CognitiveArm` falls back to hybrid/keyword. Do not make `graph_hits` fall back instead.
+- **Budgets count words** (`chunker::estimate_tokens`), not model tokens.
+- **Stored text is data.** `format::render` neutralises the closing wrapper tag in every header and body; a new field that
+  reaches the block goes through `defang`.
+- **Run the eval after touching ranking or extraction**: `cargo test --lib memory::engine::eval -- --nocapture`. The old
+  three-block flow survives only as `engine::legacy` (`#[cfg(test)]`), the baseline the eval measures against.
 
 ## Waiting on long jobs: watch mode (`src/scheduler/watch.rs`)
 

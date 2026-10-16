@@ -2,6 +2,8 @@
 
 Ngày 2026-10-16 · nhánh `feat/memory-engine` · fixture `evals/memory/cases.json` · code `src/memory/engine/eval.rs`
 
+> **Cập nhật 2026-10-16:** luồng cũ ("khối cũ" trong bảng dưới) đã bị thay hoàn toàn; nó chỉ còn trong test (`engine::legacy`, `#[cfg(test)]`) làm mốc so sánh. Số liệu không đổi.
+
 Tái hiện:
 
 ```bash

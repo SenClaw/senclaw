@@ -93,13 +93,7 @@ pub fn save_after_process_enabled(config_path: &Path, enabled: bool) -> Result<(
 
 // ===== Curated-memory stage toggle (global, user-set) =====
 
-/// Curated-memory stage. Default ON — auto-recall + consolidation after
-/// compaction so session facts survive context drops (Claude-Code-style).
-/// Users can still turn it off in Settings → Agent behavior.
-///
-/// When enabled: (a) history dropped by compaction is consolidated into
-/// curated `memory/*.md` files, and (b) each request injects relevant curated
-/// memories found via hybrid FTS5/vector search.
+/// Curated notes shown to the model each turn. Default ON.
 pub fn get_memory_recall_enabled(config_path: &Path) -> bool {
     load_global_config(config_path)
         .memory_recall
@@ -112,19 +106,25 @@ pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
-/// Unified memory engine. Default OFF: turning it on replaces the
-/// `<cognitive_memory>` and `<memory_recall>` blocks with one
-/// `<memory_context>` block, so it is opt-in like `preCognitive`.
-pub fn get_memory_engine_enabled(config_path: &Path) -> bool {
-    load_global_config(config_path)
-        .memory_engine
-        .unwrap_or(false)
+/// Which searchable stores a turn may read. `Default` (both off) is what a
+/// caller with no settings file gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryReadSwitches {
+    /// Curated notes (`memoryRecall`, default on).
+    pub notes: bool,
+    /// The knowledge graph (`preCognitive`, default off).
+    pub graph: bool,
 }
 
-pub fn save_memory_engine_enabled(config_path: &Path, enabled: bool) -> Result<()> {
-    let mut cfg = load_global_config(config_path);
-    cfg.memory_engine = Some(enabled);
-    save_global_config(config_path, &cfg)
+/// Both read switches from one read of the settings file. The file holds every
+/// LLM config and is parsed whole, so asking for the two switches one by one
+/// costs two parses on every chat turn.
+pub fn get_memory_read_switches(config_path: &Path) -> MemoryReadSwitches {
+    let cfg = load_global_config(config_path);
+    MemoryReadSwitches {
+        notes: cfg.memory_recall.unwrap_or(true),
+        graph: cfg.pre_cognitive.unwrap_or(false),
+    }
 }
 
 // ===== Default flows + widget disable list (global, user-set) =====
@@ -380,42 +380,46 @@ pub fn save_decision_settings(config_path: &Path, s: &crate::decision::settings:
 }
 
 #[cfg(test)]
-mod memory_toggle_tests {
+mod memory_switch_tests {
     use super::*;
 
     #[test]
-    fn the_unified_engine_is_off_until_asked_for_and_independent_of_the_other_switches() {
+    fn with_no_settings_file_notes_are_on_and_the_graph_is_off() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-
-        // Nothing stored: engine off, curated recall on (its documented default).
-        assert!(!get_memory_engine_enabled(&path));
+        // The documented defaults, read from an empty file …
         assert!(get_memory_recall_enabled(&path));
-
-        save_memory_engine_enabled(&path, true).unwrap();
-        assert!(get_memory_engine_enabled(&path));
-        assert!(get_memory_recall_enabled(&path), "turning the engine on must not touch recall");
-
-        // The engine reads the other two switches as "which stores may I read",
-        // so flipping one must leave the engine as it was.
-        save_memory_recall_enabled(&path, false).unwrap();
-        save_pre_cognitive_enabled(&path, true).unwrap();
-        assert!(get_memory_engine_enabled(&path));
-        assert!(!get_memory_recall_enabled(&path));
-        assert!(get_pre_cognitive_enabled(&path));
-
-        save_memory_engine_enabled(&path, false).unwrap();
-        assert!(!get_memory_engine_enabled(&path));
-        assert!(get_pre_cognitive_enabled(&path));
+        assert!(!get_pre_cognitive_enabled(&path));
+        // … and the batch read agrees with the single reads.
+        assert_eq!(
+            get_memory_read_switches(&path),
+            MemoryReadSwitches { notes: true, graph: false }
+        );
     }
 
     #[test]
-    fn the_stored_key_is_the_one_the_agent_behavior_api_documents() {
+    fn the_two_switches_are_independent_and_read_together() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
-        save_memory_engine_enabled(&path, true).unwrap();
-        let raw: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(raw["memoryEngine"], serde_json::json!(true));
+        save_memory_recall_enabled(&path, false).unwrap();
+        save_pre_cognitive_enabled(&path, true).unwrap();
+        assert_eq!(
+            get_memory_read_switches(&path),
+            MemoryReadSwitches { notes: false, graph: true }
+        );
+        save_memory_recall_enabled(&path, true).unwrap();
+        assert_eq!(
+            get_memory_read_switches(&path),
+            MemoryReadSwitches { notes: true, graph: true },
+            "saving one switch must leave the other as it was"
+        );
+    }
+
+    #[test]
+    fn the_caller_without_a_settings_path_reads_nothing_optional() {
+        assert_eq!(
+            MemoryReadSwitches::default(),
+            MemoryReadSwitches { notes: false, graph: false }
+        );
     }
 }

@@ -1976,6 +1976,7 @@ impl ZenEngine {
                     &crate::control_plane::default_config_path(),
                 )
                 .agent_status,
+                turn_context: opts.turn_context.clone(),
                 // Pass through the current agent_mode so the conversation loop
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
@@ -2667,6 +2668,8 @@ until you have carried out the skill's steps.\n\
             session_id,
             enable_cache: false,
             agent_status: false,
+            // Compaction summarises what was said, not what was recalled.
+            turn_context: None,
             agent_mode: opts.agent_mode,
             max_turns_override: None,
             pending_inject: None,
@@ -2694,6 +2697,18 @@ until you have carried out the skill's steps.\n\
     /// configured → the system prompt stays untouched.
     pub fn set_user_defaults(&self, block: Option<String>) {
         self.options.write().unwrap().user_defaults = block;
+    }
+
+    /// Set what was recalled for the turn about to start (`None` clears it).
+    ///
+    /// It rides along on every model call of the turn — appended to the last
+    /// user-role message of a per-call copy — and is NOT written into the
+    /// conversation. Putting it in the persisted user message instead meant
+    /// every turn's recall stayed in the history until compaction: the same
+    /// few hundred words per turn, re-sent forever, for text that is
+    /// re-derived from the next question anyway.
+    pub fn set_turn_context(&self, block: Option<String>) {
+        self.options.write().unwrap().turn_context = block;
     }
 
     /// Hot-update the per-group LLM override for this engine. `id` is an entry id
@@ -3685,6 +3700,25 @@ mod tests {
             "base", "/tmp", None, None, None, None, None, None, None, None, None, None,
         );
         assert!(!without.contains("## User defaults"));
+    }
+
+    #[test]
+    fn turn_context_is_replaced_and_cleared_per_turn() {
+        let e = engine_with_skill_meta("tc1", "s", None, &[]);
+        assert!(e.options.read().unwrap().turn_context.is_none());
+        e.set_turn_context(Some("recalled for turn 1".into()));
+        assert_eq!(
+            e.options.read().unwrap().turn_context.as_deref(),
+            Some("recalled for turn 1")
+        );
+        e.set_turn_context(Some("recalled for turn 2".into()));
+        assert_eq!(
+            e.options.read().unwrap().turn_context.as_deref(),
+            Some("recalled for turn 2"),
+            "a new turn replaces the old context, it does not add to it"
+        );
+        e.set_turn_context(None);
+        assert!(e.options.read().unwrap().turn_context.is_none());
     }
 
     #[test]

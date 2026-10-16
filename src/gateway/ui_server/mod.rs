@@ -32,6 +32,7 @@ mod dispatch_config;
 mod embedding_config;
 mod embedding_models;
 mod failures;
+mod memory_facts;
 mod kits;
 pub(crate) mod llm_config;
 mod lsp;

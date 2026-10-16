@@ -365,26 +365,15 @@ pub(super) struct GlobalConfig {
         rename = "afterProcess"
     )]
     pub(super) after_process: Option<bool>,
-    /// Curated-memory stage: when enabled, (a) history dropped by compaction is
-    /// consolidated into curated `memory/*.md` files, and (b) each request runs
-    /// a hybrid FTS5/vector search over the curated memories and injects the
-    /// relevant ones into the prompt (Claude-Code-style auto-memory).
+    /// Curated notes (`memory/*.md`) are searched and the relevant ones shown
+    /// to the model on every turn. Off: they stay on disk, reachable through
+    /// the memory tools, but are not recalled automatically.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         rename = "memoryRecall"
     )]
     pub(super) memory_recall: Option<bool>,
-    /// Unified memory engine: when enabled, the notes and the graph that
-    /// `memoryRecall` / `preCognitive` allow are fused into ONE budgeted
-    /// `<memory_context>` block instead of two independent ones. Off by
-    /// default — it changes the prompt shape.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "memoryEngine"
-    )]
-    pub(super) memory_engine: Option<bool>,
     /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
     /// (e.g. the Kanban board) are auto-run by persona worker agents.
     #[serde(

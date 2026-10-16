@@ -193,6 +193,8 @@ creates a file and lets `MemoryManager` ingest it.
 
 # v2 — Auto-consolidation & recall injection (the `memoryRecall` toggle)
 
+> **Thay thế (2026-10-16):** chưng cất tóm tắt compaction thành note và khối `<memory_recall>` riêng không còn nữa. Tóm tắt giờ được retain thành fact; note curated vẫn được tìm cùng các kho khác và hiển thị trong một khối `<memory_context>` duy nhất. Xem [memory-engine.md](memory-engine.md). Phần dưới giữ lại như lịch sử thiết kế.
+
 v1 gave agents *tools* (`memory_save` / `memory_recall` / `memory_delete`). v2 makes the
 loop automatic, mirroring how Claude Code operates its own memory:
 

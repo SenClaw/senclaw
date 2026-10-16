@@ -1784,19 +1784,20 @@ impl AgentPool {
         self.core_api
             .set_model_override(jid, group.llm_config_id.clone());
 
-        // ---- Pre-process stage 2: pre-retrieval injection ----
-        // Three independent, user-toggleable backends:
-        //   • MEMORY.md    → env-level `memory.pre_retrieval` (whole-file load)
-        //   • Cognitive    → global `preCognitive` toggle (pre-cognitive stage)
-        //   • Curated      → global `memoryRecall` toggle (hybrid FTS5/vector
-        //                    search over curated memory/*.md, per-memory hits)
-        // The memory backend now loads `~/senclaw/profiles/<folder>/MEMORY.md`
-        // verbatim instead of FTS-searching chunks + daily history.
-        // With the global `memoryEngine` toggle on, the last two backends are
-        // read together and fused into one budgeted `<memory_context>` block
-        // (`memory::engine`); MEMORY.md stays pinned either way.
-        let full_prompt = {
-            let (do_memory, max_results, engine_max_tokens) = {
+        // ---- Pre-process stage 2: what memory recalls for this turn ----
+        // One path, no model call: the notes, the knowledge graph and the fact
+        // store are read together (`memory::engine`), fused and cut to a token
+        // budget. `MEMORY.md` is pinned, not searched, so it is added whole
+        // when `memory.pre_retrieval` is on.
+        //
+        // The result is handed to the engine as this TURN's context rather
+        // than spliced into the user's message: it is shown on every model
+        // call of the turn and is never stored in the conversation, so
+        // yesterday's recall does not ride along in the history (and in every
+        // later request) until compaction.
+        let full_prompt = prompt.to_string();
+        {
+            let (do_memory, max_results, max_tokens) = {
                 let cfg = self.config.lock().unwrap();
                 let c = cfg.as_ref();
                 (
@@ -1806,114 +1807,49 @@ impl AgentPool {
                         .unwrap_or(crate::memory::engine::RecallConfig::default().max_tokens),
                 )
             };
-            let do_engine = global_config_path
+            // One read of the settings file for both switches.
+            let switches = global_config_path
                 .as_deref()
-                .map(crate::gateway::group_manager::get_memory_engine_enabled)
-                .unwrap_or(false);
-            let do_cognitive = global_config_path
-                .as_deref()
-                .map(crate::gateway::group_manager::get_pre_cognitive_enabled)
-                .unwrap_or(false);
-            let do_recall = global_config_path
-                .as_deref()
-                .map(crate::gateway::group_manager::get_memory_recall_enabled)
-                .unwrap_or(false);
+                .map(crate::gateway::group_manager::get_memory_read_switches)
+                .unwrap_or_default();
 
-            // MEMORY.md backend — read the file verbatim from the agent's dir.
-            let mem_context = if do_memory {
-                let profiles_dir = self
-                    .config
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .map(|c| c.paths.profiles_dir.clone());
-                match profiles_dir {
-                    Some(dir) => {
-                        let memory_md = dir.join(&group.folder).join("MEMORY.md");
-                        match std::fs::read_to_string(&memory_md) {
-                            Ok(content) => content.trim().to_string(),
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                            Err(e) => {
-                                tracing::warn!(
-                                    "[AgentPool] Failed to read {}: {e}",
-                                    memory_md.display()
-                                );
-                                String::new()
-                            }
-                        }
-                    }
-                    None => String::new(),
-                }
+            let pinned = if do_memory {
+                pinned_memory(&self.config, &group.folder)
             } else {
                 String::new()
             };
-
-            // The searchable stores, read one of two ways. With `memoryEngine`
-            // on they are fused into ONE budgeted block (same two switches
-            // still decide which stores may be read); with it off each store
-            // injects its own block, as before.
-            let (cog_context, recall_context, engine_context) = if do_engine {
-                let query = crate::memory::engine::RecallQuery {
+            let recalled = crate::memory::engine::pre_retrieval(
+                crate::memory::engine::ArmSelection {
+                    curated: switches.notes,
+                    cognitive: switches.graph,
+                    facts: true,
+                },
+                &crate::memory::engine::RecallQuery {
                     text: prompt.to_string(),
                     folder: group.folder.clone(),
                     chat_jid: jid.to_string(),
                     limit: max_results,
                     now: chrono::Utc::now().timestamp(),
-                };
-                let cfg = crate::memory::engine::RecallConfig {
-                    max_tokens: engine_max_tokens,
+                },
+                &crate::memory::engine::RecallConfig {
+                    max_tokens,
                     ..Default::default()
-                };
-                let selection = crate::memory::engine::ArmSelection {
-                    curated: do_recall,
-                    cognitive: do_cognitive,
-                    facts: true,
-                };
-                (
-                    String::new(),
-                    String::new(),
-                    crate::memory::engine::pre_retrieval(selection, &query, &cfg).await,
-                )
-            } else {
-                // Cognitive-graph backend (pre-cognitive stage).
-                let cog = if do_cognitive {
-                    cognitive_pre_retrieval(prompt, &group.folder, max_results).await
-                } else {
-                    String::new()
-                };
-                // Curated-memory backend (`memoryRecall` toggle).
-                let recall = if do_recall {
-                    curated_pre_retrieval(prompt, &group.folder, jid, max_results).await
-                } else {
-                    String::new()
-                };
-                (cog, recall, String::new())
-            };
+                },
+            )
+            .await;
 
-            let mut blocks = String::new();
-            if !mem_context.is_empty() {
-                blocks.push_str(&format!("<memory>\n{mem_context}\n</memory>\n"));
+            let mut context = String::new();
+            if !pinned.is_empty() {
+                context.push_str(&format!("<memory>\n{pinned}\n</memory>\n"));
             }
-            if !cog_context.is_empty() {
-                blocks.push_str(&format!(
-                    "<cognitive_memory>\n{cog_context}</cognitive_memory>\n"
-                ));
-            }
-            if !recall_context.is_empty() {
-                blocks.push_str(&format!(
-                    "<memory_recall>\n{recall_context}\n</memory_recall>\n"
-                ));
-            }
-            if !engine_context.is_empty() {
+            if !recalled.is_empty() {
                 let tag = crate::memory::engine::WRAPPER_TAG;
-                blocks.push_str(&format!("<{tag}>\n{engine_context}\n</{tag}>\n"));
+                context.push_str(&format!("<{tag}>\n{recalled}\n</{tag}>\n"));
             }
-            if blocks.is_empty() {
-                prompt.to_string()
-            } else {
-                format!("{blocks}\n{prompt}")
-            }
-        };
+            // Always set — an empty turn must clear the previous turn's recall.
+            self.core_api
+                .set_turn_context(jid, (!context.is_empty()).then_some(context));
+        }
 
         // Daily history log disabled — memory now flows only through
         // ~/senclaw/profiles/<folder>/MEMORY.md. Daily-log files are no
@@ -3083,64 +3019,28 @@ impl AgentPool {
                         sink.notify_agent_compacting(&jid, false);
                     }
 
-                    // ---- curated-memory consolidation (`memoryRecall`) ----
-                    // The history that compaction just replaced lives on only
-                    // in `data.summary`. When the toggle is on, distill it
-                    // into curated memory files (LLM if configured, verbatim
-                    // fallback) so it stays recallable. Fire-and-forget:
-                    // failures log and never affect the turn.
+                    // ---- keep what compaction is about to forget ----
+                    // The history it just replaced lives on only in
+                    // `data.summary`. Retain it as facts (the same extraction
+                    // the conversation windows go through), so what was
+                    // decided or done stays recallable after the context is
+                    // cut. Fire-and-forget: a failure logs and never touches
+                    // the turn.
                     if let Some(summary) = data.summary.clone() {
                         let cfg = pool.config.lock().unwrap().as_ref().cloned();
                         if let Some(cfg) = cfg {
-                            let enabled = crate::gateway::group_manager::get_memory_recall_enabled(
-                                &cfg.paths.global_config_path,
-                            );
-                            if enabled {
-                                let folder = folder.clone();
-                                let jid_for_origin = jid.clone();
-                                let base = cfg.paths.profiles_dir.join(&folder);
-                                tokio::spawn(async move {
-                                    let llm =
-                                        crate::memory::cognitive::llm_openai::create_cognitive_llm(
-                                            &cfg,
-                                        );
-                                    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                                    match crate::memory::consolidate::consolidate_summary(
-                                        &base, &jid_for_origin, &summary, llm, &date,
-                                    )
-                                    .await
-                                    {
-                                        Ok(n) if n > 0 => {
-                                            // New files → let the watcher pick
-                                            // them up on the next search.
-                                            crate::memory::manager::get_instance()
-                                                .mark_dirty(&folder, None);
-                                        }
-                                        Ok(_) => {}
-                                        Err(e) => tracing::warn!(
-                                            "[AgentPool] history consolidation failed: {e}"
-                                        ),
-                                    }
-                                });
-                            }
+                            let folder = folder.clone();
+                            tokio::spawn(async move {
+                                crate::memory::engine::facts::retain_text(
+                                    &cfg,
+                                    &folder,
+                                    &summary,
+                                    "compaction",
+                                )
+                                .await;
+                            });
                         }
                     }
-
-                    let today: String = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                    let profiles_dir = pool
-                        .config
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .map(|c| c.paths.profiles_dir.clone())
-                        .unwrap_or_else(|| crate::config::Config::from_env().paths.profiles_dir);
-                    let changed_file = profiles_dir
-                        .join(&folder)
-                        .join("memory")
-                        .join(format!("{today}.md"));
-                    let mgr = crate::memory::manager::get_instance();
-                    let changed_str = changed_file.to_string_lossy().to_string();
-                    mgr.mark_dirty(&folder, Some(&changed_str));
                 }),
             );
         }
@@ -3552,41 +3452,31 @@ pub(crate) fn diff_todo_transitions(
     out
 }
 
-/// Cognitive-memory pre-retrieval. Spreading-activation recall scoped to the
-/// caller's group folder, with Hebbian write-back happening as a side effect.
-/// Returns an empty string when:
-///   * the cognitive system was never booted (no embedding provider, etc.)
-///   * no hits cross the relevance floor
-///   * any error occurs — pre-retrieval is **never** allowed to fail the
-///     surrounding agent turn, so failures log + drop quietly.
-async fn cognitive_pre_retrieval(prompt: &str, group_folder: &str, max_results: usize) -> String {
-    let Some(sys) = crate::memory::cognitive::try_get_instance() else {
+/// `MEMORY.md` verbatim — the pinned half of memory. It holds standing
+/// instructions the agent must always see, so it is read whole and not
+/// searched. Missing file → empty; any other read error is logged and also
+/// yields empty, because memory never fails a turn.
+fn pinned_memory(
+    config: &Mutex<Option<Arc<Config>>>,
+    folder: &str,
+) -> String {
+    let Some(dir) = config
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|c| c.paths.profiles_dir.clone())
+    else {
         return String::new();
     };
-    crate::memory::engine::legacy::cognitive_block(&sys, prompt, group_folder, max_results).await
-}
-
-/// Curated-memory pre-retrieval (the `memoryRecall` toggle). Hybrid FTS5 +
-/// vector search over the group's curated `memory/*.md` files via the
-/// MemoryManager singleton, deduped per file and presented per-memory
-/// (`name (type) — hook` + matched snippet), ending with a hint that the
-/// agent can call the memory tools for deeper retrieval.
-///
-/// Session scoping: memories whose `originSessionId` is another chat JID are
-/// skipped (prevents bleed between chats that share an agent folder). Same-JID
-/// hits are preferred over agent-wide / legacy folder-tagged ones.
-///
-/// Mirrors `cognitive_pre_retrieval`'s failure contract: any error logs and
-/// returns an empty string — pre-retrieval never fails the agent turn.
-async fn curated_pre_retrieval(
-    query: &str,
-    group_folder: &str,
-    chat_jid: &str,
-    max_results: usize,
-) -> String {
-    let mgr = crate::memory::manager::get_instance();
-    crate::memory::engine::legacy::curated_block(&mgr, query, group_folder, chat_jid, max_results)
-        .await
+    let path = dir.join(folder).join("MEMORY.md");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content.trim().to_string(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            tracing::warn!("[AgentPool] Failed to read {}: {e}", path.display());
+            String::new()
+        }
+    }
 }
 
 /// Filter for the auto-reflection path (P14).

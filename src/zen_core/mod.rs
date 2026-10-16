@@ -1176,6 +1176,11 @@ pub struct ZenCoreOptions {
     /// configured nothing → prompt unchanged. Set per-engine from the global
     /// `defaults` config before each turn.
     pub user_defaults: Option<String>,
+    /// Context retrieved for THIS turn (recalled memory), shown to the model
+    /// on every call of the turn but never stored in the conversation. `None`
+    /// = nothing recalled. Replaced before each turn; see
+    /// [`crate::zen_core::ZenEngine::set_turn_context`].
+    pub turn_context: Option<String>,
     /// Per-group LLM override: id of an entry in the global `llmConfigs` list.
     /// `None` = resolve the globally active model (`activeLlmConfigId`).
     /// Set per-engine from the group binding's `llm_config_id`.
@@ -1210,6 +1215,7 @@ impl Default for ZenCoreOptions {
             pre_trigger_skill: false,
             after_process: false,
             user_defaults: None,
+            turn_context: None,
             model_config_id: None,
             max_agent_turns: None,
         }
