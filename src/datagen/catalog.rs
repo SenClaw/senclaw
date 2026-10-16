@@ -15,8 +15,16 @@
 //!
 //! The entries are `assets/datasets/catalog.json`; label maps are
 //! `assets/datasets/label-maps/<id>.json`.
+//!
+//! A Zen Kit adds entries of its own (`datasets` in its manifest): installing
+//! the kit writes them to `<kits_dir>/datasets/<kit>.json` and downloads
+//! nothing, the way it registers a pattern source without cloning it. They
+//! join the catalog as `<kit>/<id>`, a Hugging Face preset or a URL — never
+//! bundled data, which only this binary can carry — and leave it when the
+//! kit is uninstalled.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
@@ -37,14 +45,18 @@ const LABEL_MAPS: &[(&str, &str)] =
 pub struct Entry {
     pub id: String,
     pub title: String,
+    #[serde(default)]
     pub description: String,
     pub kind: Kind,
+    #[serde(default)]
     pub lang: String,
     /// Rows in the source; what an install writes can be fewer (a label map
-    /// drops what it does not map).
+    /// drops what it does not map). 0 = not stated.
+    #[serde(default)]
     pub rows: u64,
     /// SPDX-style id of the source's own license (not a mirror's).
     pub license: String,
+    #[serde(default)]
     pub attribution: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
@@ -60,6 +72,9 @@ pub struct Entry {
     /// `seeds`, `eval`, `problems`, `corpus`.
     #[serde(default)]
     pub uses: Vec<String>,
+    /// The kit that registered this entry; `None` for SenClaw's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +82,8 @@ pub struct Entry {
 pub enum EntrySource {
     Bundled(String),
     Hf(HfPin),
+    /// A JSONL / JSON / CSV / TSV file, fetched like an import from a URL.
+    Url(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +116,7 @@ impl Flags {
     }
 }
 
+/// SenClaw's own entries.
 pub fn entries() -> &'static [Entry] {
     static E: OnceLock<Vec<Entry>> = OnceLock::new();
     // Compiled in and checked by the tests below; unreadable here is a build
@@ -108,6 +126,97 @@ pub fn entries() -> &'static [Entry] {
 
 pub fn entry(id: &str) -> Option<&'static Entry> {
     entries().iter().find(|e| e.id == id)
+}
+
+/// SenClaw's entries, then those of installed kits.
+pub fn all(kits_dir: Option<&Path>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = entries().to_vec();
+    if let Some(dir) = kits_dir {
+        for e in kit_entries(dir) {
+            if !out.iter().any(|x| x.id == e.id) {
+                out.push(e);
+            }
+        }
+    }
+    out
+}
+
+/// One entry by id, SenClaw's or a kit's.
+pub fn find(id: &str, kits_dir: Option<&Path>) -> Option<Entry> {
+    entry(id).cloned().or_else(|| kits_dir.and_then(|d| kit_entries(d).into_iter().find(|e| e.id == id)))
+}
+
+/// Where a kit's entries are written.
+pub fn kit_datasets_path(kits_dir: &Path, kit_id: &str) -> PathBuf {
+    kits_dir.join("datasets").join(format!("{}.json", crate::kits::manifest::safe_segment(kit_id)))
+}
+
+/// The file a kit's entries are written as.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KitDatasetsFile {
+    pub kit: String,
+    pub datasets: Vec<Entry>,
+}
+
+/// Every installed kit's entries, ids prefixed with the kit's. An entry
+/// that does not pass [`check_kit_entry`] — the file was edited by hand,
+/// or written by an older build — is skipped with a warning.
+pub fn kit_entries(kits_dir: &Path) -> Vec<Entry> {
+    let Ok(rd) = std::fs::read_dir(kits_dir.join("datasets")) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut files: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    files.sort();
+    for path in files {
+        let parsed = std::fs::read(&path).ok().and_then(|raw| serde_json::from_slice::<KitDatasetsFile>(&raw).ok());
+        let Some(file) = parsed else {
+            tracing::warn!("[Datagen] cannot read kit datasets {}", path.display());
+            continue;
+        };
+        for mut e in file.datasets {
+            if let Err(err) = check_kit_entry(&e) {
+                tracing::warn!("[Datagen] kit {} dataset {} skipped: {err}", file.kit, e.id);
+                continue;
+            }
+            e.id = format!("{}/{}", file.kit, e.id);
+            e.kit = Some(file.kit.clone());
+            out.push(e);
+        }
+    }
+    out
+}
+
+/// What a kit's dataset entry must be: a download (never bundled data), a
+/// mapping that fits its kind, a license, a known label map, and a notice
+/// when its terms need agreeing to.
+pub fn check_kit_entry(e: &Entry) -> Result<(), String> {
+    let id_ok = !e.id.is_empty()
+        && e.id.len() <= 60
+        && e.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'));
+    if !id_ok {
+        return Err("an id is lowercase letters, digits, \"-\", \"_\" or \".\"".into());
+    }
+    if e.title.trim().is_empty() || e.license.trim().is_empty() {
+        return Err("a title and a license are required".into());
+    }
+    match &e.source {
+        EntrySource::Bundled(_) => return Err("a kit cannot bundle data; give an hf or url source".into()),
+        EntrySource::Hf(pin) => {
+            if !crate::datagen::hf::valid_dataset_id(&pin.dataset) || !crate::datagen::hf::valid_part(&pin.config) || !crate::datagen::hf::valid_part(&pin.split) {
+                return Err(format!("\"{}\" is not a Hugging Face dataset, config and split", pin.dataset));
+            }
+        }
+        EntrySource::Url(u) => crate::datagen::url_fetch::check(u)?,
+    }
+    super::mapping::check_mapping(e.kind, &e.mapping)?;
+    if let Some(lm) = &e.label_map {
+        if label_map(lm).is_none() {
+            return Err(format!("no label map {lm}"));
+        }
+    }
+    if e.flags.needs_consent() && e.notice.as_deref().is_none_or(|n| n.trim().is_empty()) {
+        return Err("an entry whose terms need agreeing to needs a notice saying what they are".into());
+    }
+    Ok(())
 }
 
 pub fn bundled_text(file: &str) -> Option<&'static str> {
@@ -129,8 +238,8 @@ pub fn label_map(id: &str) -> Option<&'static LabelMap> {
 
 /// The catalog for the UIs: each entry plus whether it is installed (a
 /// finished dataset imported from it exists) and under which name.
-pub fn listing(datasets: &[Value]) -> Value {
-    let list: Vec<Value> = entries()
+pub fn listing(datasets: &[Value], kits_dir: Option<&Path>) -> Value {
+    let list: Vec<Value> = all(kits_dir)
         .iter()
         .map(|e| {
             let installed = datasets.iter().find(|m| {
@@ -191,6 +300,7 @@ mod tests {
                     assert!(crate::datagen::hf::valid_dataset_id(&pin.dataset), "{}", e.id);
                     assert_eq!(pin.revision.len(), 40, "{}: pin a full commit sha", e.id);
                 }
+                EntrySource::Url(u) => assert!(crate::datagen::url_fetch::check(u).is_ok(), "{}", e.id),
             }
             if e.flags.needs_consent() {
                 assert!(e.notice.is_some(), "{} needs a notice to consent to", e.id);
@@ -225,7 +335,7 @@ mod tests {
             json!({"name": "massive-vi", "state": "done", "provenance": {"source": {"catalog": "massive-vi"}}}),
             json!({"name": "gsm8k", "state": "failed", "provenance": {"source": {"catalog": "gsm8k"}}}),
         ];
-        let list = listing(&datasets);
+        let list = listing(&datasets, None);
         let get = |id: &str| list.as_array().unwrap().iter().find(|e| e["id"] == id).unwrap().clone();
         assert_eq!(get("massive-vi")["installed"], true);
         assert_eq!(get("massive-vi")["dataset"], "massive-vi");

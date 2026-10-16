@@ -20,7 +20,9 @@
 //!   "hooks":     [{ "event": "SessionStart", "prompt": "…" }],
 //!   "jobs":      [{ "name": "09:00", "agentRef": "Zen Reporter", "cron": "0 9 * * *" }],
 //!   "patterns":  [{ "name": "summarize", "system": "# IDENTITY…" }],
-//!   "patternSources": [{ "id": "fabric", "url": "https://github.com/…", "ref": "v1.4.0" }]
+//!   "patternSources": [{ "id": "fabric", "url": "https://github.com/…", "ref": "v1.4.0" }],
+//!   "datasets":  [{ "id": "eval", "title": "…", "kind": "labeled_text", "license": "MIT",
+//!                  "source": { "url": "https://…/eval.jsonl" }, "mapping": { "text": "text", "label": "label" } }]
 //! }
 //! ```
 //!
@@ -88,6 +90,15 @@ pub struct KitManifest {
     /// inlined in a manifest, and a checkout can be re-synced later.
     #[serde(default)]
     pub pattern_sources: Vec<KitPatternSource>,
+
+    /// Datagen catalog entries the kit brings — its own eval set, say.
+    /// Installing the kit registers them (`<kits_dir>/datasets/<kit>.json`)
+    /// and downloads nothing; the person installs each from Datagen →
+    /// Source datasets, which is where its license is shown and agreed to.
+    /// Same shape as SenClaw's own entries ([`crate::datagen::catalog::Entry`]),
+    /// minus bundled data.
+    #[serde(default)]
+    pub datasets: Vec<crate::datagen::catalog::Entry>,
 
     /// Parsed but installed by the client, not the daemon — see module docs.
     #[serde(default)]
@@ -282,6 +293,7 @@ impl KitManifest {
             + self.jobs.len()
             + self.patterns.len()
             + self.pattern_sources.len()
+            + self.datasets.len()
     }
 
     /// Parse + validate. Never panics on hostile input: a broken kit rules
@@ -361,7 +373,20 @@ impl KitManifest {
             kit.apps.clear();
             kit.patterns.clear();
             kit.pattern_sources.clear();
+            kit.datasets.clear();
             kit.params.clear();
+        }
+
+        // A dataset entry that cannot install — bundled data, a mapping that
+        // does not fit its kind, terms with no notice — would sit in the
+        // catalog and fail on the person's click. Refuse it here instead.
+        let mut dataset_ids = std::collections::BTreeSet::new();
+        for d in &kit.datasets {
+            crate::datagen::catalog::check_kit_entry(d)
+                .map_err(|e| KitManifestError::Invalid(format!("dataset {:?}: {e}", d.id)))?;
+            if !dataset_ids.insert(d.id.as_str()) {
+                return Err(KitManifestError::Invalid(format!("duplicate dataset id {:?}", d.id)));
+            }
         }
 
         // A param key that cannot appear inside `{{param.<key>}}` can never be
@@ -671,6 +696,37 @@ mod tests {
 
     fn json(raw: &str) -> serde_json::Value {
         serde_json::from_str(raw).unwrap()
+    }
+
+    #[test]
+    fn datasets_are_checked_when_the_kit_is_read() {
+        let with = |d: &str| json(&format!(r#"{{"manifest":2,"id":"k","datasets":[{d}]}}"#));
+        let ok = KitManifest::parse(&with(
+            r#"{"id":"eval","title":"Eval","kind":"problem_answer","license":"MIT",
+                "source":{"hf":{"dataset":"openai/gsm8k","config":"main","split":"test","revision":"x"}},
+                "mapping":{"problem":"question"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(ok.datasets.len(), 1);
+        assert_eq!(ok.item_count(), 1, "a kit of only datasets is not empty");
+
+        let bad = |d: &str| KitManifest::parse(&with(d)).unwrap_err().to_string();
+        assert!(bad(r#"{"id":"e","title":"E","kind":"labeled_text","license":"MIT","source":{"bundled":"senclaw-flows-vi.jsonl"},"mapping":{"text":"text"}}"#)
+            .contains("cannot bundle"));
+        assert!(bad(r#"{"id":"e","title":"E","kind":"labeled_text","license":"MIT","source":{"url":"https://x.org/a.csv"},"mapping":{"label":"l"}}"#)
+            .contains("text"));
+        assert!(bad(r#"{"id":"e","title":"E","kind":"labeled_text","license":"CC-BY-SA-4.0","flags":{"shareAlike":true},"source":{"url":"https://x.org/a.csv"},"mapping":{"text":"t"}}"#)
+            .contains("notice"));
+        assert!(bad(r#"{"id":"e","title":"E","kind":"labeled_text","license":"MIT","source":{"url":"http://127.0.0.1/a.csv"},"mapping":{"text":"t"}}"#)
+            .contains("this machine"));
+
+        let v1 = KitManifest::parse_allowing_empty(&json(r#"{"id":"k","datasets":[{"id":"x"}]}"#));
+        assert!(v1.is_err(), "a v1 manifest still has to deserialise");
+        let v1 = KitManifest::parse_allowing_empty(&json(
+            r#"{"id":"k","datasets":[{"id":"e","title":"E","kind":"labeled_text","license":"MIT","source":{"bundled":"x"},"mapping":{"text":"t"}}]}"#,
+        ))
+        .unwrap();
+        assert!(v1.datasets.is_empty(), "v1 predates datasets: dropped, not checked");
     }
 
     #[test]

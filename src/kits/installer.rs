@@ -355,6 +355,10 @@ pub fn install_bundle_with_params(
         }
     }
 
+    if !kit.datasets.is_empty() {
+        items.push(install_datasets(kit, ctx, &mut records));
+    }
+
     for job in &kit.jobs {
         let outcome = install_job(kit, job, ctx, &mut records);
         items.push(outcome);
@@ -657,6 +661,39 @@ impl KitUninstallReport {
         self.items
             .iter()
             .any(|i| i.status == KitRemoveStatus::Failed)
+    }
+}
+
+/// Register the kit's Datagen catalog entries: one file per kit, written once
+/// and never overwritten (same rule as its hook file). Nothing is downloaded —
+/// each entry is installed from Datagen when the person chooses to.
+fn install_datasets(kit: &KitManifest, ctx: &KitContext<'_>, records: &mut Vec<KitItemRecord>) -> KitItemOutcome {
+    let path = crate::datagen::catalog::kit_datasets_path(&ctx.kits_dir, &kit.id);
+    if path.exists() {
+        return KitItemOutcome::new(KitItemKind::Dataset, &kit.id, KitItemStatus::Skipped)
+            .with_detail("this kit's dataset entries are already registered");
+    }
+    let file = crate::datagen::catalog::KitDatasetsFile { kit: kit.id.clone(), datasets: kit.datasets.clone() };
+    let written = path
+        .parent()
+        .map(fs::create_dir_all)
+        .unwrap_or(Ok(()))
+        .and_then(|_| serde_json::to_vec_pretty(&file).map_err(std::io::Error::other))
+        .and_then(|raw| fs::write(&path, raw));
+    match written {
+        Ok(()) => {
+            records.push(KitItemRecord {
+                kind: KitItemKind::Dataset,
+                name: kit.id.clone(),
+                path: Some(path.display().to_string()),
+                engine_ref: None,
+            });
+            KitItemOutcome::new(KitItemKind::Dataset, &kit.id, KitItemStatus::Created).with_detail(format!(
+                "{} dataset(s) added to Datagen → Source datasets; install them from there",
+                kit.datasets.len()
+            ))
+        }
+        Err(e) => KitItemOutcome::new(KitItemKind::Dataset, &kit.id, KitItemStatus::Failed).with_detail(e.to_string()),
     }
 }
 
@@ -1391,6 +1428,38 @@ mod tests {
         assert_eq!(substitute_bytes(&png, &values), png.to_vec());
     }
 
+
+    // ===== datasets =====
+
+    #[test]
+    fn a_kits_datasets_join_the_catalog_until_it_is_uninstalled() {
+        use crate::datagen::catalog;
+
+        let dir = tempfile::tempdir().unwrap();
+        let c = ctx(dir.path());
+        let mut k = kit();
+        k.datasets = vec![serde_json::from_value(serde_json::json!({
+            "id": "router-eval", "title": "Router eval", "kind": "labeled_text", "license": "MIT",
+            "source": {"url": "https://example.org/eval.jsonl"}, "mapping": {"text": "text", "label": "label"}
+        }))
+        .unwrap()];
+
+        let report = install_kit(&k, &c);
+        assert!(!report.any_failed(), "{report:?}");
+        let id = format!("{}/router-eval", k.id);
+        let e = catalog::find(&id, Some(&c.kits_dir)).expect("listed under the kit's id");
+        assert_eq!(e.kit.as_deref(), Some(k.id.as_str()));
+        assert!(catalog::entry(&id).is_none(), "not one of SenClaw's own");
+        let receipt = c.receipts().get(&k.id).unwrap();
+        assert_eq!(receipt.items_of(KitItemKind::Dataset).count(), 1);
+
+        let again = install_kit(&k, &c);
+        assert!(again.items.iter().any(|i| i.kind == "dataset" && i.status == KitItemStatus::Skipped));
+
+        uninstall_kit(&k.id, &c).unwrap();
+        assert!(catalog::find(&id, Some(&c.kits_dir)).is_none());
+        assert!(!catalog::kit_datasets_path(&c.kits_dir, &k.id).exists());
+    }
 
     // ===== patterns =====
 

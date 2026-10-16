@@ -121,14 +121,14 @@ impl Pipeline {
         !matches!(self, Pipeline::ExportLogs(_) | Pipeline::Import(_))
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self, kits_dir: Option<&Path>) -> Result<(), String> {
         match self {
             Pipeline::ExpandSeeds(p) => p.plan().map(|_| ()),
             Pipeline::ExportLogs(p) => p.validate(),
             Pipeline::DocQa(p) => p.validate(),
             Pipeline::ReasoningTraces(p) => p.validate(),
             Pipeline::ExecutableQa(p) => p.validate(),
-            Pipeline::Import(p) => p.validate(),
+            Pipeline::Import(p) => p.validate(kits_dir),
         }
     }
 }
@@ -226,6 +226,8 @@ pub struct Deps {
     pub runner: Option<Arc<dyn CodeRunner>>,
     /// Where `import` reads Hugging Face datasets; `None` = the public Hub.
     pub hf: Option<Arc<dyn HfClient>>,
+    /// Where installed kits keep the catalog entries they registered.
+    pub kits_dir: Option<PathBuf>,
 }
 
 /// The handle a running pipeline reports through.
@@ -318,7 +320,7 @@ impl Registry {
         spec.pipeline
             .resolve_inputs(&deps.datasets_root, owner.as_deref(), |job| self.is_running(job))
             .map_err(StartError::Invalid)?;
-        spec.pipeline.validate().map_err(StartError::Invalid)?;
+        spec.pipeline.validate(deps.kits_dir.as_deref()).map_err(StartError::Invalid)?;
         let llm = match (spec.pipeline.uses_llm(), deps.llm) {
             (false, _) => None,
             (true, Some(llm)) => Some(llm),
@@ -355,6 +357,7 @@ impl Registry {
         let mut ctx = JobCtx { job_id, cancel, status: status.clone(), writer };
         let trajectories_root = deps.trajectories_root;
         let hf: Arc<dyn HfClient> = deps.hf.unwrap_or_else(|| Arc::new(PublicHf::new()));
+        let kits_dir = deps.kits_dir;
         // The pipeline runs in its own task so a panic in it still ends the
         // job as `failed` — otherwise it would hold a running slot until the
         // daemon restarts.
@@ -362,7 +365,7 @@ impl Registry {
             let no_model = || Err::<Outcome, String>("no model is configured for this job".into());
             match (spec.pipeline, llm) {
                 (Pipeline::ExportLogs(p), _) => export_logs::run(p, &trajectories_root, &mut ctx).await,
-                (Pipeline::Import(p), _) => import::run(p, hf, &mut ctx).await,
+                (Pipeline::Import(p), _) => import::run(p, hf, kits_dir, &mut ctx).await,
                 (_, None) => no_model(),
                 (Pipeline::ExpandSeeds(p), Some(llm)) => expand_seeds::run(p, llm, &mut ctx).await,
                 (Pipeline::DocQa(p), Some(llm)) => doc_qa::run(p, llm, &mut ctx).await,
@@ -541,7 +544,7 @@ mod tests {
     }
 
     fn deps(root: &Path, llm: Option<Arc<dyn Llm>>) -> Deps {
-        Deps { datasets_root: root.join("datasets"), trajectories_root: root.join("trajectories"), llm, runner: None, hf: None }
+        Deps { datasets_root: root.join("datasets"), trajectories_root: root.join("trajectories"), llm, runner: None, hf: None, kits_dir: None }
     }
 
     #[test]
@@ -699,7 +702,7 @@ mod tests {
         let m = &reg.datasets(&root, Some("web:any-chat"))[0];
         assert_eq!(m["provenance"]["source"]["catalog"], "senclaw-flows-vi", "catalog imports are readable by every chat");
         assert_eq!(m["provenance"]["license"], "MIT");
-        assert_eq!(crate::datagen::catalog::listing(&reg.datasets(&root, None))[0]["installed"], true);
+        assert_eq!(crate::datagen::catalog::listing(&reg.datasets(&root, None), None)[0]["installed"], true);
     }
 
     #[tokio::test]

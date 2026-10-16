@@ -20,6 +20,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -118,23 +119,25 @@ pub struct Plan {
     pub license: String,
     pub attribution: Option<String>,
     pub flags: Flags,
-    pub catalog: Option<&'static catalog::Entry>,
+    pub catalog: Option<catalog::Entry>,
     pub max_records: u32,
 }
 
 impl Params {
-    pub fn validate(&self) -> Result<(), String> {
-        self.plan().map(|_| ())
+    /// `kits_dir` is where installed kits keep the catalog entries they
+    /// registered; `None` = SenClaw's own entries only.
+    pub fn validate(&self, kits_dir: Option<&Path>) -> Result<(), String> {
+        self.plan(kits_dir).map(|_| ())
     }
 
-    pub fn plan(&self) -> Result<Plan, String> {
+    pub fn plan(&self, kits_dir: Option<&Path>) -> Result<Plan, String> {
         let max_records = self.max_records.unwrap_or(DEFAULT_MAX_RECORDS);
         if !(1..=MAX_RECORDS).contains(&max_records) {
             return Err(format!("maxRecords must be between 1 and {MAX_RECORDS}"));
         }
         if let Source::Catalog(id) = &self.source {
-            let e = catalog::entry(id).ok_or_else(|| {
-                let ids: Vec<&str> = catalog::entries().iter().map(|e| e.id.as_str()).collect();
+            let e = catalog::find(id, kits_dir).ok_or_else(|| {
+                let ids: Vec<String> = catalog::all(kits_dir).into_iter().map(|e| e.id).collect();
                 format!("no catalog entry \"{id}\" (entries: {})", ids.join(", "))
             })?;
             if self.kind.is_some() || !self.mapping.is_empty() || self.label_map.is_some() || self.license.is_some() {
@@ -157,7 +160,7 @@ impl Params {
                 mapping: e.mapping.clone(),
                 labels,
                 license: e.license.clone(),
-                attribution: Some(e.attribution.clone()),
+                attribution: Some(e.attribution.clone()).filter(|a| !a.is_empty()),
                 flags: e.flags,
                 catalog: Some(e),
                 max_records,
@@ -326,8 +329,8 @@ impl Sink {
     }
 }
 
-pub async fn run(params: Params, hf: Arc<dyn HfClient>, ctx: &mut JobCtx) -> Result<Outcome, String> {
-    let plan = params.plan()?;
+pub async fn run(params: Params, hf: Arc<dyn HfClient>, kits_dir: Option<PathBuf>, ctx: &mut JobCtx) -> Result<Outcome, String> {
+    let plan = params.plan(kits_dir.as_deref())?;
     let mut sink = Sink {
         kind: plan.kind,
         mapping: plan.mapping.clone(),
@@ -346,10 +349,18 @@ pub async fn run(params: Params, hf: Arc<dyn HfClient>, ctx: &mut JobCtx) -> Res
     });
     let mut notes: Vec<String> = Vec::new();
 
-    let local = match (&params.source, plan.catalog.map(|e| &e.source)) {
+    let catalog_id = plan.catalog.as_ref().map(|e| e.id.clone());
+    let catalog_source = plan.catalog.as_ref().map(|e| e.source.clone());
+    // A URL named by the caller, or by a catalog entry (a kit's).
+    let url = match (&params.source, &catalog_source) {
+        (_, Some(EntrySource::Url(u))) => Some(u.trim().to_string()),
+        (Source::Url(u), None) => Some(u.trim().to_string()),
+        _ => None,
+    };
+    let local = match (&params.source, &catalog_source) {
         (_, Some(EntrySource::Bundled(file))) => {
             let text = catalog::bundled_text(file).ok_or_else(|| format!("{file} is not bundled in this build"))?;
-            prov["source"] = json!({"type": "bundled", "catalog": plan.catalog.map(|e| &e.id), "file": file});
+            prov["source"] = json!({"type": "bundled", "catalog": catalog_id, "file": file});
             Some(read_local(file, None, text, usize::MAX)?)
         }
         (Source::File(f), _) => {
@@ -357,17 +368,21 @@ pub async fn run(params: Params, hf: Arc<dyn HfClient>, ctx: &mut JobCtx) -> Res
             prov["source"] = json!({"type": "file", "name": f.name, "sha256": lr.sha256});
             Some(lr)
         }
-        (Source::Url(u), _) => {
-            let fetched = tokio::select! {
-                _ = ctx.cancel.cancelled() => return Ok(Outcome::Cancelled),
-                r = url_fetch::fetch(u.trim()) => r?,
-            };
-            let text = tabular::utf8(fetched.bytes)?;
-            let lr = read_local(&fetched.final_url, fetched.content_type.as_deref(), &text, usize::MAX)?;
-            prov["source"] = json!({"type": "url", "url": u.trim(), "finalUrl": fetched.final_url, "sha256": lr.sha256});
-            Some(lr)
-        }
-        _ => None,
+        _ => match &url {
+            Some(u) => {
+                let fetched = tokio::select! {
+                    _ = ctx.cancel.cancelled() => return Ok(Outcome::Cancelled),
+                    r = url_fetch::fetch(u) => r?,
+                };
+                let text = tabular::utf8(fetched.bytes)?;
+                let lr = read_local(&fetched.final_url, fetched.content_type.as_deref(), &text, usize::MAX)?;
+                prov["source"] = json!({
+                    "type": "url", "catalog": catalog_id, "url": u, "finalUrl": fetched.final_url, "sha256": lr.sha256,
+                });
+                Some(lr)
+            }
+            None => None,
+        },
     };
 
     if let Some(lr) = local {
@@ -386,7 +401,7 @@ pub async fn run(params: Params, hf: Arc<dyn HfClient>, ctx: &mut JobCtx) -> Res
         }
     } else {
         // Hugging Face: a catalog preset or a dataset named by the caller.
-        let (dataset, config, split, pinned) = match (&params.source, plan.catalog.map(|e| &e.source)) {
+        let (dataset, config, split, pinned) = match (&params.source, &catalog_source) {
             (_, Some(EntrySource::Hf(pin))) => {
                 (pin.dataset.clone(), Some(pin.config.clone()), Some(pin.split.clone()), Some(pin.revision.clone()))
             }
@@ -426,7 +441,7 @@ pub async fn run(params: Params, hf: Arc<dyn HfClient>, ctx: &mut JobCtx) -> Res
             }
         }
         prov["source"] = json!({
-            "type": "hf", "catalog": plan.catalog.map(|e| &e.id), "dataset": dataset, "config": config, "split": split,
+            "type": "hf", "catalog": catalog_id, "dataset": dataset, "config": config, "split": split,
             "revision": info.sha, "pinnedRevision": pinned,
         });
         ctx.set_provenance(prov.clone());
@@ -517,11 +532,15 @@ pub struct PreviewRequest {
     pub label_map: Option<LabelMapRef>,
 }
 
-pub async fn preview(req: PreviewRequest, hf: &dyn HfClient) -> Result<Value, String> {
+pub async fn preview(req: PreviewRequest, hf: &dyn HfClient, kits_dir: Option<&Path>) -> Result<Value, String> {
     let mut out = json!({});
+    let entry = match &req.source {
+        Source::Catalog(id) => Some(catalog::find(id, kits_dir).ok_or_else(|| format!("no catalog entry \"{id}\""))?),
+        _ => None,
+    };
     let rows: Vec<Value> = match &req.source {
-        Source::Catalog(id) => {
-            let e = catalog::entry(id).ok_or_else(|| format!("no catalog entry \"{id}\""))?;
+        Source::Catalog(_) => {
+            let e = entry.as_ref().expect("looked up above");
             out["entry"] = json!(e.id);
             match &e.source {
                 EntrySource::Bundled(f) => {
@@ -531,6 +550,11 @@ pub async fn preview(req: PreviewRequest, hf: &dyn HfClient) -> Result<Value, St
                     out["config"] = json!(pin.config);
                     out["split"] = json!(pin.split);
                     hf_rows_preview(hf, &pin.dataset, &pin.config, &pin.split, &mut out).await?
+                }
+                EntrySource::Url(u) => {
+                    let f = url_fetch::fetch(u.trim()).await?;
+                    let text = tabular::utf8(f.bytes)?;
+                    local_preview(read_local(&f.final_url, f.content_type.as_deref(), &text, PREVIEW_ROWS)?, &mut out)
                 }
             }
         }
@@ -563,11 +587,7 @@ pub async fn preview(req: PreviewRequest, hf: &dyn HfClient) -> Result<Value, St
         o.remove("order");
     }
     let columns = tabular::ordered(tabular::columns(&rows), &order);
-    let entry = match &req.source {
-        Source::Catalog(id) => catalog::entry(id),
-        _ => None,
-    };
-    let (kind, mapping, labels) = match entry {
+    let (kind, mapping, labels) = match &entry {
         Some(e) => (e.kind, e.mapping.clone(), e.label_map.as_deref().and_then(catalog::label_map).cloned()),
         None => {
             let (guess_kind, guess) = mapping::suggest(&columns, req.kind);
@@ -654,29 +674,56 @@ mod tests {
     #[test]
     fn sources_and_their_checks() {
         let file = |content: &str| json!({"source": {"file": {"name": "a.csv", "content": content}}, "kind": "labeled_text", "license": "private"});
-        assert!(params(file("text\nxin chào\n")).validate().is_ok());
-        assert!(params(file(" ")).validate().unwrap_err().contains("empty"));
+        assert!(params(file("text\nxin chào\n")).validate(None).is_ok());
+        assert!(params(file(" ")).validate(None).unwrap_err().contains("empty"));
         let mut no_license = file("text\nx\n");
         no_license.as_object_mut().unwrap().remove("license");
-        assert!(params(no_license).validate().unwrap_err().contains("license"));
+        assert!(params(no_license).validate(None).unwrap_err().contains("license"));
         let err = params(json!({"source": {"url": "http://localhost:18788/api/llm-config"}, "kind": "chat", "license": "x"}))
-            .validate()
+            .validate(None)
             .unwrap_err();
         assert!(err.contains("this machine"), "{err}");
-        assert!(params(json!({"source": {"hf": {"dataset": "../etc"}}, "kind": "chat", "license": "x"})).validate().is_err());
-        assert!(params(json!({"source": {"catalog": "nope"}})).validate().unwrap_err().contains("massive-vi"));
+        assert!(params(json!({"source": {"hf": {"dataset": "../etc"}}, "kind": "chat", "license": "x"})).validate(None).is_err());
+        assert!(params(json!({"source": {"catalog": "nope"}})).validate(None).unwrap_err().contains("massive-vi"));
         assert!(serde_json::from_value::<Params>(json!({"source": {"ftp": "x"}})).is_err());
         assert!(serde_json::from_value::<Params>(json!({"source": {"catalog": "gsm8k"}, "maxrecords": 3})).is_err());
     }
 
     #[test]
     fn restricted_catalog_entries_need_consent_and_bring_their_own_mapping() {
-        let err = params(json!({"source": {"catalog": "xquad-vi"}})).validate().unwrap_err();
+        let err = params(json!({"source": {"catalog": "xquad-vi"}})).validate(None).unwrap_err();
         assert!(err.contains("acceptLicense") && err.contains("CC-BY-SA-4.0"), "{err}");
-        assert!(params(json!({"source": {"catalog": "xquad-vi"}, "acceptLicense": true})).validate().is_ok());
-        assert!(params(json!({"source": {"catalog": "gsm8k"}})).validate().is_ok(), "MIT needs no consent");
-        let err = params(json!({"source": {"catalog": "gsm8k"}, "kind": "chat"})).validate().unwrap_err();
+        assert!(params(json!({"source": {"catalog": "xquad-vi"}, "acceptLicense": true})).validate(None).is_ok());
+        assert!(params(json!({"source": {"catalog": "gsm8k"}})).validate(None).is_ok(), "MIT needs no consent");
+        let err = params(json!({"source": {"catalog": "gsm8k"}, "kind": "chat"})).validate(None).unwrap_err();
         assert!(err.contains("leave them out"));
+    }
+
+    #[test]
+    fn a_kits_entry_is_found_in_the_kits_folder_and_keeps_its_terms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = catalog::KitDatasetsFile {
+            kit: "lab".into(),
+            datasets: vec![serde_json::from_value(json!({
+                "id": "qa", "title": "QA", "kind": "qa_context", "license": "CC-BY-SA-4.0",
+                "flags": {"shareAlike": true}, "notice": "share-alike",
+                "source": {"url": "https://example.org/qa.jsonl"},
+                "mapping": {"question": "q", "answer": "a", "context": "c"}
+            }))
+            .unwrap()],
+        };
+        let path = catalog::kit_datasets_path(tmp.path(), "lab");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let p = params(json!({"source": {"catalog": "lab/qa"}}));
+        assert!(p.validate(None).unwrap_err().contains("no catalog entry"), "only with the kits folder");
+        assert!(p.validate(Some(tmp.path())).unwrap_err().contains("acceptLicense"));
+        let plan = params(json!({"source": {"catalog": "lab/qa"}, "acceptLicense": true})).plan(Some(tmp.path())).unwrap();
+        assert_eq!(plan.kind, Kind::QaContext);
+        assert_eq!(plan.catalog.unwrap().kit.as_deref(), Some("lab"));
+        let listed = catalog::listing(&[], Some(tmp.path()));
+        assert!(listed.as_array().unwrap().iter().any(|e| e["id"] == "lab/qa" && e["kit"] == "lab"));
     }
 
     #[test]
@@ -692,7 +739,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = JobCtx::for_test(tmp.path());
         let hf: Arc<dyn HfClient> = Arc::new(FakeHf::new(vec![]));
-        let out = run(params(json!({"source": {"catalog": "senclaw-flows-vi"}})), hf, &mut ctx).await.unwrap();
+        let out = run(params(json!({"source": {"catalog": "senclaw-flows-vi"}})), hf, None, &mut ctx).await.unwrap();
         assert_eq!(out, Outcome::Finished);
         let s = ctx.snapshot();
         assert_eq!(s.accepted, 144);
@@ -716,7 +763,7 @@ mod tests {
             "source": {"file": {"name": "khach.csv", "content": csv}},
             "kind": "labeled_text", "license": "private", "maxRecords": 10
         }));
-        run(p, Arc::new(FakeHf::new(vec![])), &mut ctx).await.unwrap();
+        run(p, Arc::new(FakeHf::new(vec![])), None, &mut ctx).await.unwrap();
         let s = ctx.snapshot();
         assert_eq!(s.accepted, 2);
         assert_eq!(s.rejected.get("missing_text"), Some(&1));
@@ -738,7 +785,7 @@ mod tests {
         }
         let fake = Arc::new(FakeHf::new(rows));
         let p = params(json!({"source": {"catalog": "massive-vi"}, "acceptLicense": true, "maxRecords": 120}));
-        run(p, fake.clone(), &mut ctx).await.unwrap();
+        run(p, fake.clone(), None, &mut ctx).await.unwrap();
         let s = ctx.snapshot();
         assert_eq!(s.accepted, 120);
         assert!(s.rejected["unmapped_label"] > 0, "alarm_set has no SenClaw skill");
@@ -761,12 +808,12 @@ mod tests {
         let mut fake = FakeHf::new(vec![json!({"q": "x"})]);
         fake.info.gated = true;
         let p = params(json!({"source": {"hf": {"dataset": "org/secret"}}, "kind": "labeled_text", "license": "unknown"}));
-        assert!(run(p, Arc::new(fake), &mut ctx).await.unwrap_err().contains("gated"));
+        assert!(run(p, Arc::new(fake), None, &mut ctx).await.unwrap_err().contains("gated"));
 
         let mut ctx = JobCtx::for_test(&tmp.path().join("b"));
         let fake = FakeHf::new(vec![json!({"text": ""}), json!({"text": " "})]);
         let p = params(json!({"source": {"hf": {"dataset": "org/blank"}}, "kind": "labeled_text", "license": "mit"}));
-        let err = run(p, Arc::new(fake), &mut ctx).await.unwrap_err();
+        let err = run(p, Arc::new(fake), None, &mut ctx).await.unwrap_err();
         assert!(err.contains("2 missing_text"), "{err}");
     }
 
@@ -775,7 +822,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut ctx = JobCtx::for_test(tmp.path());
         let p = params(json!({"source": {"file": {"name": "a.jsonl", "content": "{\"foo\": 1}\n"}}, "kind": "qa_context", "license": "x"}));
-        let err = run(p, Arc::new(FakeHf::new(vec![])), &mut ctx).await.unwrap_err();
+        let err = run(p, Arc::new(FakeHf::new(vec![])), None, &mut ctx).await.unwrap_err();
         assert!(err.contains("columns: foo") && err.contains("send a mapping"), "{err}");
     }
 
@@ -785,6 +832,7 @@ mod tests {
         let out = preview(
             serde_json::from_value(json!({"source": {"hf": {"dataset": "openai/gsm8k"}}})).unwrap(),
             &fake,
+            None,
         )
         .await
         .unwrap();
@@ -794,13 +842,14 @@ mod tests {
         assert_eq!(out["records"][0]["record"]["problem"], "2+2?");
         assert_eq!(out["records"][1]["rejected"], "missing_problem");
 
-        let out = preview(serde_json::from_value(json!({"source": {"catalog": "gsm8k"}})).unwrap(), &fake).await.unwrap();
+        let out = preview(serde_json::from_value(json!({"source": {"catalog": "gsm8k"}})).unwrap(), &fake, None).await.unwrap();
         assert_eq!(out["records"][0]["record"]["answer"], "4", "the entry's own mapping, marker included");
         assert!(out.get("suggested").is_none());
 
         let out = preview(
             serde_json::from_value(json!({"source": {"file": {"name": "x.tsv", "content": "a\tb\n1\t2\n3\t4\n"}}, "kind": "qa_context"})).unwrap(),
             &fake,
+            None,
         )
         .await
         .unwrap();

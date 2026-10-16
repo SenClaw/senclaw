@@ -57,6 +57,7 @@ pub(crate) async fn datagen_start(
         llm,
         runner,
         hf: None,
+        kits_dir: Some(s.config.paths.kits_dir.clone()),
     };
     let status = registry().start(spec, deps).map_err(|e| {
         let code = match e {
@@ -124,12 +125,16 @@ pub(crate) async fn datagen_datasets(State(_s): State<Arc<UiState>>, Query(q): Q
 /// GET /api/datagen/catalog — datasets people wrote, ready to import with
 /// `POST /api/datagen/jobs {"pipeline": "import", "source": {"catalog": id}}`,
 /// each marked installed when a finished import of it exists.
-pub(crate) async fn datagen_catalog(State(_s): State<Arc<UiState>>, Query(q): Query<OwnerQuery>) -> Json<Value> {
+pub(crate) async fn datagen_catalog(State(s): State<Arc<UiState>>, Query(q): Query<OwnerQuery>) -> Json<Value> {
     let owner = q.owner().map(str::to_string);
-    let datasets = tokio::task::spawn_blocking(move || registry().datasets(&store::default_root(), owner.as_deref()))
-        .await
-        .unwrap_or_default();
-    Json(json!({ "entries": catalog::listing(&datasets) }))
+    let kits_dir = s.config.paths.kits_dir.clone();
+    let entries = tokio::task::spawn_blocking(move || {
+        let datasets = registry().datasets(&store::default_root(), owner.as_deref());
+        catalog::listing(&datasets, Some(&kits_dir))
+    })
+    .await
+    .unwrap_or_default();
+    Json(json!({ "entries": entries }))
 }
 
 /// POST /api/datagen/import/preview — body `{source, kind?, mapping?,
@@ -137,10 +142,10 @@ pub(crate) async fn datagen_catalog(State(_s): State<Arc<UiState>>, Query(q): Qu
 /// guessed kind and mapping, and those rows as records (or why each would be
 /// dropped).
 pub(crate) async fn datagen_import_preview(
-    State(_s): State<Arc<UiState>>,
+    State(s): State<Arc<UiState>>,
     Json(req): Json<PreviewRequest>,
 ) -> Result<Json<Value>, AppError> {
-    import::preview(req, &PublicHf::new())
+    import::preview(req, &PublicHf::new(), Some(&s.config.paths.kits_dir))
         .await
         .map(Json)
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))

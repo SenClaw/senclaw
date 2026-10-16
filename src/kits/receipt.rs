@@ -37,6 +37,10 @@ pub enum KitItemKind {
     /// A Space App that shipped inside a zip bundle. `engine_ref` is the id the
     /// app installer registered it under.
     App,
+    /// The kit's Datagen catalog entries, one file per kit
+    /// (`<kits_dir>/datasets/<kit>.json`). Removing it takes the entries out
+    /// of the catalog; datasets already imported from them stay.
+    Dataset,
 }
 
 impl KitItemKind {
@@ -50,6 +54,7 @@ impl KitItemKind {
             Self::Pattern => "pattern",
             Self::PatternSource => "patternSource",
             Self::App => "app",
+            Self::Dataset => "dataset",
         }
     }
 }
