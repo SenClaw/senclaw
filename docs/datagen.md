@@ -289,6 +289,9 @@ Dataset nhập từ catalog đọc được từ **mọi** chat (dữ liệu cô
 
 ## Dùng thế nào
 
+Hướng dẫn từng bước, có kết quả chạy thử thật (16/10/2026):
+[usage-guide.html](../plans/261014-2217-datagen-integration/usage-guide.html).
+
 **Từ giao diện:** trang **Datagen** trên web (`/datagen`, `web-app/src/pages/DatagenPage.tsx`) và desktop (thanh điều hướng → Datagen, `desktop/lib/features/datagen/`). Cả hai cho chạy mọi pipeline, xem tiến độ và lý do loại, huỷ job, xem bản ghi theo trang, xoá dataset. Cả hai còn có:
 - tab **Dataset gốc**: thẻ catalog, mỗi thẻ có nút Cài (mục có điều kiện hỏi đồng ý trước);
 - nút **Nhập file / URL…**: tab File / URL / Hugging Face, có xem trước, chọn dạng, chọn cột và license;

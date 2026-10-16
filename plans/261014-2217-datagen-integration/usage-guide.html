@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hướng dẫn Datagen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --paper:#f6f5f1; --panel:#ffffff; --ink:#17171b; --ink-2:#45443f; --muted:#6c6a63;
+  --rule:#dcd9d0; --rule-2:#ebe9e3; --code-bg:#efeee8;
+  --jev:#1d5bbf; --jev-soft:#e7eefb;
+  --llm:#ad4f19; --llm-soft:#fbeee4;
+  --eng:#22704a; --eng-soft:#e3f1e9;
+  --hum:#6c3f9f; --hum-soft:#f0e8f8;
+  --bad:#b42318; --bad-soft:#fdeceb;
+  --warn:#835400; --warn-soft:#fbf1da;
+  --ok:#1f7a3d; --ok-soft:#e4f3e8;
+  --dot-text:#ffffff;
+  --f-display:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+    --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+    --jev:#86b4ff; --jev-soft:#18263d;
+    --llm:#f2a466; --llm-soft:#35231a;
+    --eng:#72d3a0; --eng-soft:#14301f;
+    --hum:#c9a3f3; --hum-soft:#2a1f3b;
+    --bad:#ff8f86; --bad-soft:#3a1a19;
+    --warn:#efc56f; --warn-soft:#342811;
+    --ok:#7fd79d; --ok-soft:#15301d;
+    --dot-text:#131316;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+  --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+  --jev:#86b4ff; --jev-soft:#18263d;
+  --llm:#f2a466; --llm-soft:#35231a;
+  --eng:#72d3a0; --eng-soft:#14301f;
+  --hum:#c9a3f3; --hum-soft:#2a1f3b;
+  --bad:#ff8f86; --bad-soft:#3a1a19;
+  --warn:#efc56f; --warn-soft:#342811;
+  --ok:#7fd79d; --ok-soft:#15301d;
+  --dot-text:#131316;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:15px/1.62 var(--f-body);-webkit-font-smoothing:antialiased}
+a{color:var(--jev);text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--jev);outline-offset:2px;border-radius:3px}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:28px 72px;display:grid;grid-template-columns:minmax(0,1fr);gap:28px}
+@media (min-width:1040px){.wrap{grid-template-columns:212px minmax(0,1fr);gap:44px;padding-inline:28px}}
+/* TOC */
+.toc{font-size:13px;line-height:1.45}
+.toc details{border:1px solid var(--rule);border-radius:8px;background:var(--panel);padding:10px 14px}
+.toc summary{cursor:pointer;font-weight:600}
+.toc ol{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:2px}
+.toc a{display:grid;grid-template-columns:2.2em 1fr;gap:4px;color:var(--ink-2);text-decoration:none;padding:3px 6px;border-radius:4px}
+.toc a span{color:var(--muted);font:12px var(--f-mono)}
+.toc a:hover{background:var(--rule-2);color:var(--ink)}
+.toc a.on{background:var(--jev-soft);color:var(--ink)}
+@media (min-width:1040px){
+  .toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto}
+  .toc details{border:0;background:none;padding:0}
+  .toc summary{list-style:none;font:600 11px var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);pointer-events:none}
+  .toc summary::-webkit-details-marker{display:none}
+}
+main{min-width:0}
+/* type */
+h1,h2,h3{text-wrap:balance}
+h1{font:700 clamp(28px,4.2vw,40px)/1.1 var(--f-display);letter-spacing:-.01em;margin:6px 0 14px}
+h2{font:600 26px/1.2 var(--f-display);margin:0}
+h3{font:600 16.5px/1.35 var(--f-body);margin:26px 0 8px}
+p,li{max-width:74ch}
+p{margin:0 0 12px}
+ul,ol{margin:0 0 12px;padding-left:22px}
+li{margin:3px 0}
+.eyebrow{font:600 11.5px var(--f-body);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--code-bg);padding:.08em .32em;border-radius:3px;overflow-wrap:anywhere}
+pre{font:12.5px/1.55 var(--f-mono);background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:0 0 14px;max-width:100%}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+/* header */
+.masthead{border-bottom:1px solid var(--rule);padding-bottom:22px;margin-bottom:6px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;border:1px solid var(--rule);background:var(--panel);border-radius:999px;padding:3px 10px;color:var(--ink-2)}
+.chip b{font-weight:600;color:var(--ink)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:18px}
+.fact{background:var(--panel);padding:12px 14px}
+.fact .k{font:600 11px var(--f-body);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.fact .v{font:600 17px/1.3 var(--f-display);margin-top:3px}
+.fact .v.jev{color:var(--jev)} .fact .v.llm{color:var(--llm)} .fact .v.eng{color:var(--eng)} .fact .v.hum{color:var(--hum)}
+/* sections */
+section{padding-top:42px;scroll-margin-top:16px}
+.sh{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--rule);padding-bottom:8px;margin-bottom:16px}
+.sn{font:500 13px var(--f-mono);color:var(--muted);min-width:2.4em}
+.tldr{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px 6px}
+.tldr li{margin:6px 0}
+/* grids & boxes */
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}
+.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 14px}
+.box{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.box h4{margin:0 0 6px;font:600 13px var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.box p:last-child,.box ul:last-child{margin-bottom:0}
+.box ul{padding-left:18px}
+.box.jev{border-top:3px solid var(--jev)} .box.llm{border-top:3px solid var(--llm)} .box.eng{border-top:3px solid var(--eng)} .box.hum{border-top:3px solid var(--hum)} .box.bad{border-top:3px solid var(--bad)}
+.note{border-left:3px solid var(--jev);background:var(--jev-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:0 0 14px}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note p:last-child{margin-bottom:0}
+/* tables */
+.tscroll{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;line-height:1.5}
+th{font:600 11.5px/1.3 var(--f-body);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);background:var(--panel);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .ref{font:11.5px var(--f-mono);color:var(--muted);display:block;margin-top:2px;overflow-wrap:anywhere}
+/* tags */
+.tag{display:inline-block;font:600 10.5px/1 var(--f-body);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px 3px;border-radius:4px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.t-jev{color:var(--jev)} .t-llm{color:var(--llm)} .t-eng{color:var(--eng)} .t-hum{color:var(--hum)} .t-bad{color:var(--bad)} .t-warn{color:var(--warn)} .t-ok{color:var(--ok)} .t-mut{color:var(--muted)}
+.ev{font:500 10.5px var(--f-mono);padding:1px 5px;border-radius:3px;white-space:nowrap}
+.ev-m{background:var(--ok-soft);color:var(--ok)}
+.ev-e{background:var(--warn-soft);color:var(--warn)}
+.ev-p{background:var(--jev-soft);color:var(--jev)}
+/* diagrams */
+figure{margin:0 0 16px}
+.dscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel);padding:10px}
+.dscroll svg{display:block;width:100%;min-width:760px;height:auto}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:8px;max-width:90ch}
+svg .bx{fill:var(--panel);stroke:var(--rule);stroke-width:1.2}
+svg .bx-jev{fill:var(--jev-soft);stroke:var(--jev);stroke-width:1.2}
+svg .bx-llm{fill:var(--llm-soft);stroke:var(--llm);stroke-width:1.2}
+svg .bx-eng{fill:var(--eng-soft);stroke:var(--eng);stroke-width:1.2}
+svg .bx-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.2}
+svg .bx-hum{fill:var(--hum-soft);stroke:var(--hum);stroke-width:1.2}
+svg .ct{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:6 4}
+svg .t{fill:var(--ink);font:600 13px var(--f-body)}
+svg .ts{fill:var(--ink-2);font:12px var(--f-body)}
+svg .tm{fill:var(--muted);font:11.5px var(--f-mono)}
+svg .tl{fill:var(--ink-2);font:italic 12px var(--f-body)}
+svg .ar{stroke:var(--ink-2);stroke-width:1.4;fill:none}
+svg .ar-jev{stroke:var(--jev)} svg .ar-llm{stroke:var(--llm)} svg .ar-eng{stroke:var(--eng)} svg .ar-bad{stroke:var(--bad)}
+svg .dash{stroke-dasharray:5 4}
+svg .ah{fill:var(--ink-2)}
+svg .dot{fill:var(--bad)}
+svg .dott{fill:var(--dot-text);font:700 11px var(--f-body)}
+svg .axis{stroke:var(--rule);stroke-width:1}
+svg .grid{stroke:var(--rule-2);stroke-width:1}
+svg .s-eng{fill:var(--eng)} svg .s-jev{fill:var(--jev)} svg .s-llm{fill:var(--llm)} svg .s-set{fill:var(--eng);opacity:.45}
+svg .s-old{fill:none;stroke:var(--bad);stroke-width:1.5;stroke-dasharray:6 4}
+/* bands */
+.bands{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px 14px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px;margin:0 0 14px}
+.bands .lbl{font-size:13px;font-weight:600}
+.bar{display:flex;height:30px;border-radius:6px;overflow:hidden;border:1px solid var(--rule);font-size:12px}
+.bar span{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 4px}
+.z-rev{background:var(--hum-soft);color:var(--hum)}
+.z-fb{background:var(--llm-soft);color:var(--llm)}
+.z-act{background:var(--jev-soft);color:var(--jev)}
+.axisrow{position:relative;height:18px;font:11.5px var(--f-mono);color:var(--muted)}
+.axisrow span{position:absolute;transform:translateX(-50%)}
+.axisrow span:first-child{transform:none} .axisrow span:last-child{transform:translateX(-100%)}
+@media (max-width:520px){.bands{grid-template-columns:minmax(0,1fr);gap:6px}.bands>span:empty{display:none}}
+/* steps */
+.steps{counter-reset:st;list-style:none;padding:0;margin:0 0 14px;display:grid;gap:8px}
+.steps li{counter-increment:st;display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;max-width:none;background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:10px 12px}
+.steps li::before{content:counter(st);font:600 13px var(--f-mono);color:var(--muted);padding-top:1px}
+.steps li b{font-weight:600}
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:0 0 14px}
+.phase{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.phase .ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.phase .pid{font:600 20px var(--f-display);color:var(--jev)}
+.phase .size{font:500 11px var(--f-mono);color:var(--muted)}
+.phase h4{margin:0;font:600 15px/1.3 var(--f-body)}
+.phase ul{margin:0;padding-left:18px;font-size:13.5px}
+.phase .exit{margin-top:auto;font-size:12.5px;border-top:1px dashed var(--rule);padding-top:8px;color:var(--ink-2)}
+/* decisions */
+.dec{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;margin:0 0 12px}
+.dec .dh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.dec .did{font:600 13px var(--f-mono);color:var(--muted)}
+.dec h4{margin:0;font:600 16px/1.35 var(--f-body)}
+.opts{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
+.opts li{max-width:none;border:1px solid var(--rule-2);border-radius:8px;padding:8px 10px;font-size:14px}
+.opts li.rec{border-color:var(--ok);background:var(--ok-soft)}
+.opts li .tag{margin-right:6px}
+.path{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px}
+.path .pn{font-weight:600;border:1px solid var(--rule);border-radius:6px;padding:3px 8px;background:var(--paper)}
+.path .pn.eng{border-color:var(--eng);background:var(--eng-soft)}
+.path .pn.hum{border-color:var(--hum);background:var(--hum-soft)}
+.path .pa{font:12px var(--f-mono);color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+svg .bx-dash{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+svg .hd{fill:var(--muted);font:600 11px var(--f-body);letter-spacing:.08em}
+/* UI mockups */
+.mock{background:var(--paper);border:1px solid var(--rule);border-radius:12px;padding:14px;margin:0 0 14px}
+.mock .bar2{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.mock .seg{display:inline-flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden;font-size:13px}
+.mock .seg span{padding:4px 10px;background:var(--panel)} .mock .seg span.on{background:var(--jev-soft);color:var(--jev);font-weight:600}
+.mock .btn{display:inline-block;font-size:12.5px;border:1px solid var(--rule);border-radius:6px;padding:3px 10px;background:var(--panel)}
+.mock .btn.pri{background:var(--jev);border-color:var(--jev);color:var(--paper);font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.card h5{margin:0;font:600 14.5px/1.3 var(--f-body)}
+.card .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.card .foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px dashed var(--rule);padding-top:8px}
+
+.q{font-style:italic;color:var(--ink-2)}
+.kv{display:grid;grid-template-columns:minmax(0,max-content) minmax(0,1fr);gap:4px 14px;font-size:14px;margin:0 0 12px}
+.kv dt{font-weight:600}.kv dd{margin:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="toc" aria-label="Mục lục">
+    <details id="tocbox" open>
+      <summary>Mục lục</summary>
+      <ol>
+        <li><a href="#tomtat"><span>—</span>Tóm tắt</a></li>
+        <li><a href="#s1"><span>§1</span>Kết quả thử nghiệm</a></li>
+        <li><a href="#s2"><span>§2</span>Bắt đầu nhanh</a></li>
+        <li><a href="#s3"><span>§3</span>Công thức</a></li>
+        <li><a href="#s4"><span>§4</span>Từ chat</a></li>
+        <li><a href="#s5"><span>§5</span>Qua REST</a></li>
+        <li><a href="#s6"><span>§6</span>Đọc kết quả</a></li>
+        <li><a href="#s7"><span>§7</span>Lỗi thường gặp</a></li>
+        <li><a href="#s8"><span>§8</span>Giới hạn</a></li>
+      </ol>
+    </details>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <div class="eyebrow">Hướng dẫn sử dụng · SenClaw · Datagen</div>
+      <h1>Datagen: dùng thế nào, và đã chạy thử ra sao</h1>
+      <p class="lede">Datagen tạo dataset trong nền: bộ câu có nhãn để đo router, hỏi đáp từ tài liệu, lời giải từng bước có kiểm, bài toán có đáp án từ việc chạy code, hoặc nhập dataset do người viết. Hướng dẫn này dựa trên <b>10 lần chạy thật</b> ngày 16/10/2026: model <code>google/gemma-4-e4b</code> chạy trên LM Studio trong mạng LAN, cùng dữ liệu thật từ Hugging Face.</p>
+      <div class="meta">
+        <span class="chip"><b>Ngày</b> 16/10/2026</span>
+        <span class="chip"><b>Bản</b> senclaw <code>feat/datagen-import</code> @ a9f4143</span>
+        <span class="chip"><b>Đi kèm</b> <a href="design.html">Ghép vào đâu</a> · <a href="import-defaults.html">Dataset gốc</a></span>
+        <span class="chip"><b>Tham chiếu đầy đủ</b> <code>docs/datagen.md</code></span>
+      </div>
+      <div class="facts">
+        <div class="fact"><div class="k">Lần chạy</div><div class="v">10, gồm 1 lỗi đã sửa</div></div>
+        <div class="fact"><div class="k">Bản ghi giữ lại</div><div class="v eng">2.316</div></div>
+        <div class="fact"><div class="k">Lời gọi LLM</div><div class="v jev">62 · ~17 phút</div></div>
+        <div class="fact"><div class="k">Chi phí import</div><div class="v eng">0 lời gọi</div></div>
+      </div>
+    </header>
+
+    <section id="tomtat" aria-labelledby="h-tomtat">
+      <div class="sh"><h2 id="h-tomtat">Tóm tắt</h2></div>
+      <div class="tldr">
+        <ul>
+          <li><b>Mở ở đâu:</b> trang <b>Datagen</b> trên web (<code>/datagen</code>) và trên desktop. Có hai tab: <i>Job &amp; dataset</i> và <i>Dataset gốc</i>. Từ chat thì gọi tool <code>datagen_start</code> / <code>datagen_status</code>.</li>
+          <li><b>Nên bắt đầu từ dataset gốc.</b> Cài sẵn một bộ do người viết (MASSIVE-vi, GSM8K, bộ <code>senclaw-flows-vi</code>…), rồi bấm <b>Dùng làm seed</b> hoặc <b>Dùng làm bài toán</b>. Không tốn lời gọi LLM nào cho tới khi sinh.</li>
+          <li><b>Kết quả thử:</b>
+            <ul>
+              <li>Import: chạy đúng cả 5 lần.</li>
+              <li><code>expand_seeds</code> 20/24, <code>reasoning_traces</code> 4/5, <code>executable_qa</code> 5/5.</li>
+              <li><code>doc_qa</code> lúc đầu 0/6 vì trần token không chừa chỗ cho phần "suy nghĩ" của model. Đã sửa (commit <code>a9f4143</code>), chạy lại được 6/6.</li>
+            </ul></li>
+          <li><b>Ba điều nên nhớ:</b>
+            <ul>
+              <li>Luôn đặt <code>language</code>: có một lời giải bị viết bằng tiếng Tây Ban Nha.</li>
+              <li>Càng nhiều nhãn thì càng cần nhiều lời gọi: 12 nhãn làm hết ngân sách trước khi đủ số câu.</li>
+              <li>Bản ghi do máy kiểm không có nghĩa là đề bài hợp lý: có bài "đếm món đồ" cho ra 5,5555.</li>
+            </ul></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="s1" aria-labelledby="h1s">
+      <div class="sh"><span class="sn">§1</span><h2 id="h1s">Kết quả thử nghiệm</h2></div>
+      <p>Daemon thử chạy cô lập (home, thư mục làm việc và cổng riêng), không đụng bản cài thật. Thời gian lấy từ manifest của job (<code>startedAt</code> → <code>finishedAt</code>), đo trên model trong LAN. Dòng 4 và 10 chạy trong đợt kiểm trước cùng ngày và không đo thời gian.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>#</th><th>Việc</th><th>Cách chạy</th><th class="num">Giữ / mục tiêu</th><th class="num">Lời gọi</th><th class="num">Thời gian</th><th>Nhận xét</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Nhập CSV khách hàng (9 dòng, tiêu đề tiếng Việt)</td><td><code>import</code> · File</td><td class="num">7 / 9</td><td class="num">0</td><td class="num">&lt;1 s</td><td>Tự đoán <code>text ← Nội dung</code>, <code>label ← Loại</code>. Bỏ 1 dòng trống (<code>missing_text</code>) và 1 dòng trùng (<code>duplicate</code>)</td></tr>
+            <tr><td>2</td><td>Bộ có sẵn <code>senclaw-flows-vi</code></td><td>catalog</td><td class="num">144 / 144</td><td class="num">0</td><td class="num">&lt;1 s</td><td>Không cần mạng</td></tr>
+            <tr><td>3</td><td>GSM8K (50 bài)</td><td>catalog · HF</td><td class="num">50 / 50</td><td class="num">0</td><td class="num">1,4 s</td><td>Đáp án tách đúng phần sau <code>####</code></td></tr>
+            <tr><td>4</td><td>MASSIVE-vi (cả tập test)</td><td>catalog · HF</td><td class="num">2.030 / 2.974</td><td class="num">0</td><td class="num">—</td><td>914 dòng có intent không có trong bảng đổi nhãn bị bỏ đúng chủ ý; 30 dòng trùng</td></tr>
+            <tr><td>5</td><td>Mở rộng câu yêu cầu, 2 seed × 12 nhãn</td><td><code>expand_seeds</code> · <code>seedsFrom</code></td><td class="num">20 / 24</td><td class="num">30 / 30</td><td class="num">276 s</td><td>Hết ngân sách: bộ phân loại không thấy nhãn dự định, và loại 30 câu vì không khớp nhãn (<code>label_mismatch</code>). Câu sinh ra tự nhiên, nhãn phần lớn đúng</td></tr>
+            <tr><td>6</td><td>Lời giải 5 bài GSM8K</td><td><code>reasoning_traces</code> · <code>problemsFrom</code></td><td class="num">4 / 5</td><td class="num">13 / 20</td><td class="num">214 s</td><td>4/4 đáp án đúng, điểm 1.0. Một lời giải viết bằng tiếng Tây Ban Nha vì không đặt <code>language</code>. Một bài bị loại vì không đọc được phần chấm điểm (<code>judge_check_error</code>)</td></tr>
+            <tr><td>7</td><td>Bài toán mới chạy code</td><td><code>executable_qa</code> · 4 seed GSM8K</td><td class="num">5 / 5</td><td class="num">5 / 10</td><td class="num">150 s</td><td>Đề tiếng Việt, đáp án là output khi chạy trong sandbox <code>seatbelt</code>. Vài đáp án lẻ vô lý (5,5555 món)</td></tr>
+            <tr><td>8</td><td>Hỏi đáp từ <code>docs/zen-kits.md</code></td><td><code>doc_qa</code></td><td class="num">0 / 6</td><td class="num">5</td><td class="num">139 s</td><td><span class="tag t-bad">lỗi</span> 5 câu trả lời bị cắt ở trần token: model suy nghĩ khoảng 1000 token trước khi viết JSON</td></tr>
+            <tr><td>9</td><td>Như dòng 8, sau khi sửa</td><td><code>doc_qa</code></td><td class="num">6 / 6</td><td class="num">9 / 18</td><td class="num">224 s</td><td><span class="tag t-ok">đã sửa</span> Câu hỏi nhiều bước, mỗi câu 2–3 trích dẫn kiểm được trong đoạn văn</td></tr>
+            <tr><td>10</td><td>Kit mang dataset riêng</td><td>cài kit → catalog → import</td><td class="num">50 / 50</td><td class="num">0</td><td class="num">—</td><td>Mục <code>lab/gsm-mini</code> hiện trong catalog; gỡ kit thì mục biến mất, dataset đã nhập vẫn còn</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="g2">
+        <div class="box eng"><h4>Mẫu câu <code>expand_seeds</code> sinh ra</h4><ul class="small">
+          <li><code>calendar</code>: <span class="q">Cho mình chặn lịch chiều mai để viết báo cáo, khoảng từ 2 đến 4 giờ.</span></li>
+          <li><code>code</code>: <span class="q">Cập nhật schema database bằng migration script, thêm cột phone_number…</span></li>
+          <li><code>note</code>: <span class="q">Ghi lại buổi họp với anh Minh: khách hàng thích tông màu xanh dương…</span></li>
+          <li><code>ocr</code>: <span class="q">Giúp tôi trích xuất thông tin ngày hết hạn trên cái bằng này.</span></li>
+          <li><code>schedule</code>: <span class="q">Nhắc tôi uống thuốc huyết áp lúc 8 giờ sáng mỗi ngày.</span> Câu này nằm ở ranh giới với <code>calendar</code>, nên người duyệt lại.</li>
+        </ul></div>
+        <div class="box jev"><h4>Mẫu câu hỏi <code>doc_qa</code> (sau khi sửa)</h4><ul class="small">
+          <li><span class="q">Theo quy ước của jobs[].cron, việc đánh số ngày trong tuần khác biệt như thế nào so với Unix…?</span> 2 trích dẫn</li>
+          <li><span class="q">Tại sao tên trong tệp phải giữ nguyên khi các tác vụ nền được giải quyết đối với một persona?</span> 2 trích dẫn</li>
+          <li><span class="q">Để kiểm tra lỗi tham số mà không cần cài đặt kit, người dùng nên dùng phương thức nào…?</span> 2 trích dẫn</li>
+        </ul></div>
+      </div>
+    </section>
+
+    <section id="s2" aria-labelledby="h2s">
+      <div class="sh"><span class="sn">§2</span><h2 id="h2s">Bắt đầu nhanh (5 phút)</h2></div>
+      <ol class="steps">
+        <li><div><b>Chọn model.</b> Datagen dùng model đang chọn trong Settings → Models. Muốn dùng model khác thì điền ô <i>Model profile</i> của job. Bước <b>import</b> không cần model.</div></li>
+        <li><div><b>Mở Datagen → tab "Dataset gốc".</b> Bấm <b>Cài ngay</b> ở thẻ <i>SenClaw flows (vi)</i>. Bộ này có sẵn trong app, cài không cần mạng.</div></li>
+        <li><div><b>Bấm "Dùng làm seed"</b> ở thẻ vừa cài. Form <i>Job mới</i> mở ra với <code>expand_seeds</code> và dataset đã được chọn. Điền <b>Mỗi nhãn</b> = 2, <b>Mục tiêu</b> = 24, <b>Ngôn ngữ</b> = <code>Vietnamese</code>, rồi bấm <b>Bắt đầu</b>.</div></li>
+        <li><div><b>Theo dõi ở tab "Job &amp; dataset".</b> Thanh tiến độ, số lời gọi LLM và lý do loại cập nhật vài giây một lần. Muốn dừng thì bấm nút huỷ; các bản ghi đã viết vẫn được giữ.</div></li>
+        <li><div><b>Xem bản ghi</b> bằng nút hình con mắt. Dataset nằm ở <code>~/senclaw/datasets/&lt;tên&gt;/</code>, gồm <code>data.jsonl</code> và <code>manifest.json</code>.</div></li>
+      </ol>
+    </section>
+
+    <section id="s3" aria-labelledby="h3s">
+      <div class="sh"><span class="sn">§3</span><h2 id="h3s">Công thức theo mục đích</h2></div>
+
+      <h3>3.1 Bộ đo cho skill router (MASSIVE-vi)</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd>Dataset gốc → <i>MASSIVE · tiếng Việt</i> → <b>Tải về</b> → đồng ý điều kiện. Thanh tiến độ trên thẻ cho thấy số dòng đã đọc.</dd>
+        <dt>Ra</dt><dd>2.030 câu do người viết. Nhãn đã đổi sang skill SenClaw: <code>calendar</code>, <code>space</code> (email), <code>web-research</code>, <code>none</code>. Mỗi bản ghi giữ <code>sourceLabel</code> gốc, và có <code>accept</code> khi nhiều nhãn cùng đúng.</dd>
+        <dt>Lưu ý</dt><dd>Tập test của MASSIVE <b>chỉ để đo, không dùng để huấn luyện</b>. Intent không có câu trả lời rõ trong SenClaw (báo thức, mua sắm, đi lại…) bị bỏ đúng chủ ý.</dd>
+      </dl>
+
+      <h3>3.2 Câu yêu cầu cho flow riêng của bạn</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd><b>Job mới</b> → <code>expand_seeds</code>. Gõ mỗi dòng <code>nhãn | câu</code>, ít nhất 2 nhãn. Hoặc chọn <b>Hoặc lấy seed từ dataset</b>.</dd>
+        <dt>Nên</dt><dd>Điền <b>Mô tả nhãn</b> (<code>nhãn: ý nghĩa</code>), vì bộ phân loại dựa vào đó. Mỗi job chỉ 3–6 nhãn. Đặt <b>Ngôn ngữ</b>.</dd>
+        <dt>Ngân sách</dt><dd>Mặc định là ba lần số lời gọi cần cho một lần chạy không câu nào bị loại. Với 12 nhãn, lần thử đã tiêu hết 30 lời gọi trước khi đủ 24 câu. Nếu nhiều <code>label_mismatch</code>, hãy tăng <b>Số lượt gọi LLM tối đa</b> hoặc chia thành nhiều job nhỏ.</dd>
+      </dl>
+
+      <h3>3.3 Nhập dữ liệu của bạn (CSV, JSON, JSONL)</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd><b>Nhập file / URL…</b> → tab <i>Tệp</i> → kéo file vào → <b>Xem trước</b>. Kiểm lại <b>Kiểu</b> và cột cho từng trường (cột có dấu * là bắt buộc), ghi <b>Giấy phép</b> (<code>private</code> nếu là dữ liệu nội bộ), rồi bấm <b>Nhập</b>.</dd>
+        <dt>Excel</dt><dd>Lưu dạng <b>CSV UTF-8</b>. File mã hoá kiểu cũ bị từ chối kèm lời nhắc, không bị đoán sai dấu.</dd>
+        <dt>Bản xem trước</dt><dd>Hiện 20 dòng đầu, mỗi dòng ghi <i>giữ</i> hoặc lý do bị loại. Bản xem trước <b>chưa loại dòng trùng</b>; việc đó làm lúc nhập thật.</dd>
+        <dt>Hugging Face</dt><dd>Tab <i>Hugging Face</i> → gõ <code>owner/dataset</code> → Enter. Config và split được liệt kê sẵn. Chỉ nhập được dataset công khai, không nhập được dataset bị khoá (gated).</dd>
+      </dl>
+
+      <h3>3.4 Lời giải từng bước có kiểm (GSM8K)</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd>Cài <i>GSM8K</i> → <b>Dùng làm bài toán</b> → form <code>reasoning_traces</code>. Đặt <b>Ngôn ngữ</b>, rồi bấm <b>Bắt đầu</b>.</dd>
+        <dt>Ra</dt><dd>Lời giải, đáp án và điểm correctness / clarity / completeness. Đáp án được so với đáp án mẫu <b>bằng code</b>, và model giải bài không bao giờ thấy đáp án mẫu.</dd>
+        <dt>Thử</dt><dd>4/4 đúng; trung bình khoảng 2,6 lời gọi và 43 giây mỗi bài trên gemma-4-e4b.</dd>
+      </dl>
+
+      <h3>3.5 Bài toán có đáp án từ việc chạy code</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd><code>executable_qa</code>, seed là vài bài mẫu (gõ tay hoặc lấy từ GSM8K). Chương trình Python do model viết chạy trong sandbox của SenClaw; máy không có cách ly thật thì job không chạy.</dd>
+        <dt>Duyệt lại</dt><dd>Đáp án luôn khớp với code, nhưng code có thể giải một đề vô lý (số món đồ ra số lẻ). Hãy đọc lướt trước khi dùng làm dữ liệu huấn luyện.</dd>
+      </dl>
+
+      <h3>3.6 Hỏi đáp từ tài liệu</h3>
+      <dl class="kv">
+        <dt>Làm</dt><dd><code>doc_qa</code>, ở <b>File hoặc thư mục</b> điền đường dẫn tuyệt đối tới file <code>.md</code> / <code>.txt</code>. Hoặc dán văn bản, mỗi tài liệu ngăn bằng một dòng <code>---</code>.</dd>
+        <dt>Kiểm</dt><dd>Mỗi trích dẫn được so với đoạn văn bằng code. Câu hỏi phải cần ít nhất 2 câu khác nhau trong đoạn để trả lời; câu chỉ dùng 1 câu bị loại với lý do <code>single_hop</code>. Có thêm một lần gọi riêng để kiểm đoạn văn đủ trả lời.</dd>
+        <dt>Không đọc</dt><dd>Thư mục của SenClaw (<code>~/.senclaw</code>), symlink, và file không phải văn bản.</dd>
+      </dl>
+
+      <h3>3.7 Xuất lịch sử chat</h3>
+      <p class="small"><code>export_logs</code> chỉ có dữ liệu từ những chat đã bật trajectory, và bật theo từng chat. Định dạng: <code>sharegpt</code>, <code>alpaca</code> hoặc <code>messages</code>. Lần thử này không chạy pipeline này vì chưa chat nào bật trajectory.</p>
+
+      <h3>3.8 Kit mang dataset riêng</h3>
+<pre><code>"datasets": [{
+  "id": "router-eval", "title": "Router eval", "kind": "labeled_text", "license": "MIT",
+  "source": { "url": "https://…/router-eval.jsonl" },
+  "mapping": { "text": "text", "label": "label" }
+}]</code></pre>
+      <p class="small">Cài kit chỉ thêm mục vào tab Dataset gốc, với id <code>&lt;kit&gt;/router-eval</code>, và không tải gì. Người dùng tự bấm cài từng mục, nên điều kiện license luôn hiện ra trước mặt họ.</p>
+    </section>
+
+    <section id="s4" aria-labelledby="h4s">
+      <div class="sh"><span class="sn">§4</span><h2 id="h4s">Từ chat</h2></div>
+      <p>Agent có ba tool: <code>datagen_start</code>, <code>datagen_status</code>, <code>datagen_cancel</code>. Mọi tool chỉ thấy job của chính chat đó, cộng với các dataset nhập từ catalog. Ví dụ câu có thể nhắn:</p>
+      <div class="g2">
+        <div class="box"><h4>Nhắn</h4><ul class="small">
+          <li><span class="q">Cài bộ MASSIVE tiếng Việt vào Datagen.</span> Agent sẽ hỏi bạn đồng ý điều kiện trước, rồi mới gửi <code>accept_license</code>.</li>
+          <li><span class="q">Lấy 3 câu mỗi nhãn từ massive-vi làm seed, sinh 60 câu tiếng Việt cho các nhãn đó.</span></li>
+          <li><span class="q">Nhập file khach-hang.csv trong thư mục dự án, license private.</span></li>
+          <li><span class="q">Job datagen lúc nãy xong chưa? Bị loại vì gì?</span></li>
+        </ul></div>
+        <div class="box"><h4>Tool được gọi</h4>
+<pre><code>datagen_start {
+  "pipeline": "expand_seeds",
+  "seeds_from": "massive-vi", "per_label": 3,
+  "target": 60, "language": "Vietnamese"
+}
+datagen_start {
+  "pipeline": "import",
+  "source": {"file": "khach-hang.csv"},
+  "kind": "labeled_text", "license": "private"
+}</code></pre></div>
+      </div>
+      <div class="note"><p>Job chạy nền. Agent nên đặt <code>schedule_watch</code> trên <code>datagen_status</code> (điều kiện <code>job.state</code> khác <code>running</code>) rồi kết thúc lượt, thay vì chờ trong lượt chat. Đường dẫn tương đối tính theo thư mục làm việc của chat. Phần chat này chưa được chạy trong đợt thử; nó mô tả giao diện của tool.</p></div>
+    </section>
+
+    <section id="s5" aria-labelledby="h5s">
+      <div class="sh"><span class="sn">§5</span><h2 id="h5s">Qua REST</h2></div>
+<pre><code># catalog, rồi cài một mục
+curl -s localhost:18788/api/datagen/catalog
+curl -s -X POST localhost:18788/api/datagen/jobs -H 'content-type: application/json' \
+  -d '{"pipeline":"import","source":{"catalog":"gsm8k"}}'
+
+# xem trước một dataset Hugging Face (không ghi gì)
+curl -s -X POST localhost:18788/api/datagen/import/preview -H 'content-type: application/json' \
+  -d '{"source":{"hf":{"dataset":"HuggingFaceH4/self-instruct-seed"}}}'
+
+# sinh lời giải từ 20 bài đã nhập
+curl -s -X POST localhost:18788/api/datagen/jobs -H 'content-type: application/json' \
+  -d '{"pipeline":"reasoning_traces","problemsFrom":{"dataset":"gsm8k","limit":20},"language":"Vietnamese"}'
+
+# tiến độ, bản ghi
+curl -s localhost:18788/api/datagen/jobs
+curl -s 'localhost:18788/api/datagen/datasets/gsm8k/records?limit=5'</code></pre>
+      <p class="small">Trên máy khác hoặc khi bật bắt buộc token thì thêm <code>Authorization: Bearer &lt;token&gt;</code>. Khoá viết sai (vd. <code>max_llm_calls</code> thay cho <code>maxLlmCalls</code>) bị từ chối với mã 422, không bị lờ đi.</p>
+    </section>
+
+    <section id="s6" aria-labelledby="h6s">
+      <div class="sh"><span class="sn">§6</span><h2 id="h6s">Đọc kết quả</h2></div>
+      <p>Mỗi dataset có <code>manifest.json</code> ghi tham số, model, số bản ghi giữ / loại <b>theo lý do</b>, số lời gọi và token. Dataset nhập vào có thêm <code>provenance</code>: nguồn, commit đã đọc, license, ghi nguồn và sha256 của dữ liệu.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Lý do loại</th><th>Nghĩa</th><th>Nên làm</th></tr></thead>
+          <tbody>
+            <tr><td><code>label_mismatch</code></td><td>Bộ phân loại (không thấy nhãn dự định) xếp câu vào nhãn khác</td><td>Thêm mô tả nhãn, giảm số nhãn, hoặc dùng model mạnh hơn</td></tr>
+            <tr><td><code>too_similar</code> · <code>duplicate</code></td><td>Gần trùng (ROUGE-L) hoặc trùng hẳn bản ghi đã có</td><td>Bình thường; nhiều quá thì thêm seed đa dạng hơn, hoặc dùng mode <code>evolve</code></td></tr>
+            <tr><td><code>truncated</code></td><td>Model dừng ở trần token</td><td>Model có bước suy nghĩ: tăng ngân sách, hoặc chọn model ít suy nghĩ hơn</td></tr>
+            <tr><td><code>unparseable_output</code></td><td>Câu trả lời không phải JSON đúng dạng</td><td>Thử lại, hoặc đổi model</td></tr>
+            <tr><td><code>*_check_error</code></td><td>Bước kiểm (nhãn, căn cứ, chấm điểm) trả lời không đọc được. Lô bị loại, không bao giờ được nhận</td><td>Như trên</td></tr>
+            <tr><td><code>ungrounded</code> · <code>single_hop</code> · <code>unsupported</code></td><td><code>doc_qa</code>: trích dẫn không có trong đoạn văn / chỉ dựa vào một câu / đoạn văn không đủ để trả lời</td><td>Dùng tài liệu có đoạn dài và mạch lạc hơn</td></tr>
+            <tr><td><code>wrong_answer</code> · <code>below_threshold</code></td><td><code>reasoning_traces</code>: đáp án sai / điểm chấm dưới ngưỡng</td><td>Hạ <code>threshold</code>, hoặc tăng số vòng cải thiện</td></tr>
+            <tr><td><code>code_failed</code> · <code>empty_output</code> · <code>long_output</code> · <code>bad_code</code> · <code>timeout</code></td><td><code>executable_qa</code>: chương trình lỗi / không in gì / in quá dài / không đọc được / chạy quá giờ</td><td>Bình thường ở mức vài phần trăm</td></tr>
+            <tr><td><code>missing_&lt;trường&gt;</code> · <code>too_long</code> · <code>unmapped_label</code> · <code>cut_by_viewer</code></td><td><code>import</code>: thiếu trường bắt buộc / quá dài / nhãn không có trong bảng đổi nhãn / dataset viewer cắt mất ô</td><td>Sửa cột cho các trường, hoặc bổ sung bảng đổi nhãn</td></tr>
+            <tr><td><code>llm_error</code></td><td>Lời gọi model lỗi (timeout, mất kết nối). Thử lại 3 lần liền vẫn lỗi thì job dừng</td><td>Kiểm tra model trong Settings → Models</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s7" aria-labelledby="h7s">
+      <div class="sh"><span class="sn">§7</span><h2 id="h7s">Lỗi thường gặp</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Bạn thấy</th><th>Vì sao</th><th>Cách xử lý</th></tr></thead>
+          <tbody>
+            <tr><td>"stopped early: the LLM call budget was spent"</td><td>Hết <code>maxLlmCalls</code> trước khi đủ mục tiêu</td><td>Tăng giới hạn, hoặc giảm số nhãn mỗi job</td></tr>
+            <tr><td>Lời giải viết bằng ngôn ngữ lạ</td><td>Không đặt <code>language</code>; model nhỏ tự đổi ngôn ngữ</td><td>Luôn điền <b>Ngôn ngữ</b></td></tr>
+            <tr><td>"xquad-vi is CC-BY-SA-4.0 … send acceptLicense"</td><td>Mục có điều kiện, phải đồng ý trước</td><td>Bấm Cài trong giao diện và đồng ý</td></tr>
+            <tr><td>"2 datagen jobs are already running"</td><td>Tối đa 2 job chạy cùng lúc</td><td>Đợi, hoặc huỷ bớt một job</td></tr>
+            <tr><td>"Hugging Face answered 429…"</td><td>Hugging Face giới hạn tốc độ khi chạy nhiều import cùng lúc</td><td>Datagen tự nghỉ và thử lại tối đa 8 lần. Nếu vẫn hỏng, các bản ghi đã viết vẫn giữ; cài lại sau</td></tr>
+            <tr><td>"the file is not UTF-8 text"</td><td>CSV xuất từ Excel kiểu cũ</td><td>Save As → CSV UTF-8</td></tr>
+            <tr><td>"…points at this machine or a private network"</td><td>URL trỏ vào máy này hoặc mạng nội bộ; bị chặn để bảo vệ API của daemon</td><td>Đưa file lên chỗ công khai, hoặc dùng tab <i>Tệp</i></td></tr>
+            <tr><td>"no code sandbox is available"</td><td><code>executable_qa</code> cần cách ly thật (Seatbelt / bubblewrap / Docker)</td><td>Bật sandbox ở Plugins → Sandbox</td></tr>
+            <tr><td>Dataset ở trạng thái <code>interrupted</code></td><td>Daemon khởi động lại khi job đang chạy</td><td>Bản ghi đã viết vẫn còn; chạy lại nếu cần đủ</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s8" aria-labelledby="h8s">
+      <div class="sh"><span class="sn">§8</span><h2 id="h8s">Giới hạn</h2></div>
+      <ul>
+        <li>Tối đa 2 job chạy cùng lúc. Mỗi job gọi model lần lượt, không song song.</li>
+        <li>Mỗi job sinh tối đa 2.000 bản ghi (<code>executable_qa</code>: 1.000). Mỗi lần import tối đa 100.000 bản ghi, mặc định 20.000. File gửi kèm tối đa 8 MB, file qua URL tối đa 32 MB.</li>
+        <li>Hugging Face: chỉ dataset công khai, đọc qua dataset viewer, nên chỉ có <b>phiên bản hiện tại</b>. Commit ghim trong catalog chỉ để kiểm; job có ghi chú khi commit đã khác.</li>
+        <li>Trạng thái job nằm trong bộ nhớ của daemon. Dataset và manifest nằm trên đĩa với quyền 0600.</li>
+        <li>Chưa có: bước tự đo router hay tìm kiếm trên dataset đã có (P1 của <a href="design.html">tài liệu ghép nối</a>).</li>
+      </ul>
+    </section>
+  </main>
+</div>
+<script>
+(function(){
+  var box=document.getElementById('tocbox');
+  var mq=window.matchMedia('(max-width: 1039px)');
+  function syncToc(){ if(box){ box.open=!mq.matches; } }
+  syncToc();
+  if(mq.addEventListener){ mq.addEventListener('change',syncToc); }
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var map={};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)]=a; });
+  if(!('IntersectionObserver' in window)) return;
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('on'); });
+        var a=map[e.target.id]; if(a){ a.classList.add('on'); }
+      }
+    });
+  },{rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('main section[id]').forEach(function(s){ io.observe(s); });
+})();
+</script>
+</body>
+</html>
