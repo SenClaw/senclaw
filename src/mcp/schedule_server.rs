@@ -54,8 +54,9 @@ struct ScheduleWatchParams {
     /// Dot path into the tool result, e.g. `task.status`. **Call the probe tool
     /// once before arming and read the path off its actual answer** — a guessed
     /// path resolves to nothing, which counts as "not ready", so the watch waits
-    /// out its whole deadline on a job that already finished. Empty tests the
-    /// whole payload as text.
+    /// out its whole deadline on a job that already finished. Empty: `contains`
+    /// searches the whole answer as text; `equals` / `in` read its `state` or
+    /// `status` field (top level or one object down, e.g. `job.state`).
     #[serde(default)]
     done_path: Option<String>,
     /// `exists` (default), `equals`, `not_equals`, `contains`, `not_contains`,
@@ -415,6 +416,12 @@ impl ScheduleServer {
             );
         }
 
+        let args = match probe_args(p.args.clone()) {
+            Ok(a) => a,
+            Err(e) => return ToolResult::err(e),
+        };
+        let op = p.done_op.as_deref().map(DoneOp::parse).unwrap_or(DoneOp::Exists);
+        let path = p.done_path.clone().unwrap_or_default();
         let interval_secs = p.interval_secs.unwrap_or(60).clamp(15, 3600);
         let timeout_secs = p.timeout_secs.unwrap_or(3600).clamp(interval_secs, 86_400);
         let deadline = Utc::now() + chrono::Duration::seconds(timeout_secs);
@@ -424,14 +431,10 @@ impl ScheduleServer {
 
         let cfg = WatchConfig {
             tool: p.tool.clone(),
-            args: p.args.clone().unwrap_or(serde_json::json!({})),
+            args,
             done_when: DoneWhen {
-                path: p.done_path.clone().unwrap_or_default(),
-                op: p
-                    .done_op
-                    .as_deref()
-                    .map(DoneOp::parse)
-                    .unwrap_or(DoneOp::Exists),
+                path,
+                op,
                 value: p.done_value.clone(),
                 values: p.done_values.clone(),
             },
@@ -723,9 +726,39 @@ fn compute_next_run(schedule_type: &ScheduleType, value: &str) -> Result<String>
     }
 }
 
+/// The probe's arguments as the JSON object the tool takes. A model often
+/// hands them over as a JSON *string* (`"{\"job_id\": \"…\"}"`); stored as is,
+/// every check sent a string where the tool wants an object, every check
+/// failed, and the chat was never woken. A string holding an object is
+/// unwrapped; anything else that is not an object is refused while the model
+/// can still fix it.
+fn probe_args(args: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    match args {
+        None | Some(serde_json::Value::Null) => Ok(serde_json::json!({})),
+        Some(v @ serde_json::Value::Object(_)) => Ok(v),
+        Some(serde_json::Value::String(s)) if s.trim().is_empty() => Ok(serde_json::json!({})),
+        Some(serde_json::Value::String(s)) => match serde_json::from_str::<serde_json::Value>(&s) {
+            Ok(v @ serde_json::Value::Object(_)) => Ok(v),
+            _ => Err(format!("Error: args must be a JSON object such as {{\"id\": 31}}, not the text {s:?}")),
+        },
+        Some(other) => Err(format!("Error: args must be a JSON object such as {{\"id\": 31}}, not {other}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_args_given_as_a_json_string_are_unwrapped() {
+        use serde_json::json;
+        assert_eq!(probe_args(None).unwrap(), json!({}));
+        assert_eq!(probe_args(Some(json!({"job_id": "a1"}))).unwrap(), json!({"job_id": "a1"}));
+        assert_eq!(probe_args(Some(json!("{\"job_id\": \"a1\"}"))).unwrap(), json!({"job_id": "a1"}));
+        assert_eq!(probe_args(Some(json!(""))).unwrap(), json!({}));
+        assert!(probe_args(Some(json!("job a1"))).unwrap_err().contains("JSON object"));
+        assert!(probe_args(Some(json!([1, 2]))).is_err());
+    }
     use crate::config::Config;
 
     fn test_config() -> Config {
@@ -762,6 +795,38 @@ mod tests {
     #[test]
     fn compute_next_run_invalid_interval() {
         assert!(compute_next_run(&ScheduleType::Interval, "bad").is_err());
+    }
+
+    #[test]
+    fn a_watch_armed_with_stringified_args_and_no_path_still_works() {
+        let cfg = test_config();
+        let db = Db::open_in_memory(&cfg).unwrap();
+        let srv = ScheduleServer::new();
+        let arm = |v: serde_json::Value| {
+            let p: ScheduleWatchParams = serde_json::from_value(v).unwrap();
+            srv.schedule_watch(&db, "team-a", "tg:group:1", p)
+        };
+        let base = serde_json::json!({
+            "resume_prompt": "job done: {{result}}",
+            "tool": "mcp__senclaw-datagen__datagen_status",
+            "args": "{\"job_id\": \"abc123\"}",
+            "done_op": "in",
+            "done_values": ["done", "failed", "cancelled"]
+        });
+        let armed = arm(base.clone());
+        assert!(!armed.is_error, "{}", armed.content);
+        let stored: String = db
+            .with_conn(|c| c.query_row("SELECT watch_json FROM scheduled_tasks WHERE context_mode='watch'", [], |r| r.get(0)).map_err(Into::into))
+            .unwrap();
+        let w: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(w["args"], serde_json::json!({"job_id": "abc123"}), "a stringified args object is unwrapped");
+        let done: crate::scheduler::watch::DoneWhen = serde_json::from_value(w["done_when"].clone()).unwrap();
+        assert!(done.evaluate(&serde_json::json!({"job": {"state": "done"}})), "no path reads job.state");
+
+        let mut text = base;
+        text["done_op"] = serde_json::json!("contains");
+        text["done_value"] = serde_json::json!("done");
+        assert!(!arm(text).is_error, "contains on the whole answer stays allowed");
     }
 
     #[test]

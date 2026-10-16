@@ -1839,6 +1839,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             &cfg.paths.db_path.to_string_lossy(),
         ))
         .await;
+    // `datagen_status` is what a chat watches while its dataset job runs (the
+    // datagen skill arms that watch). Without this spec every probe failed
+    // with "MCP server not found: senclaw-datagen" and the chat never heard
+    // back. No chat jid and no workspace, per the note above: the probe asks
+    // for one job by id, which needs neither.
+    mcp_manager
+        .register_builtin_spec(mcp::helper::datagen_mcp_config(cfg.ui_server.port, "", "", ""))
+        .await;
 
     // ===== Built-in Kanban board (folded into core — src/kanban) =====
     // No separate process, port, or Space-App: the REST API is mounted on the

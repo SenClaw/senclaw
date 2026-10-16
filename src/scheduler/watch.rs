@@ -249,11 +249,18 @@ impl WatchConfig {
         }
     }
 
-    /// The prompt dispatched into the chat when the condition holds.
+    /// The prompt dispatched into the chat when the condition holds. A prompt
+    /// written without `{{result}}` still gets the probe's answer, appended:
+    /// woken with only its own instructions, an agent asked to "report the
+    /// numbers" wrote a report of placeholders and an invented path.
     pub fn render_resume(&self, result: &serde_json::Value) -> String {
         let rendered = render_value(result);
         let payload = truncate_on_char_boundary(&rendered, MAX_RESULT_CHARS);
-        self.resume_prompt.replace("{{result}}", payload)
+        if self.resume_prompt.contains("{{result}}") {
+            self.resume_prompt.replace("{{result}}", payload)
+        } else {
+            format!("{}\n\nWhat the check returned:\n{payload}", self.resume_prompt.trim_end())
+        }
     }
 
     /// The prompt dispatched when the watch gives up. Never empty — the user
@@ -282,7 +289,17 @@ impl WatchConfig {
 impl DoneWhen {
     /// Apply the condition to a probe result.
     pub fn evaluate(&self, result: &serde_json::Value) -> bool {
-        let resolved = resolve_path(result, &self.path);
+        let compares_a_value = matches!(self.op, DoneOp::Equals | DoneOp::NotEquals | DoneOp::In | DoneOp::NotIn);
+        // No path, a value comparison, a JSON object: compare its state field.
+        // Comparing the whole object as text can never equal "done", and
+        // small models leave `done_path` out even when told it is missing —
+        // three times in a row on one job — so that watch polled to its
+        // deadline while the agent told the user it was watching.
+        let resolved = if self.path.trim().is_empty() && compares_a_value && result.is_object() {
+            state_field(result)
+        } else {
+            resolve_path(result, &self.path)
+        };
 
         // A path that resolves to nothing means "the job has not reported that
         // field yet", never "the job is finished". Without this the negated
@@ -332,6 +349,20 @@ impl DoneWhen {
 /// Render a JSON value the way a comparison should see it: a string is its own
 /// text (not a quoted literal), everything else is compact JSON. Without this a
 /// `"done"` status compares against `"\"done\""` and never matches.
+/// The state of a status answer with no path given: its `state` or `status`,
+/// at the top or one object down (`job.state`, `task.status`). `None` when it
+/// has neither — which reads as "not reported yet", like any unresolved path.
+fn state_field(v: &serde_json::Value) -> Option<&serde_json::Value> {
+    const KEYS: [&str; 2] = ["state", "status"];
+    let o = v.as_object()?;
+    if let Some(found) = KEYS.iter().find_map(|k| o.get(*k).filter(|x| !x.is_object() && !x.is_array())) {
+        return Some(found);
+    }
+    o.values()
+        .filter_map(|child| child.as_object())
+        .find_map(|c| KEYS.iter().find_map(|k| c.get(*k).filter(|x| !x.is_object() && !x.is_array())))
+}
+
 pub fn render_value(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
@@ -589,6 +620,27 @@ mod tests {
             other => panic!("expected Done, got {other:?}"),
         }
         assert_eq!(c.checks, 1);
+    }
+
+    #[test]
+    fn no_path_compares_the_answers_state_field() {
+        let done = DoneWhen { path: String::new(), op: DoneOp::In, value: None, values: vec!["done".into(), "failed".into()] };
+        assert!(done.evaluate(&json!({"job": {"state": "done", "accepted": 40}})));
+        assert!(!done.evaluate(&json!({"job": {"state": "running"}})));
+        assert!(done.evaluate(&json!({"status": "failed"})));
+        assert!(!done.evaluate(&json!({"jobs": [], "datasets": []})), "no state field is not reported yet");
+        let not_running = DoneWhen { path: String::new(), op: DoneOp::NotEquals, value: Some("running".into()), values: vec![] };
+        assert!(!not_running.evaluate(&json!({"items": 3})), "a negated op does not fire on a missing state");
+        assert!(not_running.evaluate(&json!({"task": {"status": "completed"}})));
+    }
+
+    #[test]
+    fn a_resume_prompt_without_the_placeholder_still_carries_the_result() {
+        let c = cfg(DoneWhen::default());
+        let rendered = WatchConfig { resume_prompt: "Job xong. Báo người dùng số liệu.".into(), ..c }
+            .render_resume(&json!({"job": {"state": "done", "accepted": 175}}));
+        assert!(rendered.starts_with("Job xong. Báo người dùng số liệu."));
+        assert!(rendered.contains("\"accepted\":175"), "{rendered}");
     }
 
     #[test]

@@ -688,6 +688,14 @@ More rules for Claude:
 - **Stopping is silent.** The user just cancelled it; waking the chat to
   announce that is noise. The row is completed, not deleted, because it is the
   only record the wait happened.
+- **A built-in server a chat may watch must be a `register_builtin_spec`** in `run_daemon` (dispatch, usage, link,
+  datagen). Built-ins are otherwise per-session subprocesses the scheduler cannot reach: a watch on `datagen_status`
+  failed every probe with "MCP server not found: senclaw-datagen" until it was added.
+- **Small models arm watches imperfectly; the watch absorbs it rather than polling to its deadline.** Measured
+  2026-10-16 on gemma-4-e4b: `args` sent as a JSON *string* is unwrapped (`probe_args`); an empty `done_path` with
+  `equals` / `in` reads the answer's `state` / `status` (top level or one object down, `state_field`) instead of
+  comparing the whole object as text; a `resume_prompt` without `{{result}}` still gets the result appended — without
+  it the woken agent reported placeholders and an invented path.
 - **`watch_stop` is scoped by chat, not by id alone** — an id-only lookup would
   let one conversation cancel another's wait.
 - **Stopping must report whether a row actually changed.** `update_task_status`
