@@ -15,6 +15,9 @@ pub struct Hit {
     /// Unix seconds at which the knowledge was recorded or last changed, when
     /// the store knows. `None` is neutral for the recency boost.
     pub at: Option<i64>,
+    /// How many times the same thing was said or found. `1` is neutral for the
+    /// proof boost; only the fact store counts repeats.
+    pub proof: u32,
 }
 
 /// What recall is asked.

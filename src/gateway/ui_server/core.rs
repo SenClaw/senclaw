@@ -1076,11 +1076,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::failures::failures_summary),
         )
         // What the agent remembers: list/search the extracted facts, forget one.
-        .route("/api/memory/facts", get(super::memory_facts::facts_list))
-        .route(
-            "/api/memory/facts/:id",
-            delete(super::memory_facts::fact_forget),
-        )
+        .merge(super::memory_facts::routes())
         // Trajectory log: recorded turns for replay and evals.
         .route(
             "/api/chats/:jid/trajectory",

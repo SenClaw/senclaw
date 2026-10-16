@@ -68,6 +68,7 @@ mod tests {
                 header: header.into(),
                 body: body.into(),
                 at: None,
+                proof: 1,
             },
             score: 1.0,
             sources: vec![],

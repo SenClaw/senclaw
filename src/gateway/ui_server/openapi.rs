@@ -24,13 +24,17 @@ use serde_json::{json, Value};
 /// The router sources, with the prefix each is mounted under.
 ///
 /// `core.rs` carries the daemon's own routes (including the auth sub-router
-/// it merges); the other two are nested, so their paths need their mount
-/// prefix put back.
+/// it merges); the kanban and sandbox ones are nested, so their paths need
+/// their mount prefix put back. A module that builds its own router and is
+/// `merge`d into core's must be listed here too, or its routes are real and
+/// absent from the spec.
 const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("", include_str!("core.rs")),
     ("/api/kanban", include_str!("../../kanban/api.rs")),
     ("/api/sandbox", include_str!("../../sandbox/api.rs")),
     ("", include_str!("../../browser_agent/rest.rs")),
+    // Routes declared next to their handlers and merged into core's router.
+    ("", include_str!("memory_facts.rs")),
 ];
 
 /// One route as the router declares it.

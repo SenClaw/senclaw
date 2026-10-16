@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS mem_facts (
   content_hash   TEXT NOT NULL,
   embedding      BLOB,
   model          TEXT,
-  source         TEXT NOT NULL DEFAULT ''
+  source         TEXT NOT NULL DEFAULT '',
+  proof_count    INTEGER NOT NULL DEFAULT 1,
+  superseded_by  TEXT,
+  superseded_at  INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_facts_hash ON mem_facts(bank, content_hash);
 CREATE INDEX IF NOT EXISTS idx_mem_facts_bank_time ON mem_facts(bank, occurred_start);
@@ -68,11 +71,48 @@ CREATE INDEX IF NOT EXISTS idx_mem_links_to ON mem_links(to_id);
 CREATE TRIGGER IF NOT EXISTS mem_facts_ad AFTER DELETE ON mem_facts BEGIN
   DELETE FROM mem_facts_fts WHERE fact_id = old.id;
 END;
+
+-- Forgetting a fact that replaced others brings them back: the replacement was
+-- the thing that was wrong.
+CREATE TRIGGER IF NOT EXISTS mem_facts_restore AFTER DELETE ON mem_facts BEGIN
+  UPDATE mem_facts SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by = old.id;
+END;
 "#;
+
+/// Columns added after the first release of the table. `CREATE TABLE IF NOT
+/// EXISTS` does not touch an existing table, so each is added when missing.
+const LATE_COLUMNS: &[(&str, &str)] = &[
+    ("proof_count", "INTEGER NOT NULL DEFAULT 1"),
+    ("superseded_by", "TEXT"),
+    ("superseded_at", "INTEGER"),
+];
 
 /// Create the fact tables. Idempotent.
 pub fn apply_fact_schema(conn: &Connection) -> Result<()> {
+    // Columns first: the schema script creates an index and a trigger that name
+    // them, and on an older table they must exist by then.
+    add_missing_columns(conn)?;
     conn.execute_batch(SCHEMA).context("create mem_* tables")
+}
+
+fn add_missing_columns(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(mem_facts)")?;
+    let have: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if have.is_empty() {
+        return Ok(()); // no table yet: the script below creates it whole
+    }
+    for (name, ddl) in LATE_COLUMNS {
+        if !have.iter().any(|c| c == name) {
+            conn.execute(
+                &format!("ALTER TABLE mem_facts ADD COLUMN {name} {ddl}"),
+                [],
+            )
+            .with_context(|| format!("add mem_facts.{name}"))?;
+        }
+    }
+    Ok(())
 }
 
 // ===== Types =====
@@ -130,6 +170,12 @@ pub struct StoredFact {
     pub occurred_end: Option<i64>,
     pub mentioned_at: i64,
     pub entities: Vec<String>,
+    /// How many times the same statement has been made. Said again, a fact
+    /// counts for more.
+    pub proof_count: u32,
+    /// The fact that replaced this one, when the user changed their mind or
+    /// corrected it. A replaced fact is kept, for history, and not recalled.
+    pub superseded_by: Option<String>,
 }
 
 impl StoredFact {
@@ -253,7 +299,7 @@ impl Ord for Scored {
     }
 }
 
-const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at";
+const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at, f.proof_count, f.superseded_by";
 
 fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
@@ -279,7 +325,7 @@ impl FactStore {
                 .ok();
             if let Some(id) = existing {
                 tx.execute(
-                    "UPDATE mem_facts SET mentioned_at = MAX(mentioned_at, ?1) WHERE id = ?2",
+                    "UPDATE mem_facts SET mentioned_at = MAX(mentioned_at, ?1), proof_count = proof_count + 1 WHERE id = ?2",
                     params![f.mentioned_at, id],
                 )?;
                 tx.commit()?;
@@ -321,14 +367,32 @@ impl FactStore {
         })
     }
 
-    /// Bring a fact's `mentioned_at` forward (never back): it was said again.
+    /// Bring a fact's `mentioned_at` forward (never back) and count the repeat:
+    /// it was said again.
     pub fn touch(&self, id: &str, mentioned_at: i64) -> Result<()> {
         self.db.with_conn(|c| {
             c.execute(
-                "UPDATE mem_facts SET mentioned_at = MAX(mentioned_at, ?1) WHERE id = ?2",
+                "UPDATE mem_facts SET mentioned_at = MAX(mentioned_at, ?1), proof_count = proof_count + 1 WHERE id = ?2",
                 params![mentioned_at, id],
             )?;
             Ok(())
+        })
+    }
+
+    /// Mark `old` as replaced by `new`. Returns whether anything changed: a fact
+    /// already replaced, one that does not exist, or a fact "replacing" itself
+    /// is left alone. The replaced fact stays in the store.
+    pub fn supersede(&self, bank: &str, old: &str, new: &str, at: i64) -> Result<bool> {
+        if old == new {
+            return Ok(false);
+        }
+        self.db.with_conn(|c| {
+            Ok(c.execute(
+                "UPDATE mem_facts SET superseded_by = ?1, superseded_at = ?2 \
+                 WHERE id = ?3 AND bank = ?4 AND superseded_by IS NULL \
+                   AND EXISTS (SELECT 1 FROM mem_facts WHERE id = ?1 AND bank = ?4)",
+                params![new, at, old, bank],
+            )? > 0)
         })
     }
 
@@ -348,16 +412,18 @@ impl FactStore {
         })
     }
 
-    /// The newest facts of the bank, by when they were last said.
-    pub fn recent(&self, bank: &str, limit: usize) -> Result<Vec<StoredFact>> {
+    /// The newest facts of the bank, by when they were last said. Facts that
+    /// were replaced are left out unless `with_history` asks for them.
+    pub fn recent(&self, bank: &str, limit: usize, with_history: bool) -> Result<Vec<StoredFact>> {
         self.db.with_conn(|c| {
             let sql = format!(
                 "SELECT {FACT_COLUMNS} FROM mem_facts f WHERE f.bank = ?1 \
+                   AND (?3 OR f.superseded_by IS NULL) \
                  ORDER BY f.mentioned_at DESC, f.created_at DESC, f.id LIMIT ?2"
             );
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
-                .query_map(params![bank, limit as i64], row_to_fact)?
+                .query_map(params![bank, limit as i64, with_history], row_to_fact)?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             hydrate_entities(c, rows)
         })
@@ -401,10 +467,10 @@ impl FactStore {
             let ph = placeholders(ids.len());
             let sql = format!(
                 "SELECT l.to_id, l.link_type, l.weight FROM mem_links l \
-                   JOIN mem_facts f ON f.id = l.to_id AND f.bank = ? WHERE l.from_id IN ({ph}) \
+                   JOIN mem_facts f ON f.id = l.to_id AND f.bank = ? AND f.superseded_by IS NULL WHERE l.from_id IN ({ph}) \
                  UNION ALL \
                  SELECT l.from_id, l.link_type, l.weight FROM mem_links l \
-                   JOIN mem_facts f ON f.id = l.from_id AND f.bank = ? WHERE l.to_id IN ({ph})"
+                   JOIN mem_facts f ON f.id = l.from_id AND f.bank = ? AND f.superseded_by IS NULL WHERE l.to_id IN ({ph})"
             );
             let mut stmt = c.prepare(&sql)?;
             let args: Vec<&str> = std::iter::once(bank)
@@ -436,7 +502,7 @@ impl FactStore {
         self.db.with_conn(|c| {
             let sql = format!(
                 "SELECT {FACT_COLUMNS} FROM mem_facts f \
-                 WHERE f.bank = ?1 AND f.occurred_start IS NOT NULL AND f.id != ?2 \
+                 WHERE f.bank = ?1 AND f.superseded_by IS NULL AND f.occurred_start IS NOT NULL AND f.id != ?2 \
                    AND ABS(f.occurred_start - ?3) <= ?4 \
                  ORDER BY ABS(f.occurred_start - ?3) LIMIT ?5"
             );
@@ -465,7 +531,7 @@ impl FactStore {
             let sql = format!(
                 "SELECT {FACT_COLUMNS} FROM mem_facts_fts x \
                    JOIN mem_facts f ON f.id = x.fact_id \
-                 WHERE mem_facts_fts MATCH ?1 AND f.bank = ?2 \
+                 WHERE mem_facts_fts MATCH ?1 AND f.bank = ?2 AND f.superseded_by IS NULL \
                    AND COALESCE(f.occurred_end, f.occurred_start, f.mentioned_at) >= ?3 \
                    AND COALESCE(f.occurred_start, f.mentioned_at) < ?4 \
                  ORDER BY bm25(mem_facts_fts) LIMIT ?5"
@@ -497,7 +563,7 @@ impl FactStore {
         self.db.with_conn(|c| {
             let mut stmt = c.prepare(
                 "SELECT id, embedding FROM mem_facts \
-                 WHERE bank = ?1 AND model = ?2 AND embedding IS NOT NULL",
+                 WHERE bank = ?1 AND model = ?2 AND embedding IS NOT NULL AND superseded_by IS NULL",
             )?;
             let mut rows = stmt.query(params![bank, model])?;
             let mut heap: BinaryHeap<Scored> = BinaryHeap::with_capacity(limit + 1);
@@ -546,7 +612,7 @@ impl FactStore {
                 "SELECT e2.fact_id, COUNT(DISTINCT e2.entity) AS shared \
                    FROM mem_fact_entities e1 \
                    JOIN mem_fact_entities e2 ON e2.entity = e1.entity AND e2.fact_id != e1.fact_id \
-                   JOIN mem_facts f ON f.id = e2.fact_id AND f.bank = ? \
+                   JOIN mem_facts f ON f.id = e2.fact_id AND f.bank = ? AND f.superseded_by IS NULL \
                   WHERE e1.fact_id IN ({ph}) \
                     AND e1.entity NOT IN ( \
                         SELECT entity FROM mem_fact_entities GROUP BY entity HAVING COUNT(*) > {HUB_ENTITY_FACTS}) \
@@ -575,6 +641,7 @@ impl FactStore {
         self.db.with_conn(|c| {
             let sql = format!(
                 "SELECT {FACT_COLUMNS} FROM mem_facts f WHERE f.bank = ?1 \
+                   AND f.superseded_by IS NULL \
                    AND COALESCE(f.occurred_end, f.occurred_start, f.mentioned_at) >= ?2 \
                    AND COALESCE(f.occurred_start, f.mentioned_at) < ?3 \
                  ORDER BY COALESCE(f.occurred_start, f.mentioned_at) LIMIT ?4"
@@ -603,6 +670,8 @@ fn row_to_fact(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFact> {
         occurred_end: r.get(4)?,
         mentioned_at: r.get(5)?,
         entities: Vec::new(),
+        proof_count: r.get::<_, i64>(6)?.max(1) as u32,
+        superseded_by: r.get(7)?,
     })
 }
 
@@ -743,13 +812,13 @@ mod tests {
         }
         s.insert("other", &fact("not mine", &[])).unwrap();
         let got: Vec<String> = s
-            .recent("main", 10)
+            .recent("main", 10, false)
             .unwrap()
             .into_iter()
             .map(|f| f.text)
             .collect();
         assert_eq!(got, ["newest", "middle", "oldest"]);
-        assert_eq!(s.recent("main", 2).unwrap().len(), 2);
+        assert_eq!(s.recent("main", 2, false).unwrap().len(), 2);
     }
 
     #[test]
@@ -763,6 +832,178 @@ mod tests {
         assert_eq!(s.count("a").unwrap(), 1);
         assert!(s.delete_in_bank("a", &id).unwrap());
         assert_eq!(s.count("a").unwrap(), 0);
+    }
+
+    #[test]
+    fn saying_it_again_counts_as_more_evidence() {
+        let s = store();
+        let id = new_id(
+            s.insert("main", &fact("Sen prefers dark mode", &[]))
+                .unwrap(),
+        );
+        assert_eq!(s.get(&id).unwrap().unwrap().proof_count, 1);
+        s.insert("main", &fact("sen prefers  DARK mode", &[]))
+            .unwrap();
+        s.touch(&id, 50).unwrap();
+        assert_eq!(s.get(&id).unwrap().unwrap().proof_count, 3);
+    }
+
+    #[test]
+    fn a_replaced_fact_is_kept_but_never_recalled() {
+        let s = store();
+        let old = new_id(
+            s.insert(
+                "main",
+                &fact("User likes React for frontend work", &["user", "react"]),
+            )
+            .unwrap(),
+        );
+        let new = new_id(
+            s.insert(
+                "main",
+                &fact(
+                    "User moved to Vue and dropped React",
+                    &["user", "vue", "react"],
+                ),
+            )
+            .unwrap(),
+        );
+        assert!(s.supersede("main", &old, &new, 100).unwrap());
+
+        // Gone from every way of finding a fact …
+        let kw = s.search_keyword("main", "react", None, 10).unwrap();
+        assert_eq!(
+            kw.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
+            [new.as_str()]
+        );
+        assert_eq!(s.recent("main", 10, false).unwrap().len(), 1);
+        assert!(s
+            .in_window("main", (0, 1_000_000), 10)
+            .unwrap()
+            .iter()
+            .all(|f| f.id != old));
+        // … still there for history, and still addressable.
+        let all = s.recent("main", 10, true).unwrap();
+        assert_eq!(all.len(), 2);
+        let kept = s.get(&old).unwrap().unwrap();
+        assert_eq!(kept.superseded_by.as_deref(), Some(new.as_str()));
+        assert_eq!(s.count("main").unwrap(), 2);
+    }
+
+    #[test]
+    fn replaced_facts_drop_out_of_entity_expansion_links_and_vectors() {
+        let s = store();
+        let seed = new_id(
+            s.insert(
+                "main",
+                &fact("Lan runs the Falcon project", &["lan", "falcon"]),
+            )
+            .unwrap(),
+        );
+        let mut vec_fact = fact("Lan is on leave until November", &["lan"]);
+        vec_fact.embedding = Some(vec![1.0, 0.0]);
+        vec_fact.model = Some("m".into());
+        let leave = new_id(s.insert("main", &vec_fact).unwrap());
+        let back = new_id(
+            s.insert("main", &fact("Lan is back at work", &["lan"]))
+                .unwrap(),
+        );
+        s.add_link(&seed, &leave, LinkType::Semantic, 0.9).unwrap();
+        assert_eq!(
+            s.related_by_entity("main", &[seed.clone()], 10)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        assert!(s.supersede("main", &leave, &back, 5).unwrap());
+        let related: Vec<String> = s
+            .related_by_entity("main", &[seed.clone()], 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.0)
+            .collect();
+        assert_eq!(related, [back.clone()]);
+        assert!(s.linked("main", &[seed]).unwrap().is_empty());
+        assert!(s
+            .search_vector("main", "m", &[1.0, 0.0], 0.0, 5)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn supersede_refuses_what_makes_no_sense() {
+        let s = store();
+        let a = new_id(s.insert("main", &fact("fact a", &[])).unwrap());
+        let b = new_id(s.insert("main", &fact("fact b", &[])).unwrap());
+        let other = new_id(
+            s.insert("other", &fact("fact in another bank", &[]))
+                .unwrap(),
+        );
+        assert!(!s.supersede("main", &a, &a, 1).unwrap(), "not itself");
+        assert!(
+            !s.supersede("main", &a, "no-such-fact", 1).unwrap(),
+            "not by something that does not exist"
+        );
+        assert!(!s.supersede("main", "no-such-fact", &b, 1).unwrap());
+        assert!(
+            !s.supersede("main", &a, &other, 1).unwrap(),
+            "not by another bank's fact"
+        );
+        assert!(
+            !s.supersede("other", &a, &other, 1).unwrap(),
+            "not another bank's fact"
+        );
+        assert!(s.supersede("main", &a, &b, 1).unwrap());
+        assert!(!s.supersede("main", &a, &b, 2).unwrap(), "already replaced");
+    }
+
+    #[test]
+    fn forgetting_the_replacement_brings_the_replaced_fact_back() {
+        let s = store();
+        let old = new_id(
+            s.insert("main", &fact("Alice works at Google", &["alice"]))
+                .unwrap(),
+        );
+        let wrong = new_id(
+            s.insert("main", &fact("Alice works at Meta", &["alice"]))
+                .unwrap(),
+        );
+        s.supersede("main", &old, &wrong, 1).unwrap();
+        assert_eq!(s.search_keyword("main", "alice", None, 5).unwrap().len(), 1);
+
+        assert!(s.delete(&wrong).unwrap());
+        let back = s.search_keyword("main", "alice", None, 5).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].id, old);
+        assert_eq!(back[0].superseded_by, None);
+    }
+
+    #[test]
+    fn a_table_from_before_the_new_columns_is_upgraded_in_place() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mem_facts (
+               id TEXT PRIMARY KEY, bank TEXT NOT NULL,
+               kind TEXT NOT NULL CHECK (kind IN ('world', 'experience')),
+               text TEXT NOT NULL, occurred_start INTEGER, occurred_end INTEGER,
+               mentioned_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               content_hash TEXT NOT NULL, embedding BLOB, model TEXT,
+               source TEXT NOT NULL DEFAULT '');
+             INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash)
+               VALUES ('old1', 'main', 'world', 'an old fact', 1, 1, 'h');",
+        )
+        .unwrap();
+        apply_fact_schema(&conn).unwrap();
+        apply_fact_schema(&conn).unwrap(); // idempotent
+        let (proof, by): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT proof_count, superseded_by FROM mem_facts WHERE id = 'old1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((proof, by), (1, None), "existing rows read as unrevised");
     }
 
     #[test]

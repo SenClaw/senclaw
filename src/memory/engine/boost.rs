@@ -13,6 +13,11 @@ use super::types::Item;
 /// Largest swing the recency signal may cause: `±alpha / 2` (±10%).
 pub const RECENCY_ALPHA: f64 = 0.2;
 
+/// Largest swing the proof signal may cause: `±alpha / 2` (±5%). Evidence
+/// is the weakest of the signals — a fact said ten times is a little more
+/// likely to be a standing truth than one said once, not a different answer.
+pub const PROOF_ALPHA: f64 = 0.1;
+
 /// A note this old or older is "a year ago" as far as recency goes.
 const RECENCY_WINDOW_DAYS: f64 = 365.0;
 
@@ -27,6 +32,12 @@ pub fn recency_signal(at: Option<i64>, now: i64) -> f64 {
     };
     let days = (now - at).max(0) as f64 / SECONDS_PER_DAY;
     (1.0 - days / RECENCY_WINDOW_DAYS).clamp(0.1, 1.0)
+}
+
+/// How much repetition counts: neutral (0.5) for something said once, rising
+/// slowly with the log of the count, capped at 1.0 (about 150 repeats).
+pub fn proof_signal(count: u32) -> f64 {
+    (0.5 + (count.max(1) as f64).ln() / 10.0).clamp(0.0, 1.0)
 }
 
 /// `1 + alpha * (signal - 0.5)`: neutral at a signal of 0.5.
@@ -52,8 +63,9 @@ pub fn score(fused: Vec<Fused>, now: i64) -> Vec<Item> {
         .map(|(i, f)| {
             let relevance = rank_score(i, total);
             let recency = multiplier(recency_signal(f.hit.at, now), RECENCY_ALPHA);
+            let proof = multiplier(proof_signal(f.hit.proof), PROOF_ALPHA);
             Item {
-                score: relevance * recency,
+                score: relevance * recency * proof,
                 sources: f.sources,
                 tokens: 0,
                 hit: f.hit,
@@ -80,6 +92,7 @@ mod tests {
                 header: String::new(),
                 body: String::new(),
                 at,
+                proof: 1,
             },
             rrf: 0.0,
             sources: vec![],
@@ -104,6 +117,33 @@ mod tests {
     fn the_boost_stays_inside_ten_percent() {
         assert!((multiplier(1.0, RECENCY_ALPHA) - 1.1).abs() < 1e-12);
         assert!((multiplier(0.1, RECENCY_ALPHA) - 0.92).abs() < 1e-12);
+    }
+
+    #[test]
+    fn proof_is_neutral_once_and_grows_slowly_with_repeats() {
+        assert_eq!(proof_signal(0), 0.5, "a missing count reads as once");
+        assert_eq!(proof_signal(1), 0.5);
+        assert!((proof_signal(3) - 0.610).abs() < 0.001);
+        assert!((proof_signal(10) - 0.730).abs() < 0.001);
+        assert_eq!(proof_signal(1_000_000), 1.0);
+        assert_eq!(multiplier(proof_signal(1), PROOF_ALPHA), 1.0);
+        assert!(multiplier(proof_signal(1_000_000), PROOF_ALPHA) <= 1.05 + 1e-12);
+    }
+
+    #[test]
+    fn repetition_nudges_a_neighbour_up_but_never_a_distant_rank() {
+        // Rank 1 said once vs rank 2 said ten times: 1.0 × 1.0 against
+        // 0.9 × 1.0115 ≈ 0.91 — the repeat does not overtake.
+        let mut list: Vec<Fused> = (0..10).map(|i| fused(&format!("k{i}"), None)).collect();
+        list[1].hit.proof = 10;
+        let keys: Vec<String> = score(list, NOW).into_iter().map(|i| i.hit.key).collect();
+        assert_eq!(keys[0], "k0");
+        assert_eq!(keys[1], "k1");
+        // Two places apart with the same evidence on the lower one: still no.
+        let mut list: Vec<Fused> = (0..10).map(|i| fused(&format!("k{i}"), None)).collect();
+        list[2].hit.proof = 150;
+        let keys: Vec<String> = score(list, NOW).into_iter().map(|i| i.hit.key).collect();
+        assert_eq!(&keys[..3], ["k0", "k1", "k2"]);
     }
 
     #[test]

@@ -13,7 +13,8 @@
 | Ghi khi compaction | LLM chưng cất tóm tắt thành ≤ 3 note `memory/*.md` (hoặc lưu nguyên văn) | tóm tắt được **retain thành fact**, cùng bộ trích xuất |
 | Đọc mỗi lượt | 3 khối riêng (`<memory>`, `<cognitive_memory>`, `<memory_recall>`), mỗi khối tự xếp hạng, không chung ngân sách, **dán vào tin nhắn người dùng và nằm lại trong lịch sử** | **một** khối `<memory_context>` (RRF + ngân sách), đưa cho model như **ngữ cảnh của lượt**, không lưu vào lịch sử |
 | Secret trong chat | đi thẳng vào model trích xuất và đồ thị | bị quét trước khi tới model |
-| Xem / xoá | chỉ qua trang Knowledge (đồ thị) | `GET /api/memory/facts`, `DELETE /api/memory/facts/:id` |
+| Xem / xoá | chỉ qua trang Knowledge (đồ thị) | `GET /api/memory/facts`, `DELETE /api/memory/facts/:id`; agent tự tra / quên bằng `memory_search_facts`, `memory_forget_fact` |
+| Người dùng đổi ý | không có: hai phiên bản cùng nằm trong kho | fact mới **thay** fact cũ (cũ bị ẩn, giữ lịch sử, xoá fact mới thì cũ sống lại) |
 
 ## Ghi: nguồn → retain → kho fact
 
@@ -36,6 +37,21 @@ tại FPT." (triplet giữ *ai–gì–gì* và mất *vì sao / khi nào*). Cod
 
 Model trích xuất lấy từ slot `active_cognitive_id` (rơi về model chat đang dùng). Mỗi cửa sổ = **một** lần gọi.
 
+### Đổi ý: fact mới thay fact cũ
+
+Trước khi gọi model, mỗi chunk tìm tối đa 8 fact đã có liên quan (keyword) và đưa vào prompt dưới `KNOWN FACTS:` thành `[F1] …`.
+Nếu một fact mới mâu thuẫn một mục trong danh sách, model trả thêm `"replaces": ["F1"]`. Retain **không tin mù**:
+
+- số phải nằm trong danh sách của chunk đó (số tự bịa, `0`, số không thấy → bỏ qua);
+- hai fact phải cùng chủ đề: chung một thực thể không chung chung (`user`, `người dùng`, `assistant`… không tính), hoặc chung ≥ 40% từ khoá
+  (mỗi bên ≥ 3 từ). Model gạt nhầm "Hà Nội" thành thay "thích React" thì không có gì xảy ra;
+- fact cũ chỉ được ẩn **sau khi** fact mới đã được lưu.
+
+Fact bị thay không bị xoá: `superseded_by` trỏ tới fact mới, mọi arm đọc bỏ qua nó, `GET /api/memory/facts?history=true` vẫn thấy. Xoá fact
+mới (trigger `mem_facts_restore`) thì fact cũ **sống lại** — sửa nhầm một lần đổi ý chỉ cần quên fact mới. Nhắc lại cùng một điều
+(trùng hash hoặc cosine ≥ 0.95) thì không thêm hàng mà tăng `proof_count`; boost nhân `1 + 0.1·(0.5 + ln n / 10 − 0.5)` (tối đa +5%) —
+bằng chứng chỉ đảo được thứ tự của các hạng sát nhau, không kéo một kết quả xa lên đầu.
+
 ## Đọc: một khối, không gọi model
 
 ```text
@@ -53,7 +69,7 @@ arms (song song) → RRF (k=60) → gộp bản trùng → boost recency → ng�
 
 Fusion: [`fusion.rs`](../src/memory/engine/fusion.rs) cộng `1/(60+rank)` theo danh tính `(arm, key)` trên mọi danh sách, rồi gộp
 hai kết quả chồng nhau ≥ 0.85 (overlap coefficient, ≥ 6 từ). [`boost.rs`](../src/memory/engine/boost.rs): điểm liên quan = hạng rải
-trong [0.1, 1.0] × `1 + 0.2·(recency − 0.5)`. [`budget.rs`](../src/memory/engine/budget.rs): lấy từ trên xuống, mục quá dài bị
+trong [0.1, 1.0] × `1 + 0.2·(recency − 0.5)` × `1 + 0.1·(proof − 0.5)`. [`budget.rs`](../src/memory/engine/budget.rs): lấy từ trên xuống, mục quá dài bị
 bỏ qua. [`format.rs`](../src/memory/engine/format.rs): khối đánh số, mỗi mục ghi nguồn `(note)` / `(knowledge)` / `(fact)`; chuỗi
 `</memory_context>` trong dữ liệu bị vô hiệu. Một arm lỗi hoặc quá 3 s chỉ mất phần của nó.
 
@@ -80,9 +96,9 @@ Ví dụ: người dùng nói *"Tôi tên là Sen, từ giờ luôn trả lời 
 
 Khi compaction chạy, tóm tắt thay lịch sử **và** được retain thành fact: quyết định và việc đã làm vẫn tìm lại được sau khi ngữ cảnh bị cắt.
 
-**Giới hạn hiện tại**: fact mới **không ghi đè** fact cũ mâu thuẫn (chỉ bỏ bản giống hệt hoặc gần giống ≥ 0.95); người dùng đổi ý thì cả hai
-cùng tồn tại, bản mới hơn được boost nhẹ. Hợp nhất thành "niềm tin" có bằng chứng là P3. Profile **chưa** được tự cập nhật từ fact (cố ý:
-profile có tier và quy tắc chat nhóm chỉ-đọc, ghi tự động từ hội thoại nhiều người là rủi ro chèn lệnh).
+**Giới hạn hiện tại**: người dùng đổi ý thì fact cũ bị ẩn (xem "Đổi ý") — nhưng chỉ khi model trích xuất nhận ra và chỉ đúng mục; model nhỏ
+bỏ sót thì hai phiên bản cùng tồn tại, bản mới hơn được boost nhẹ. Profile **không** được tự cập nhật từ fact (cố ý: profile có tier và quy tắc
+chat nhóm chỉ-đọc, ghi tự động từ hội thoại nhiều người là rủi ro chèn lệnh).
 
 ## Cấu hình
 
@@ -97,8 +113,9 @@ profile có tier và quy tắc chat nhóm chỉ-đọc, ghi tự động từ h�
 
 ## Xem và xoá
 
-- `GET /api/memory/facts?bank=<folder>&q=<từ khoá>&limit=` — mới nhất trước, hoặc khớp từ khoá.
+- `GET /api/memory/facts?bank=<folder>&q=<từ khoá>&limit=&history=` — mới nhất trước, hoặc khớp từ khoá; `limit` 1–200; `history=true` thêm cả fact đã bị thay (kèm `supersededBy`). Mỗi fact có `proofCount`.
 - `DELETE /api/memory/facts/:id?bank=<folder>` — quên một fact. Sai `bank` thì 404, không xoá được fact của agent khác.
+- Cho agent (server `senclaw-memory`, trong chat là `mcp__core__memory_*`): `memory_search_facts` (`query`, `limit`; không có `query` thì liệt kê mới nhất; câu hỏi có thời gian "hôm qua" cũng tra theo ngày) và `memory_forget_fact` (`id` đầy đủ, chỉ fact của chính agent). MCP chạy tiến trình riêng nên tra bằng từ khoá và ngày, không có vector.
 
 ## Chạy eval
 
@@ -108,9 +125,11 @@ MEMORY_EVAL_OUT=/tmp/mem cargo test --lib memory::engine::eval   # → /tmp/mem.
 ```
 
 [`evals/memory/cases.json`](../evals/memory/cases.json): 9 note (một note của chat khác), 8 chunk đồ thị, 11 câu hỏi VN/EN; và cho kho
-fact 5 cửa sổ hội thoại chạy qua **retain thật** (chỉ câu trả lời của model trích xuất là dựng sẵn) + 6 câu hỏi chỉ fact trả lời được.
+fact 7 cửa sổ hội thoại chạy qua **retain thật** (chỉ câu trả lời của model trích xuất là dựng sẵn) + 7 câu hỏi chỉ fact trả lời được,
+gồm một ca đổi ý (React → Vue: phải thấy Vue và **không** thấy "thích dùng React"; `replaces_matching` trong fixture đóng vai model đọc
+`KNOWN FACTS` và chỉ đúng dòng — đổi cụm đó thành cụm không khớp thì eval đỏ).
 Luồng cũ giữ lại **chỉ trong test** ([`legacy.rs`](../src/memory/engine/legacy.rs), `#[cfg(test)]`) làm mốc so sánh. Cổng: không rò rỉ;
-engine lặp ≤ luồng cũ; có vector thì trả lời ≥ luồng cũ, không vector thì **>**; fact 6/6 so với 0/6; arm graph và temporal mỗi cái trả
+engine lặp ≤ luồng cũ; có vector thì trả lời ≥ luồng cũ, không vector thì **>**; fact 7/7 so với 0/7; arm graph và temporal mỗi cái trả
 lời một câu mà keyword một mình không trả lời được; secret không tới model trích xuất. Số liệu:
 [`plans/reports/eval-261016-1535-memory-recall-baseline.md`](../plans/reports/eval-261016-1535-memory-recall-baseline.md).
 
@@ -120,5 +139,7 @@ lời một câu mà keyword một mình không trả lời được; secret kh�
 - **Chat không còn nuôi đồ thị.** Trang Knowledge chỉ còn dữ liệu upload / `cog_add` / SOUL; fact thì xem qua `/api/memory/facts` (chưa có giao diện).
 - **Ngân sách đếm từ**, đừng so với context window như thể là token thật.
 - **Phạm vi riêng tư của fact = agent folder**, không theo chat (cửa sổ reflection không mang chat jid). Note curated thì có lọc theo chat.
-- **Chất lượng model trích xuất nhỏ trên tiếng Việt chưa đo** (eval dùng câu trả lời dựng sẵn).
+- **Chất lượng model trích xuất nhỏ trên tiếng Việt chưa đo** (eval dùng câu trả lời dựng sẵn), kể cả việc nó có chỉ đúng `replaces` hay không.
+- **Số trong `replaces` là số của đúng chunk đó.** `[F1]` của chunk này không phải `[F1]` của chunk khác; code đọc theo danh sách của chunk.
+- **Route gộp từ module khác phải có mặt trong `ROUTER_SOURCES`** ([`openapi.rs`](../src/gateway/ui_server/openapi.rs)), nếu không test spec không thấy route và `docs/openapi-daemon.yaml` lệch.
 - Ngày của note lấy từ `createdAt` (nửa đêm UTC); thiếu hoặc sai định dạng thì trung tính.

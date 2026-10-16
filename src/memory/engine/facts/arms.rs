@@ -53,6 +53,7 @@ fn to_hit(f: &StoredFact) -> Hit {
         header,
         body: f.text.clone(),
         at: Some(f.anchor()),
+        proof: f.proof_count,
     }
 }
 
@@ -256,6 +257,8 @@ mod tests {
             occurred_end: None,
             mentioned_at: 0,
             entities: vec![],
+            proof_count: 1,
+            superseded_by: None,
         }
     }
 

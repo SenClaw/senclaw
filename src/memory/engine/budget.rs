@@ -53,6 +53,7 @@ mod tests {
                 header: String::new(),
                 body: vec!["word"; words].join(" "),
                 at: None,
+                proof: 1,
             },
             score: 0.0,
             sources: vec![],

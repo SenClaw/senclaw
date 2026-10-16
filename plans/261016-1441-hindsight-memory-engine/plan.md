@@ -1,6 +1,6 @@
 # Plan: memory engine lấy ý từ Hindsight
 
-Status: P0–P2 done and the old flow replaced, P3+ pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
+Status: P0–P2 done, old flow replaced, belief revision + proof boost + agent fact tools done; observations/mental models (P3 rest, P4–P5) pending · Ngày: 2026-10-16 · Nhánh: `feat/memory-engine` (worktree `.worktrees/senclaw-memory-engine`, cắt từ `feat/datagen-import` @ fbe6230)
 Nguồn: [research-261016-1441-hindsight-memory-for-senclaw.md](../reports/research-261016-1441-hindsight-memory-for-senclaw.md)
 
 ## Outcome
@@ -34,7 +34,7 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 | P0 | Eval + baseline | done | — |
 | P1 | Recall hợp nhất trên store cũ | done | P0 |
 | P2 | Fact store + retain + defense | done | P1 |
-| P3 | Observation | pending | P2 |
+| P3 | Observation | partly done (belief revision, proof boost); observation layer pending | P2 |
 | P4 | Mental model + directives | pending | P3 |
 | P5 | Reflect 1-lần, rerank, connector, UI, docs | pending | P1–P4 |
 
@@ -70,7 +70,8 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 ### P3 — Observation
 - Mới: `engine/observe.rs`, `mem_obs_sources`, `mem_obs_history`; prompt port `_PROCESSING_RULES` (ghi attribution MIT), id ngắn `O#`/`F#`, validate op, fallback không-merge, `consolidated_at` để thử lại.
 - Lịch: debounce sau retain + idle + maintenance 24h.
-- Boost `proof_count` (α .1, `0.5+ln n/10`).
+- Boost `proof_count` (α .1, `0.5+ln n/10`). **Done** (`boost.rs`).
+- **Đã làm thay cho tầng observation riêng**: belief revision ngay trong retain — chunk nhìn thấy `KNOWN FACTS` (≤ 8, keyword), model trả `replaces`, retain kiểm số + `same_subject` rồi ẩn fact cũ (`superseded_by`), xoá fact mới thì cũ sống lại; nhắc lại → `proof_count`. Eval có ca đổi ý React → Vue chạy qua retain thật. Lệch kế hoạch: không có bảng `mem_obs_*` / bước consolidate riêng — một lần gọi model/chunk vẫn là một, và lịch sử nằm ngay trên hàng fact. Quyết định còn mở: có cần tổng hợp nhiều fact thành một observation hay không (chỉ làm nếu đo thấy fact rời rạc không đủ).
 - Xong khi: case đổi ý cho belief giữ lịch sử; eval không tụt; số observation trùng đo được và thấp.
 
 ### P4 — Mental model + directives

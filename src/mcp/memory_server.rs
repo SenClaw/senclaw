@@ -1,7 +1,8 @@
 //! Memory MCP server. Port target: src-old/mcp/memory-server.ts
 //!
-//! Tools: memory_search, memory_get.
-//! Provides read-only memory retrieval via FTS5 + vector hybrid search.
+//! Tools: memory_search, memory_get, memory_save, memory_recall, memory_delete
+//! (curated notes), and memory_search_facts / memory_forget_fact (the facts
+//! extracted from conversations automatically).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,6 +75,23 @@ struct MemoryDeleteParams {
     name: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct MemorySearchFactsParams {
+    /// Words and/or a time ("Emily", "hôm qua", "tháng 3", "last week").
+    /// Omit to list the newest facts.
+    #[serde(default)]
+    query: Option<String>,
+    /// How many facts to return (default 10, at most 30).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct MemoryForgetFactParams {
+    /// The fact's complete id, exactly as memory_search_facts printed it.
+    id: String,
+}
+
 #[derive(Clone)]
 pub struct McpMemoryServer {
     db_path: String,
@@ -111,6 +129,15 @@ impl McpMemoryServer {
         self.custom_memory_dir
             .clone()
             .unwrap_or_else(|| self.profiles_dir.join(&self.folder))
+    }
+
+    /// The fact store, opened over the same database file. No embedding model
+    /// here (see `facts::tools`), so none is loaded.
+    fn fact_store(&self) -> Result<crate::memory::engine::facts::FactStore> {
+        let mut cfg = crate::config::Config::from_env();
+        cfg.paths.db_path = PathBuf::from(&self.db_path);
+        let db = Db::open(&cfg).context("open memory DB")?;
+        Ok(crate::memory::engine::facts::FactStore::new(Arc::new(db)))
     }
 
     fn open_db_and_provider(&self) -> Result<(Db, Option<Box<dyn EmbeddingProvider>>)> {
@@ -225,6 +252,48 @@ impl McpMemoryServer {
             self.custom_memory_dir.clone(),
         );
         srv.memory_recall(&p.query, p.max_results).await
+    }
+
+    #[rmcp::tool(
+        description = "Look through the facts you remember automatically from conversations (dated, one or two sentences each). With a query, finds facts by words and/or by the time it names (\"hôm qua\", \"tháng 3\", \"last week\"); without one, lists the newest. Each line starts with the fact's id, which memory_forget_fact needs. Use it when the user asks what you remember, or before forgetting something."
+    )]
+    fn memory_search_facts(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemorySearchFactsParams,
+        >,
+    ) -> String {
+        use crate::memory::engine::facts::tools;
+        let store = match self.fact_store() {
+            Ok(s) => s,
+            Err(e) => return format!("Error: {e}"),
+        };
+        let today = chrono::Local::now().date_naive();
+        match tools::lookup(
+            &store,
+            &self.folder,
+            p.query.as_deref().unwrap_or(""),
+            today,
+            p.limit.unwrap_or(tools::DEFAULT_LIMIT),
+        ) {
+            Ok(found) => tools::render(&found),
+            Err(e) => format!("Error: {e}"),
+        }
+    }
+
+    #[rmcp::tool(
+        description = "Forget one remembered fact by its complete id (from memory_search_facts). Use when the user asks you to forget something or a fact is wrong. It cannot be undone and only reaches this agent's own facts."
+    )]
+    fn memory_forget_fact(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MemoryForgetFactParams,
+        >,
+    ) -> String {
+        match self.fact_store() {
+            Ok(store) => crate::memory::engine::facts::tools::forget(&store, &self.folder, &p.id),
+            Err(e) => format!("Error: {e}"),
+        }
     }
 
     #[rmcp::tool(

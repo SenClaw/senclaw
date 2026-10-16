@@ -644,6 +644,16 @@ Rules for Claude:
   `defense::scrub` first. It removes credentials and card numbers only, never emails, phones or names.
 - **Retain never raises.** Every failure is counted in `RetainReport` and logged; a conversation that cannot be extracted is
   skipped and the chat is unaffected.
+- **A model's `replaces` is a claim, not an order.** `retain` honours it only for a number in that chunk's own `KNOWN FACTS`
+  list and only when `same_subject` agrees (a shared non-generic entity, else enough shared words). The old fact is hidden
+  (`superseded_by`) after the new one is stored, never deleted; every read filters `superseded_by IS NULL`, and deleting the
+  replacement restores what it replaced (`mem_facts_restore`). A new read query on `mem_facts` must carry that filter.
+- **Schema additions to `mem_facts` go through `LATE_COLUMNS`** (guarded `ALTER`, run before the schema script) — an install
+  that already has the table must upgrade in place.
+- **The agent's own fact tools are folder-scoped**: `memory_search_facts` / `memory_forget_fact` live in the MCP memory server
+  (own process, no embedding model), so they search by words and dates only, and forgetting needs the full id.
+- **A route module merged into core's router must be listed in `ROUTER_SOURCES`** (`ui_server/openapi.rs`), or the committed
+  OpenAPI spec test cannot see its routes.
 - **Dates are calendar dates stored as UTC midnights, and a coarse date covers its whole period** (`"2026-03"` is the month,
   not 1 March). `temporal::parse_window` resolves "yesterday" against `RecallQuery::now` in the machine's timezone; tests use
   noon UTC so the date is the same in every timezone.

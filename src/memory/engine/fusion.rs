@@ -103,8 +103,15 @@ pub fn merge_near_duplicates(fused: Vec<Fused>, overlap: f64) -> (Vec<Fused>, us
 /// Lower-cased alphanumeric words; every CJK character stands alone because
 /// those scripts have no spaces to split on.
 fn terms_of(hit: &Hit) -> HashSet<String> {
+    let mut terms = text_terms(&hit.header);
+    terms.extend(text_terms(&hit.body));
+    terms
+}
+
+/// The comparable terms of one piece of text (see [`terms_of`]).
+pub(crate) fn text_terms(text: &str) -> HashSet<String> {
     let mut terms = HashSet::new();
-    for text in [&hit.header, &hit.body] {
+    for text in [text] {
         let mut word = String::new();
         for c in text.chars() {
             if is_cjk(c) {
@@ -132,7 +139,7 @@ fn end_word(word: &mut String, terms: &mut HashSet<String>) {
 
 /// `|A ∩ B| / min(|A|, |B|)`: 1.0 when the shorter text is wholly contained
 /// in the longer, which is how a snippet relates to the chunk it came from.
-fn overlap_coefficient(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
+pub(crate) fn overlap_coefficient(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
     let smaller = a.len().min(b.len());
     if smaller == 0 {
         return 0.0;
@@ -161,6 +168,7 @@ mod tests {
             header: String::new(),
             body: body.into(),
             at: None,
+            proof: 1,
         }
     }
 

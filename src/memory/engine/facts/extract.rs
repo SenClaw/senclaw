@@ -29,6 +29,8 @@ Reply with ONLY a JSON object, nothing before or after it:
 {"facts":[{"text":"...","kind":"world","when":"2026-06-09","entities":["Emily","Sarah"]}]}
 Reply {"facts":[]} when nothing is worth keeping.
 
+KNOWN FACTS: the input may be followed by a list of facts already stored, each tagged [F1], [F2]… Do not state a known fact again unless something about it changed. When a new fact CORRECTS or REPLACES a known one — the person changed their mind, a date or number moved, something stopped being true — add "replaces":["F2"] to the new fact. Replace only on a real contradiction about the same thing; a related or additional fact replaces nothing.
+
 SELECTIVITY — keep only:
 - who people are, their relationships, roles, background
 - preferences, habits, rules and corrections the user states
@@ -57,6 +59,16 @@ User: Yesterday I went to Emily's wedding. She married Sarah on a rooftop. Anywa
 OUTPUT:
 {"facts":[{"text":"The user is planning their own wedding and wants a small outdoor ceremony.","kind":"world","when":null,"entities":["user","wedding"]},{"text":"Emily, a friend of the user, married Sarah at a rooftop garden on 2026-06-09.","kind":"world","when":"2026-06-09","entities":["Emily","Sarah","user"]}]}
 
+Example (TODAY: 2026-10-16) — a changed mind
+INPUT:
+User: tôi chuyển sang Vue rồi, không dùng React nữa
+
+KNOWN FACTS:
+[F1] Người dùng thích dùng React cho frontend.
+[F2] Người dùng tên là Sen.
+OUTPUT:
+{"facts":[{"text":"Người dùng đã chuyển sang Vue và không còn dùng React.","kind":"world","when":null,"entities":["user","Vue","React"],"replaces":["F1"]}]}
+
 Example (TODAY: 2026-10-16)
 INPUT:
 User: tôi tên là Sen, đang làm dự án SemaClaw, deadline cuối tháng 8 năm 2026
@@ -64,14 +76,22 @@ Assistant: Đã ghi nhận.
 OUTPUT:
 {"facts":[{"text":"Người dùng tên là Sen.","kind":"world","when":null,"entities":["Sen","user"]},{"text":"Sen đang làm dự án SemaClaw, hạn chót là cuối tháng 8 năm 2026.","kind":"world","when":"2026-08","entities":["Sen","SemaClaw"]}]}"#;
 
-/// The user message: the date that relative phrases resolve against, then the
-/// text.
-pub fn user_prompt(text: &str, today: NaiveDate) -> String {
-    format!(
+/// The user message: the date that relative phrases resolve against, the
+/// text, and — when there are any — the facts already stored that look related,
+/// numbered `[F1]…` so the reply can name the ones it replaces.
+pub fn user_prompt(text: &str, today: NaiveDate, known: &[String]) -> String {
+    let mut out = format!(
         "TODAY: {}\n\nINPUT:\n{}",
         today.format("%Y-%m-%d"),
         text.trim()
-    )
+    );
+    if !known.is_empty() {
+        out.push_str("\n\nKNOWN FACTS:");
+        for (i, fact) in known.iter().enumerate() {
+            out.push_str(&format!("\n[F{}] {}", i + 1, fact));
+        }
+    }
+    out
 }
 
 /// One fact as the model reported it, validated and normalised.
@@ -83,6 +103,10 @@ pub struct Extracted {
     pub occurred: Option<(i64, i64)>,
     /// [`entity_key`]s, de-duplicated.
     pub entities: Vec<String>,
+    /// 1-based numbers of the known facts (`[F1]` → 1) this one replaces, as
+    /// the model named them. Unchecked here: whether a number points at
+    /// anything, and whether it is plausible, is for the caller.
+    pub replaces: Vec<usize>,
 }
 
 /// Parse a model reply into facts. An unparseable reply is an `Err`; a parsed
@@ -189,7 +213,33 @@ fn read_fact(item: &Value) -> Option<Extracted> {
         kind,
         occurred,
         entities,
+        replaces: read_replaces(obj.get("replaces")),
     })
+}
+
+/// `["F2"]`, `["f2"]`, `[2]` and `"F2"` all mean fact 2; anything else is
+/// ignored, and so is 0 (the numbering starts at 1).
+fn read_replaces(v: Option<&Value>) -> Vec<usize> {
+    let one = |v: &Value| -> Option<usize> {
+        match v {
+            Value::Number(n) => n.as_u64().map(|n| n as usize),
+            Value::String(s) => s
+                .trim()
+                .trim_start_matches(['F', 'f', '#'])
+                .parse::<usize>()
+                .ok(),
+            _ => None,
+        }
+        .filter(|n| *n >= 1)
+    };
+    let mut out: Vec<usize> = match v {
+        Some(Value::Array(list)) => list.iter().filter_map(one).collect(),
+        Some(single) => one(single).into_iter().collect(),
+        None => Vec::new(),
+    };
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// `YYYY-MM-DD`, `YYYY-MM` or `YYYY` (a time after the day is ignored), as the
@@ -417,6 +467,36 @@ mod tests {
     }
 
     #[test]
+    fn known_facts_are_numbered_after_the_input() {
+        let p = user_prompt(
+            "User: đổi ý",
+            NaiveDate::from_ymd_opt(2026, 10, 16).unwrap(),
+            &[
+                "Người dùng thích React.".into(),
+                "Sen sống ở Hà Nội.".into(),
+            ],
+        );
+        assert!(
+            p.ends_with("\n\nKNOWN FACTS:\n[F1] Người dùng thích React.\n[F2] Sen sống ở Hà Nội."),
+            "{p}"
+        );
+    }
+
+    #[test]
+    fn replaces_is_read_leniently_and_never_as_zero() {
+        let raw = r##"{"facts":[
+            {"text":"Người dùng đã chuyển sang Vue từ React.","replaces":["F1","f3",2,"#4","F1","x",0,null]},
+            {"text":"Một fact khác không thay gì cả hết.","replaces":"F2"},
+            {"text":"Một fact thứ ba cũng không thay gì cả.","replaces":{"a":1}},
+            {"text":"Một fact thứ tư hoàn toàn không có trường đó."}]}"##;
+        let f = parse_facts(raw).unwrap();
+        assert_eq!(f[0].replaces, vec![1, 2, 3, 4]);
+        assert_eq!(f[1].replaces, vec![2]);
+        assert!(f[2].replaces.is_empty());
+        assert!(f[3].replaces.is_empty());
+    }
+
+    #[test]
     fn spans_print_at_the_precision_they_were_given() {
         for s in ["2026", "2026-03", "2026-03-09"] {
             let (a, b) = parse_when(s).unwrap();
@@ -431,6 +511,7 @@ mod tests {
         let p = user_prompt(
             "  User: hello  ",
             NaiveDate::from_ymd_opt(2026, 10, 16).unwrap(),
+            &[],
         );
         assert_eq!(p, "TODAY: 2026-10-16\n\nINPUT:\nUser: hello");
         assert!(SYSTEM_PROMPT.contains("ONLY a JSON object"));

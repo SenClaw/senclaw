@@ -150,6 +150,7 @@ impl RecallArm for CuratedArm {
                 header: n.header,
                 body: n.snippet,
                 at: n.created_at,
+                proof: 1,
             })
             .collect())
     }
@@ -244,6 +245,7 @@ impl RecallArm for CognitiveArm {
                     body: truncate_on_char_boundary(&h.node.summary, NODE_SUMMARY_BYTES)
                         .to_string(),
                     at: Some(h.node.updated_at),
+                    proof: 1,
                 }
             })
             .collect())

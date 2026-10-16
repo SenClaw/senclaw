@@ -94,6 +94,11 @@ struct Case {
     must_include: Vec<String>,
     #[serde(default)]
     must_exclude: Vec<String>,
+    /// `must_exclude` holds a credential that must not reach the extraction
+    /// model at all. Without it the strings are only kept out of the context
+    /// (a retired fact is still part of the conversation the model reads).
+    #[serde(default)]
+    secret: bool,
 }
 
 fn fixture() -> Fixture {
@@ -124,7 +129,7 @@ impl LlmClient for Scripted {
 /// The fact extractor's counterpart of [`Scripted`]. It also keeps every
 /// prompt it was sent, so a test can prove what the model was never shown.
 struct ScriptedFacts {
-    script: Vec<(String, String)>,
+    script: Vec<(String, Vec<serde_json::Value>)>,
     seen: Arc<Mutex<Vec<String>>>,
 }
 
@@ -132,12 +137,42 @@ struct ScriptedFacts {
 impl LlmClient for ScriptedFacts {
     async fn complete(&self, _system: &str, user: &str) -> Result<String> {
         self.seen.lock().unwrap().push(user.to_string());
-        Ok(self
+        // Match on the window itself. The prompt also lists stored facts, and
+        // those can contain another window's phrase.
+        let (window, known) = match user.split_once("\n\nKNOWN FACTS:") {
+            Some((w, k)) => (w, k),
+            None => (user, ""),
+        };
+        let Some((_, facts)) = self
             .script
             .iter()
-            .find(|(needle, _)| user.contains(needle.as_str()))
-            .map(|(_, reply)| reply.clone())
-            .unwrap_or_else(|| r#"{"facts":[]}"#.to_string()))
+            .find(|(needle, _)| window.contains(needle.as_str()))
+        else {
+            return Ok(r#"{"facts":[]}"#.to_string());
+        };
+        // `replaces_matching` stands in for a model reading the KNOWN FACTS list
+        // and naming the entry it contradicts: find the numbered line that
+        // contains the phrase and say its number.
+        let facts: Vec<serde_json::Value> = facts
+            .iter()
+            .map(|f| {
+                let mut f = f.clone();
+                if let Some(phrase) = f
+                    .as_object_mut()
+                    .and_then(|o| o.remove("replaces_matching"))
+                    .and_then(|p| p.as_str().map(str::to_string))
+                {
+                    let tag = known
+                        .lines()
+                        .find(|l| l.contains(phrase.as_str()))
+                        .and_then(|l| l.split_whitespace().next())
+                        .map(|t| t.trim_matches(['[', ']']).to_string());
+                    f["replaces"] = serde_json::json!(tag.into_iter().collect::<Vec<_>>());
+                }
+                f
+            })
+            .collect();
+        Ok(serde_json::json!({ "facts": facts }).to_string())
     }
 }
 
@@ -282,12 +317,7 @@ async fn build_world(fx: &Fixture, vectors: bool) -> World {
         script: fx
             .fact_windows
             .iter()
-            .map(|w| {
-                (
-                    w.needle.clone(),
-                    serde_json::json!({ "facts": w.facts }).to_string(),
-                )
-            })
+            .map(|w| (w.needle.clone(), w.facts.clone()))
             .collect(),
         seen: Arc::clone(&fact_prompts),
     };
@@ -631,7 +661,12 @@ async fn compare_facts(label: &str, vectors: bool) -> (Vec<Row>, Vec<Row>) {
     // extraction model nor anything it could have stored.
     let prompts = world.fact_prompts.lock().unwrap();
     assert!(!prompts.is_empty(), "the extractor was never called");
-    for secret in fx.fact_queries.iter().flat_map(|c| c.must_exclude.iter()) {
+    for secret in fx
+        .fact_queries
+        .iter()
+        .filter(|c| c.secret)
+        .flat_map(|c| c.must_exclude.iter())
+    {
         assert!(
             prompts.iter().all(|p| !p.contains(secret.as_str())),
             "{secret:?} was sent to the extraction model"

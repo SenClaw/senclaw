@@ -17,6 +17,7 @@ pub mod extract;
 pub mod retain;
 pub mod store;
 pub mod temporal;
+pub mod tools;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};

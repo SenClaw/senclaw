@@ -170,6 +170,7 @@ mod tests {
             header: key.into(),
             body: body.into(),
             at: None,
+            proof: 1,
         }
     }
 

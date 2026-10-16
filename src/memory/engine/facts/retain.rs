@@ -10,6 +10,8 @@
 //! counted in the report and logged, never raised: a conversation that cannot
 //! be extracted is skipped, and the chat it came from is unaffected.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, NaiveDate};
 
 use super::defense::{self, Mode, Verdict};
@@ -18,7 +20,9 @@ use super::store::{FactStore, Inserted, LinkType, NewFact, StoredFact};
 use super::FactEngine;
 use crate::memory::chunker::{chunk_text, ChunkerOptions};
 use crate::memory::cognitive::llm::LlmClient;
+use crate::memory::cognitive::retrievers::build_fts_match;
 use crate::memory::cognitive::sanitize_for_cognify;
+use crate::memory::engine::fusion::{overlap_coefficient, text_terms};
 
 /// Cosine similarity at which two statements are one fact said twice.
 pub const DUPLICATE_SIMILARITY: f32 = 0.95;
@@ -27,6 +31,24 @@ pub const LINK_SIMILARITY: f32 = 0.7;
 const MAX_SEMANTIC_LINKS: usize = 5;
 const TEMPORAL_LINK_HOURS: i64 = 24;
 const MAX_TEMPORAL_LINKS: usize = 5;
+/// How many stored facts the extractor is shown beside each chunk, so it can
+/// say which ones a new fact replaces.
+const KNOWN_FACTS: usize = 8;
+/// A known fact is shown cut to this many characters.
+const KNOWN_FACT_CHARS: usize = 240;
+/// Subjects every fact in a conversation shares. Two facts about "the user" are
+/// not thereby about the same thing.
+const GENERIC_SUBJECTS: [&str; 6] = [
+    "user",
+    "người dùng",
+    "nguoi dung",
+    "assistant",
+    "trợ lý",
+    "tro ly",
+];
+/// Without a shared specific entity, a replacement must at least share this
+/// much wording with what it replaces.
+const MIN_OVERLAP_TO_REPLACE: f64 = 0.4;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RetainRequest<'a> {
@@ -45,6 +67,8 @@ pub struct RetainReport {
     /// Facts the model produced after validation.
     pub extracted: usize,
     pub stored: usize,
+    /// Older facts retired because a new one replaced them.
+    pub superseded: usize,
     /// Already known: their date was brought forward instead.
     pub reinforced: usize,
     /// Chunks whose model call or reply failed.
@@ -84,13 +108,20 @@ pub async fn retain(
         .map(|d| d.with_timezone(&chrono::Local).date_naive())
         .unwrap_or(NaiveDate::MIN);
 
-    let mut extracted: Vec<Extracted> = Vec::new();
+    // Each extracted fact keeps the stored facts its chunk was shown beside, since
+    // "replaces F2" means the second of THOSE.
+    let mut extracted: Vec<(Extracted, Arc<Vec<StoredFact>>)> = Vec::new();
     for chunk in chunk_text(&text, ChunkerOptions::default()) {
         report.chunks += 1;
+        let known = known_facts(&engine.store, req.bank, &chunk.text);
+        let shown: Vec<String> = known
+            .iter()
+            .map(|f| f.text.chars().take(KNOWN_FACT_CHARS).collect())
+            .collect();
         let reply = match llm
             .complete(
                 extract::SYSTEM_PROMPT,
-                &extract::user_prompt(&chunk.text, today),
+                &extract::user_prompt(&chunk.text, today, &shown),
             )
             .await
         {
@@ -102,7 +133,10 @@ pub async fn retain(
             }
         };
         match extract::parse_facts(&reply) {
-            Ok(facts) => extracted.extend(facts),
+            Ok(facts) => {
+                let known = Arc::new(known);
+                extracted.extend(facts.into_iter().map(|f| (f, Arc::clone(&known))));
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "[facts] extraction reply unusable");
                 report.failed_chunks += 1;
@@ -115,13 +149,28 @@ pub async fn retain(
     }
 
     let embeddings = engine
-        .embed_all(&extracted.iter().map(|f| f.text.clone()).collect::<Vec<_>>())
+        .embed_all(
+            &extracted
+                .iter()
+                .map(|(f, _)| f.text.clone())
+                .collect::<Vec<_>>(),
+        )
         .await;
     let model = engine.model_key();
 
-    for (fact, embedding) in extracted.into_iter().zip(embeddings) {
-        match store_one(&engine.store, req, fact, embedding, model.as_deref()) {
-            Ok(Stored::New) => report.stored += 1,
+    for ((fact, known), embedding) in extracted.into_iter().zip(embeddings) {
+        match store_one(
+            &engine.store,
+            req,
+            fact,
+            &known,
+            embedding,
+            model.as_deref(),
+        ) {
+            Ok(Stored::New { superseded }) => {
+                report.stored += 1;
+                report.superseded += superseded;
+            }
             Ok(Stored::Known) => report.reinforced += 1,
             Err(e) => tracing::warn!(error = %e, "[facts] could not store a fact"),
         }
@@ -138,14 +187,43 @@ pub async fn retain(
 }
 
 enum Stored {
-    New,
+    New { superseded: usize },
     Known,
+}
+
+/// Stored facts that look related to this text, best match first: what the
+/// extractor is shown so it can notice a contradiction. Words only — it must
+/// cost no model call and no embedding.
+fn known_facts(store: &FactStore, bank: &str, text: &str) -> Vec<StoredFact> {
+    let Some(m) = build_fts_match(text) else {
+        return Vec::new();
+    };
+    store
+        .search_keyword(bank, &m, None, KNOWN_FACTS)
+        .unwrap_or_default()
+}
+
+/// Is `new` plausibly about the same thing as `old`? A model asked to name what
+/// a fact replaces will sometimes name the wrong one; replacing hides a fact
+/// from recall, so the claim is checked: a shared entity beyond the generic
+/// subject, or enough shared wording.
+fn same_subject(old: &StoredFact, new_text: &str, new_entities: &[String]) -> bool {
+    let shares_entity = old
+        .entities
+        .iter()
+        .any(|e| !GENERIC_SUBJECTS.contains(&e.as_str()) && new_entities.contains(e));
+    if shares_entity {
+        return true;
+    }
+    let (a, b) = (text_terms(&old.text), text_terms(new_text));
+    a.len() >= 3 && b.len() >= 3 && overlap_coefficient(&a, &b) >= MIN_OVERLAP_TO_REPLACE
 }
 
 fn store_one(
     store: &FactStore,
     req: &RetainRequest<'_>,
     fact: Extracted,
+    known: &[StoredFact],
     embedding: Option<Vec<f32>>,
     model: Option<&str>,
 ) -> anyhow::Result<Stored> {
@@ -164,6 +242,7 @@ fn store_one(
         }
     }
 
+    let replaces = fact.replaces;
     let new = NewFact {
         text: fact.text,
         kind: fact.kind,
@@ -198,7 +277,20 @@ fn store_one(
             )?;
         }
     }
-    Ok(Stored::New)
+
+    // The model said what this replaces; keep only what is plausible.
+    let mut superseded = 0;
+    for number in replaces {
+        let Some(old) = known.get(number - 1) else {
+            continue; // a number it was never shown
+        };
+        if same_subject(old, &new.text, &new.entities)
+            && store.supersede(req.bank, &old.id, &id, req.now)?
+        {
+            superseded += 1;
+        }
+    }
+    Ok(Stored::New { superseded })
 }
 
 /// Closer in time, stronger; never below 0.3 inside the window.
@@ -492,6 +584,123 @@ mod tests {
         );
     }
 
+    const REACT: &str = r#"{"facts":[{"text":"Người dùng thích dùng React cho frontend.","kind":"world","entities":["user","React"]}]}"#;
+
+    #[tokio::test]
+    async fn a_changed_mind_retires_the_old_fact_and_keeps_it_for_history() {
+        let e = engine(false);
+        retain(
+            &e,
+            &Scripted::ok(REACT),
+            Mode::Redact,
+            &req("User: tôi thích dùng React cho frontend"),
+        )
+        .await;
+
+        let llm = Scripted::ok(
+            r#"{"facts":[{"text":"Người dùng đã chuyển sang Vue và không còn dùng React.","kind":"world","entities":["user","Vue","React"],"replaces":["F1"]}]}"#,
+        );
+        let report = retain(
+            &e,
+            &llm,
+            Mode::Redact,
+            &req("User: tôi chuyển sang Vue rồi, không dùng React nữa"),
+        )
+        .await;
+        assert_eq!((report.stored, report.superseded), (1, 1));
+
+        // The model was shown what was stored, numbered, to be able to say so.
+        let prompt = llm.seen.lock().unwrap()[0].1.clone();
+        assert!(
+            prompt.contains("KNOWN FACTS:\n[F1] Người dùng thích dùng React cho frontend."),
+            "{prompt}"
+        );
+
+        let current = e.store.search_keyword("main", "react", None, 10).unwrap();
+        assert_eq!(current.len(), 1);
+        assert!(current[0].text.contains("chuyển sang Vue"));
+        let history = e.store.recent("main", 10, true).unwrap();
+        assert_eq!(history.len(), 2);
+        let old = history
+            .iter()
+            .find(|f| f.text.contains("thích dùng React"))
+            .unwrap();
+        assert_eq!(old.superseded_by.as_deref(), Some(current[0].id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn a_replacement_the_model_got_wrong_is_ignored() {
+        let e = engine(false);
+        retain(
+            &e,
+            &Scripted::ok(r#"{"facts":[{"text":"Sen sống ở Hà Nội và làm việc tại FPT.","kind":"world","entities":["Sen","Hà Nội","FPT"]}]}"#),
+            Mode::Redact,
+            &req("User: Sen sống ở Hà Nội và làm việc tại FPT"),
+        )
+        .await;
+        // The window mentions Sen, so the Hà Nội fact is shown as F1; the model
+        // wrongly says a tea preference replaces it.
+        let llm = Scripted::ok(
+            r#"{"facts":[{"text":"Người dùng thích trà xanh vào buổi tối.","kind":"world","entities":["user"],"replaces":["F1"]}]}"#,
+        );
+        let report = retain(
+            &e,
+            &llm,
+            Mode::Redact,
+            &req("User: Sen ơi, tôi thích trà xanh buổi tối"),
+        )
+        .await;
+        assert!(llm.seen.lock().unwrap()[0]
+            .1
+            .contains("[F1] Sen sống ở Hà Nội"));
+        assert_eq!((report.stored, report.superseded), (1, 0));
+        assert_eq!(
+            e.store.recent("main", 10, false).unwrap().len(),
+            2,
+            "nothing was hidden"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_number_the_model_was_never_shown_replaces_nothing() {
+        let e = engine(false);
+        retain(
+            &e,
+            &Scripted::ok(REACT),
+            Mode::Redact,
+            &req("User: tôi thích dùng React cho frontend"),
+        )
+        .await;
+        let report = retain(
+            &e,
+            &Scripted::ok(
+                r#"{"facts":[{"text":"Người dùng đã chuyển sang Vue và bỏ React.","kind":"world","entities":["user","React","Vue"],"replaces":["F7","F0",3]}]}"#,
+            ),
+            Mode::Redact,
+            &req("User: tôi chuyển sang Vue rồi, bỏ React"),
+        )
+        .await;
+        assert_eq!((report.stored, report.superseded), (1, 0));
+        assert_eq!(e.store.recent("main", 10, false).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_same_statement_said_again_is_more_evidence_not_a_second_fact() {
+        let e = engine(false);
+        for _ in 0..3 {
+            retain(
+                &e,
+                &Scripted::ok(REACT),
+                Mode::Redact,
+                &req("User: tôi thích dùng React cho frontend"),
+            )
+            .await;
+        }
+        let facts = e.store.recent("main", 10, false).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].proof_count, 3);
+    }
+
     #[tokio::test]
     async fn text_with_nothing_in_it_costs_no_model_call() {
         let e = engine(false);
@@ -511,6 +720,8 @@ mod tests {
             occurred_end: None,
             mentioned_at: 0,
             entities: vec![],
+            proof_count: 1,
+            superseded_by: None,
         };
         assert!((temporal_weight(0, &at(0)) - 1.0).abs() < 1e-6);
         assert!((temporal_weight(0, &at(12 * 3600)) - 0.5).abs() < 1e-6);

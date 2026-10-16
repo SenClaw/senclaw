@@ -224,6 +224,20 @@
       "facts": [
         { "text": "Dự án Orion triển khai vào ngày 2026-11-02.", "kind": "world", "when": "2026-11-02", "entities": ["Orion"] }
       ]
+    },
+    {
+      "match": "thích dùng React",
+      "text": "User: tôi thích dùng React cho frontend",
+      "facts": [
+        { "text": "Người dùng thích dùng React cho frontend.", "kind": "world", "when": null, "entities": ["user", "React"] }
+      ]
+    },
+    {
+      "match": "chuyển sang Vue",
+      "text": "User: tôi chuyển sang Vue rồi, không dùng React nữa",
+      "facts": [
+        { "text": "Người dùng đã chuyển sang Vue và không còn dùng React nữa.", "kind": "world", "when": null, "entities": ["user", "Vue", "React"], "replaces_matching": "thích dùng React" }
+      ]
     }
   ],
   "fact_queries": [
@@ -262,7 +276,15 @@
       "text": "Khi nào Orion triển khai?",
       "must_include": ["2026-11-02"],
       "must_exclude": ["abcdefghijklmnopqrstuvwxyz1234"],
+      "secret": true,
       "why": "the date is kept and the API key typed beside it never reaches the model or the store"
+    },
+    {
+      "id": "changed-mind-react-vue",
+      "text": "Người dùng dùng React hay Vue?",
+      "must_include": ["Vue"],
+      "must_exclude": ["thích dùng React"],
+      "why": "the user changed their mind; the old preference is kept for history and must not be recalled beside the new one"
     }
   ]
 }
