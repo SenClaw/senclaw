@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dataset gốc cho Datagen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --paper:#f6f5f1; --panel:#ffffff; --ink:#17171b; --ink-2:#45443f; --muted:#6c6a63;
+  --rule:#dcd9d0; --rule-2:#ebe9e3; --code-bg:#efeee8;
+  --jev:#1d5bbf; --jev-soft:#e7eefb;
+  --llm:#ad4f19; --llm-soft:#fbeee4;
+  --eng:#22704a; --eng-soft:#e3f1e9;
+  --hum:#6c3f9f; --hum-soft:#f0e8f8;
+  --bad:#b42318; --bad-soft:#fdeceb;
+  --warn:#835400; --warn-soft:#fbf1da;
+  --ok:#1f7a3d; --ok-soft:#e4f3e8;
+  --dot-text:#ffffff;
+  --f-display:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+    --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+    --jev:#86b4ff; --jev-soft:#18263d;
+    --llm:#f2a466; --llm-soft:#35231a;
+    --eng:#72d3a0; --eng-soft:#14301f;
+    --hum:#c9a3f3; --hum-soft:#2a1f3b;
+    --bad:#ff8f86; --bad-soft:#3a1a19;
+    --warn:#efc56f; --warn-soft:#342811;
+    --ok:#7fd79d; --ok-soft:#15301d;
+    --dot-text:#131316;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+  --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+  --jev:#86b4ff; --jev-soft:#18263d;
+  --llm:#f2a466; --llm-soft:#35231a;
+  --eng:#72d3a0; --eng-soft:#14301f;
+  --hum:#c9a3f3; --hum-soft:#2a1f3b;
+  --bad:#ff8f86; --bad-soft:#3a1a19;
+  --warn:#efc56f; --warn-soft:#342811;
+  --ok:#7fd79d; --ok-soft:#15301d;
+  --dot-text:#131316;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:15px/1.62 var(--f-body);-webkit-font-smoothing:antialiased}
+a{color:var(--jev);text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--jev);outline-offset:2px;border-radius:3px}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:28px 72px;display:grid;grid-template-columns:minmax(0,1fr);gap:28px}
+@media (min-width:1040px){.wrap{grid-template-columns:212px minmax(0,1fr);gap:44px;padding-inline:28px}}
+/* TOC */
+.toc{font-size:13px;line-height:1.45}
+.toc details{border:1px solid var(--rule);border-radius:8px;background:var(--panel);padding:10px 14px}
+.toc summary{cursor:pointer;font-weight:600}
+.toc ol{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:2px}
+.toc a{display:grid;grid-template-columns:2.2em 1fr;gap:4px;color:var(--ink-2);text-decoration:none;padding:3px 6px;border-radius:4px}
+.toc a span{color:var(--muted);font:12px var(--f-mono)}
+.toc a:hover{background:var(--rule-2);color:var(--ink)}
+.toc a.on{background:var(--jev-soft);color:var(--ink)}
+@media (min-width:1040px){
+  .toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto}
+  .toc details{border:0;background:none;padding:0}
+  .toc summary{list-style:none;font:600 11px var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);pointer-events:none}
+  .toc summary::-webkit-details-marker{display:none}
+}
+main{min-width:0}
+/* type */
+h1,h2,h3{text-wrap:balance}
+h1{font:700 clamp(28px,4.2vw,40px)/1.1 var(--f-display);letter-spacing:-.01em;margin:6px 0 14px}
+h2{font:600 26px/1.2 var(--f-display);margin:0}
+h3{font:600 16.5px/1.35 var(--f-body);margin:26px 0 8px}
+p,li{max-width:74ch}
+p{margin:0 0 12px}
+ul,ol{margin:0 0 12px;padding-left:22px}
+li{margin:3px 0}
+.eyebrow{font:600 11.5px var(--f-body);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--code-bg);padding:.08em .32em;border-radius:3px;overflow-wrap:anywhere}
+pre{font:12.5px/1.55 var(--f-mono);background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:0 0 14px;max-width:100%}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+/* header */
+.masthead{border-bottom:1px solid var(--rule);padding-bottom:22px;margin-bottom:6px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;border:1px solid var(--rule);background:var(--panel);border-radius:999px;padding:3px 10px;color:var(--ink-2)}
+.chip b{font-weight:600;color:var(--ink)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:18px}
+.fact{background:var(--panel);padding:12px 14px}
+.fact .k{font:600 11px var(--f-body);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.fact .v{font:600 17px/1.3 var(--f-display);margin-top:3px}
+.fact .v.jev{color:var(--jev)} .fact .v.llm{color:var(--llm)} .fact .v.eng{color:var(--eng)} .fact .v.hum{color:var(--hum)}
+/* sections */
+section{padding-top:42px;scroll-margin-top:16px}
+.sh{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--rule);padding-bottom:8px;margin-bottom:16px}
+.sn{font:500 13px var(--f-mono);color:var(--muted);min-width:2.4em}
+.tldr{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px 6px}
+.tldr li{margin:6px 0}
+/* grids & boxes */
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}
+.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 14px}
+.box{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.box h4{margin:0 0 6px;font:600 13px var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.box p:last-child,.box ul:last-child{margin-bottom:0}
+.box ul{padding-left:18px}
+.box.jev{border-top:3px solid var(--jev)} .box.llm{border-top:3px solid var(--llm)} .box.eng{border-top:3px solid var(--eng)} .box.hum{border-top:3px solid var(--hum)} .box.bad{border-top:3px solid var(--bad)}
+.note{border-left:3px solid var(--jev);background:var(--jev-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:0 0 14px}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note p:last-child{margin-bottom:0}
+/* tables */
+.tscroll{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;line-height:1.5}
+th{font:600 11.5px/1.3 var(--f-body);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);background:var(--panel);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .ref{font:11.5px var(--f-mono);color:var(--muted);display:block;margin-top:2px;overflow-wrap:anywhere}
+/* tags */
+.tag{display:inline-block;font:600 10.5px/1 var(--f-body);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px 3px;border-radius:4px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.t-jev{color:var(--jev)} .t-llm{color:var(--llm)} .t-eng{color:var(--eng)} .t-hum{color:var(--hum)} .t-bad{color:var(--bad)} .t-warn{color:var(--warn)} .t-ok{color:var(--ok)} .t-mut{color:var(--muted)}
+.ev{font:500 10.5px var(--f-mono);padding:1px 5px;border-radius:3px;white-space:nowrap}
+.ev-m{background:var(--ok-soft);color:var(--ok)}
+.ev-e{background:var(--warn-soft);color:var(--warn)}
+.ev-p{background:var(--jev-soft);color:var(--jev)}
+/* diagrams */
+figure{margin:0 0 16px}
+.dscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel);padding:10px}
+.dscroll svg{display:block;width:100%;min-width:760px;height:auto}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:8px;max-width:90ch}
+svg .bx{fill:var(--panel);stroke:var(--rule);stroke-width:1.2}
+svg .bx-jev{fill:var(--jev-soft);stroke:var(--jev);stroke-width:1.2}
+svg .bx-llm{fill:var(--llm-soft);stroke:var(--llm);stroke-width:1.2}
+svg .bx-eng{fill:var(--eng-soft);stroke:var(--eng);stroke-width:1.2}
+svg .bx-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.2}
+svg .bx-hum{fill:var(--hum-soft);stroke:var(--hum);stroke-width:1.2}
+svg .ct{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:6 4}
+svg .t{fill:var(--ink);font:600 13px var(--f-body)}
+svg .ts{fill:var(--ink-2);font:12px var(--f-body)}
+svg .tm{fill:var(--muted);font:11.5px var(--f-mono)}
+svg .tl{fill:var(--ink-2);font:italic 12px var(--f-body)}
+svg .ar{stroke:var(--ink-2);stroke-width:1.4;fill:none}
+svg .ar-jev{stroke:var(--jev)} svg .ar-llm{stroke:var(--llm)} svg .ar-eng{stroke:var(--eng)} svg .ar-bad{stroke:var(--bad)}
+svg .dash{stroke-dasharray:5 4}
+svg .ah{fill:var(--ink-2)}
+svg .dot{fill:var(--bad)}
+svg .dott{fill:var(--dot-text);font:700 11px var(--f-body)}
+svg .axis{stroke:var(--rule);stroke-width:1}
+svg .grid{stroke:var(--rule-2);stroke-width:1}
+svg .s-eng{fill:var(--eng)} svg .s-jev{fill:var(--jev)} svg .s-llm{fill:var(--llm)} svg .s-set{fill:var(--eng);opacity:.45}
+svg .s-old{fill:none;stroke:var(--bad);stroke-width:1.5;stroke-dasharray:6 4}
+/* bands */
+.bands{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px 14px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px;margin:0 0 14px}
+.bands .lbl{font-size:13px;font-weight:600}
+.bar{display:flex;height:30px;border-radius:6px;overflow:hidden;border:1px solid var(--rule);font-size:12px}
+.bar span{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 4px}
+.z-rev{background:var(--hum-soft);color:var(--hum)}
+.z-fb{background:var(--llm-soft);color:var(--llm)}
+.z-act{background:var(--jev-soft);color:var(--jev)}
+.axisrow{position:relative;height:18px;font:11.5px var(--f-mono);color:var(--muted)}
+.axisrow span{position:absolute;transform:translateX(-50%)}
+.axisrow span:first-child{transform:none} .axisrow span:last-child{transform:translateX(-100%)}
+@media (max-width:520px){.bands{grid-template-columns:minmax(0,1fr);gap:6px}.bands>span:empty{display:none}}
+/* steps */
+.steps{counter-reset:st;list-style:none;padding:0;margin:0 0 14px;display:grid;gap:8px}
+.steps li{counter-increment:st;display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;max-width:none;background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:10px 12px}
+.steps li::before{content:counter(st);font:600 13px var(--f-mono);color:var(--muted);padding-top:1px}
+.steps li b{font-weight:600}
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:0 0 14px}
+.phase{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.phase .ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.phase .pid{font:600 20px var(--f-display);color:var(--jev)}
+.phase .size{font:500 11px var(--f-mono);color:var(--muted)}
+.phase h4{margin:0;font:600 15px/1.3 var(--f-body)}
+.phase ul{margin:0;padding-left:18px;font-size:13.5px}
+.phase .exit{margin-top:auto;font-size:12.5px;border-top:1px dashed var(--rule);padding-top:8px;color:var(--ink-2)}
+/* decisions */
+.dec{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;margin:0 0 12px}
+.dec .dh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.dec .did{font:600 13px var(--f-mono);color:var(--muted)}
+.dec h4{margin:0;font:600 16px/1.35 var(--f-body)}
+.opts{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
+.opts li{max-width:none;border:1px solid var(--rule-2);border-radius:8px;padding:8px 10px;font-size:14px}
+.opts li.rec{border-color:var(--ok);background:var(--ok-soft)}
+.opts li .tag{margin-right:6px}
+.path{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px}
+.path .pn{font-weight:600;border:1px solid var(--rule);border-radius:6px;padding:3px 8px;background:var(--paper)}
+.path .pn.eng{border-color:var(--eng);background:var(--eng-soft)}
+.path .pn.hum{border-color:var(--hum);background:var(--hum-soft)}
+.path .pa{font:12px var(--f-mono);color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+svg .bx-dash{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+svg .hd{fill:var(--muted);font:600 11px var(--f-body);letter-spacing:.08em}
+/* UI mockups */
+.mock{background:var(--paper);border:1px solid var(--rule);border-radius:12px;padding:14px;margin:0 0 14px}
+.mock .bar2{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.mock .seg{display:inline-flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden;font-size:13px}
+.mock .seg span{padding:4px 10px;background:var(--panel)} .mock .seg span.on{background:var(--jev-soft);color:var(--jev);font-weight:600}
+.mock .btn{display:inline-block;font-size:12.5px;border:1px solid var(--rule);border-radius:6px;padding:3px 10px;background:var(--panel)}
+.mock .btn.pri{background:var(--jev);border-color:var(--jev);color:var(--paper);font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.card h5{margin:0;font:600 14.5px/1.3 var(--f-body)}
+.card .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.card .foot{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px dashed var(--rule);padding-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="toc" aria-label="Mục lục">
+    <details id="tocbox" open>
+      <summary>Mục lục</summary>
+      <ol>
+        <li><a href="#tomtat"><span>—</span>Tóm tắt</a></li>
+        <li><a href="#s1"><span>§1</span>Vì sao cần</a></li>
+        <li><a href="#s2"><span>§2</span>Hiện trạng</a></li>
+        <li><a href="#s3"><span>§3</span>Catalog đề xuất</a></li>
+        <li><a href="#s4"><span>§4</span>Kiến trúc import</a></li>
+        <li><a href="#s5"><span>§5</span>Định dạng chuẩn</a></li>
+        <li><a href="#s6"><span>§6</span>Flow chi tiết</a></li>
+        <li><a href="#s7"><span>§7</span>Desktop &amp; web</a></li>
+        <li><a href="#s8"><span>§8</span>REST &amp; MCP</a></li>
+        <li><a href="#s9"><span>§9</span>License &amp; an toàn</a></li>
+        <li><a href="#s10"><span>§10</span>Lộ trình</a></li>
+        <li><a href="#s11"><span>§11</span>Cần chốt</a></li>
+        <li><a href="#s12"><span>§12</span>Câu hỏi mở</a></li>
+        <li><a href="#s13"><span>§13</span>Nguồn</a></li>
+      </ol>
+    </details>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <div class="eyebrow">Tài liệu thiết kế · SenClaw · Datagen</div>
+      <h1>Dataset gốc: nạp sẵn dữ liệu do người viết vào Datagen</h1>
+      <p class="lede">Thay vì chỉ để LLM sinh từ vài câu mẫu, Datagen nhận thêm <b>dataset gốc</b>: dữ liệu công khai do người viết và gắn nhãn, license rõ ràng. Dataset gốc dùng được làm seed và làm bộ đo. Có ba đường đưa vào: bộ có sẵn trong app, catalog ghim phiên bản trên Hugging Face, và import file/URL. Cả ba có trên <b>desktop</b> và <b>web-app</b>.</p>
+      <div class="meta">
+        <span class="chip"><b>Phiên bản</b> v0.1</span>
+        <span class="chip"><b>Ngày</b> 14/10/2026</span>
+        <span class="chip"><b>Trạng thái</b> Đã làm I0–I3 (16/10), nhánh <code>feat/datagen-import</code></span>
+        <span class="chip"><b>Đi kèm</b> <a href="design.html">Datagen: ghép vào đâu</a></span>
+        <span class="chip"><b>Mã nguồn</b> senclaw <code>main</code> @ 20c68b6</span>
+      </div>
+      <div class="facts">
+        <div class="fact"><div class="k">Đường import hôm nay</div><div class="v">0</div></div>
+        <div class="fact"><div class="k">Catalog đề xuất</div><div class="v jev">7 dataset · 6 trên Hugging Face</div></div>
+        <div class="fact"><div class="k">MASSIVE tiếng Việt</div><div class="v eng">2.974 câu có nhãn người viết</div></div>
+        <div class="fact"><div class="k">Chi phí LLM để có bộ đo</div><div class="v eng">0 lời gọi</div></div>
+      </div>
+    </header>
+
+    <section id="tomtat" aria-labelledby="h-tomtat">
+      <div class="sh"><h2 id="h-tomtat">Tóm tắt</h2></div>
+      <div class="tldr">
+        <ul>
+          <li><b>Vấn đề.</b> Datagen hiện chỉ có một đường vào: câu mẫu dán tay, hoặc <code>seeds_file</code> khi gọi từ chat. Mọi bản ghi còn lại đều do LLM viết. Dữ liệu như vậy hay giống cách diễn đạt của câu mẫu, và mỗi lần tạo đều tốn lời gọi. Không có cách nào đưa một dataset do người viết vào <code>datasets/</code> để dùng làm bộ đo (§1, §2).</li>
+          <li><b>Đã kiểm.</b> Đã gọi thử API của Hugging Face cho từng dataset:
+            <ul>
+              <li><b>MASSIVE</b> tiếng Việt: tập test 2.974 câu có nhãn intent. Ví dụ "đánh thức tôi dậy lúc năm giờ sáng tuần này" → <code>alarm_set</code>; "thời tiết của tuần này thế nào" → <code>weather_query</code>. Đây gần như là bộ đo router dựng sẵn.</li>
+              <li><b>XQuAD-vi:</b> 1.190 câu hỏi kèm đoạn văn.</li>
+              <li><b>GSM8K:</b> 1.319 bài toán kèm đáp án.</li>
+            </ul>
+            Cả ba đều tải được qua API <code>/rows</code>, không cần đọc parquet (§3).</li>
+          <li><b>Đề xuất.</b>
+            <ul>
+              <li>Làm theo đúng mẫu đã có của Zen Patterns: catalog gồm mục <b>có sẵn</b> (cài không cần mạng) và mục <b>preset</b> (nguồn và commit ghim sẵn), kèm import file/URL tự do.</li>
+              <li>Dataset gốc được chuẩn hoá về 4 dạng bản ghi để các pipeline dùng thẳng: làm seed, làm bộ đo, làm bài có đáp án, làm kho tài liệu (§4–§6).</li>
+              <li>Giao diện là một tab "Dataset gốc" trên trang Datagen ở cả hai client (§7).</li>
+            </ul></li>
+          <li><b>License.</b>
+            <ul>
+              <li>Chỉ đưa vào catalog những dataset có license rõ.</li>
+              <li>Dataset CC BY-SA thì tải khi cần, không nhúng sẵn vào app.</li>
+              <li>Dataset NC (phi thương mại) và "chỉ cho nghiên cứu" phải được gắn cờ.</li>
+              <li>Loại UIT-ViQuAD (không có license rõ) và Alpaca (NC) (§9).</li>
+            </ul></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="s1" aria-labelledby="h1s">
+      <div class="sh"><span class="sn">§1</span><h2 id="h1s">Vì sao cần dataset gốc</h2></div>
+      <div class="g3">
+        <div class="box eng"><h4>Nhãn do người viết</h4><p>Bộ đo phải đúng hơn thứ nó đo. Nhãn do LLM tự sinh rồi LLM tự kiểm vẫn mang thiên lệch của chính model đó. Dataset gốc có nhãn do người viết, nên có thể làm "đáp án chuẩn".</p></div>
+        <div class="box jev"><h4>Đa dạng hơn câu mẫu</h4><p><code>expand_seeds</code> viết theo giọng của 2–3 câu mẫu. MASSIVE do người bản ngữ địa phương hoá, nên có câu cụt ("im lặng"), câu vòng vo, câu sai chính tả: đúng kiểu người dùng thật gõ.</p></div>
+        <div class="box llm"><h4>Không tốn lời gọi</h4><p>Lấy một bộ đo 2.974 câu không tốn lời gọi LLM nào. Ví dụ <code>expand_seeds</code> chạy thật trên máy này mất 6 lời gọi để có 9 câu.</p></div>
+      </div>
+      <p>Dataset gốc không thay Datagen. Nó cho Datagen <b>điểm xuất phát tốt hơn</b>: seed lấy từ dữ liệu thật, rồi để LLM mở rộng sang các flow riêng của SenClaw mà dataset công khai không có (ví dụ "mô phỏng dư luận" của app OASIS).</p>
+    </section>
+
+    <section id="s2" aria-labelledby="h2s">
+      <div class="sh"><span class="sn">§2</span><h2 id="h2s">Hiện trạng</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Đường vào</th><th>Có không</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            <tr><td>Dán câu mẫu trong form</td><td>Có</td><td>Mỗi dòng <code>nhãn | câu</code>, chỉ để làm seed<span class="ref">web DatagenPage.tsx · desktop datagen_job_dialog.dart</span></td></tr>
+            <tr><td><code>seeds_file</code> / <code>problems_file</code></td><td>Chỉ từ chat (MCP)</td><td>File <code>.json</code>/<code>.jsonl</code>, đọc vào làm seed rồi bỏ, không thành dataset<span class="ref">src/mcp/datagen_server.rs:48–72, 319</span></td></tr>
+            <tr><td>Import một dataset vào <code>datasets/</code></td><td>Không</td><td>Chỉ có cách ghi qua job sinh: <code>DatasetWriter::create/append</code><span class="ref">src/datagen/store.rs:54–89</span></td></tr>
+            <tr><td>Catalog có sẵn</td><td>Không</td><td>REST chỉ có <code>jobs</code> và <code>datasets</code><span class="ref">ui_server/core.rs:386–402</span></td></tr>
+            <tr><td>Tiền lệ trong SenClaw</td><td>Có: Zen Patterns</td><td><code>GET /api/patterns/catalog</code> có mục <i>bundled</i> (biên dịch vào binary) và <i>git preset</i> (URL + ref ghim). Trang Patterns của web và desktop hiện dạng thẻ có nút Cài<span class="ref">src/patterns/catalog.rs · PatternsPanel.tsx · patterns_panel.dart</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s3" aria-labelledby="h3s">
+      <div class="sh"><span class="sn">§3</span><h2 id="h3s">Catalog đề xuất</h2></div>
+      <p>Mọi dòng dưới đây đã được kiểm ngày 14/10/2026 qua <code>datasets-server.huggingface.co</code> (<code>/splits</code>, <code>/rows</code>) và <code>huggingface.co/api/datasets</code>. Commit ghim là commit lúc kiểm; preset luôn ghi đủ sha.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Mục</th><th>Nguồn · config/split</th><th class="num">Dòng</th><th>Dạng</th><th>License</th><th>Dùng cho</th></tr></thead>
+          <tbody>
+            <tr><td><b>senclaw-flows-vi</b> <span class="tag t-eng">có sẵn</span></td><td>SenClaw tự viết, nằm trong <code>assets/datasets/</code></td><td class="num">~150</td><td><code>labeled_text</code></td><td>MIT</td><td>Seed + bộ đo cho các flow riêng: OASIS, Tin Tức, lịch, browser, DAG, none</td></tr>
+            <tr><td><b>massive-vi</b> <span class="tag t-jev">preset</span></td><td><code>mteb/amazon_massive_intent</code> · <code>vi</code> · <code>test</code> @ 940fd47a81</td><td class="num">2.974</td><td><code>labeled_text</code></td><td>CC BY 4.0 (Amazon, bản gốc)<span class="ref">mirror ghi apache-2.0 — dùng license gốc</span></td><td>Bộ đo router sau khi gắn intent → flow (§6.3); seed tiếng Việt thật</td></tr>
+            <tr><td><b>xquad-vi</b> <span class="tag t-jev">preset</span></td><td><code>google/xquad</code> · <code>xquad.vi</code> · <code>validation</code> @ 51adfef1c1</td><td class="num">1.190</td><td><code>qa_context</code></td><td>CC BY-SA 4.0</td><td>Đo tìm kiếm: đoạn văn làm kho, câu hỏi làm truy vấn; seed cho <code>doc_qa</code></td></tr>
+            <tr><td><b>gsm8k</b> <span class="tag t-jev">preset</span></td><td><code>openai/gsm8k</code> · <code>main</code> · <code>test</code> @ 740312add8</td><td class="num">1.319</td><td><code>problem_answer</code></td><td>MIT</td><td>Đầu vào cho <code>reasoning_traces</code> (có đáp án để so); seed cho <code>executable_qa</code></td></tr>
+            <tr><td><b>self-instruct-seed</b> <span class="tag t-jev">preset</span></td><td><code>HuggingFaceH4/self-instruct-seed</code> · <code>train</code> @ 853eb0af25</td><td class="num">175</td><td><code>labeled_text</code></td><td>Apache-2.0</td><td>Seed đa thể loại cho <code>expand_seeds</code> mode <code>evolve</code></td></tr>
+            <tr><td><b>dolly-15k</b> <span class="tag t-jev">preset</span></td><td><code>databricks/databricks-dolly-15k</code> · <code>train</code> @ bdd27f4d94</td><td class="num">15.011</td><td><code>labeled_text</code> (nhãn = <code>category</code>)</td><td>CC BY-SA 3.0</td><td>Seed theo 8 loại việc (brainstorm, QA đóng/mở, tóm tắt…)</td></tr>
+            <tr><td><b>mind2web</b> <span class="tag t-mut">sau</span></td><td><code>osunlp/Mind2Web</code> · <code>train</code> @ 17ece8eb89</td><td class="num">~1k task</td><td><code>web_task</code></td><td>CC BY 4.0<span class="ref">mirror có ghi "chỉ cho nghiên cứu"</span></td><td>Bộ đo browser engine; dữ liệu cho Laya (Flow 4 của tài liệu kèm)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note warn"><p><b>Không đưa vào catalog:</b>
+        <ul>
+          <li><b>UIT-ViQuAD:</b> chỉ ghi "tải tự do", không có license. Đoạn văn lấy từ Wikipedia (CC BY-SA), nhưng cặp hỏi đáp thì chưa rõ quyền.</li>
+          <li><b>Alpaca:</b> CC BY-NC, không dùng cho mục đích thương mại.</li>
+          <li><b>MASSIVE bản gốc trên Hugging Face</b> (<code>AmazonScience/massive</code>): không có bản xuất parquet, nên <code>/rows</code> báo "Cannot get the config names". Dùng mirror của MTEB thay thế.</li>
+        </ul>
+        Người dùng vẫn import được những dataset này bằng đường file/URL, và tự chịu trách nhiệm về license.</p></div>
+    </section>
+
+    <section id="s4" aria-labelledby="h4s">
+      <div class="sh"><span class="sn">§4</span><h2 id="h4s">Kiến trúc import</h2></div>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 1000 330" role="img" aria-labelledby="arch-t arch-d">
+            <title id="arch-t">Kiến trúc import dataset gốc</title>
+            <desc id="arch-d">Ba nguồn đi vào bộ import gồm lấy, đọc, ánh xạ, kiểm và loại trùng, ghi ra thư mục dataset có provenance, rồi được dùng làm seed, bộ đo, bài có đáp án, kho tài liệu.</desc>
+            <defs><marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <text class="hd" x="10" y="22">NGUỒN</text>
+            <text class="hd" x="300" y="22">IMPORT (job datagen, pipeline import)</text>
+            <text class="hd" x="800" y="22">DÙNG</text>
+            <rect class="bx-eng" x="10" y="40" width="210" height="60" rx="8"/>
+            <text class="t" x="115" y="64" text-anchor="middle">Có sẵn trong app</text>
+            <text class="tm" x="115" y="84" text-anchor="middle">assets/datasets · offline</text>
+            <rect class="bx-jev" x="10" y="120" width="210" height="60" rx="8"/>
+            <text class="t" x="115" y="144" text-anchor="middle">Preset Hugging Face</text>
+            <text class="tm" x="115" y="164" text-anchor="middle">config · split · sha ghim</text>
+            <rect class="bx-hum" x="10" y="200" width="210" height="60" rx="8"/>
+            <text class="t" x="115" y="224" text-anchor="middle">File / URL / HF tự gõ</text>
+            <text class="tm" x="115" y="244" text-anchor="middle">jsonl · json · csv</text>
+            <rect class="bx-llm" x="290" y="40" width="440" height="220" rx="10"/>
+            <rect class="bx" x="306" y="62" width="96" height="70" rx="6"/>
+            <text class="t" x="354" y="92" text-anchor="middle">Lấy</text>
+            <text class="tm" x="354" y="112" text-anchor="middle">/rows ×100</text>
+            <rect class="bx" x="412" y="62" width="96" height="70" rx="6"/>
+            <text class="t" x="460" y="92" text-anchor="middle">Đọc</text>
+            <text class="tm" x="460" y="112" text-anchor="middle">jsonl/csv</text>
+            <rect class="bx" x="518" y="62" width="96" height="70" rx="6"/>
+            <text class="t" x="566" y="92" text-anchor="middle">Ánh xạ</text>
+            <text class="tm" x="566" y="112" text-anchor="middle">cột → dạng</text>
+            <rect class="bx" x="624" y="62" width="96" height="70" rx="6"/>
+            <text class="t" x="672" y="92" text-anchor="middle">Kiểm</text>
+            <text class="tm" x="672" y="112" text-anchor="middle">rỗng · trùng</text>
+            <path class="ar" d="M402,97 L410,97" marker-end="url(#ah1)"/>
+            <path class="ar" d="M508,97 L516,97" marker-end="url(#ah1)"/>
+            <path class="ar" d="M614,97 L622,97" marker-end="url(#ah1)"/>
+            <rect class="bx-eng" x="306" y="160" width="414" height="82" rx="6"/>
+            <text class="t" x="513" y="186" text-anchor="middle">datasets/&lt;tên&gt;/</text>
+            <text class="tm" x="513" y="206" text-anchor="middle">data.jsonl (dạng chuẩn §5) · manifest.json</text>
+            <text class="tm" x="513" y="224" text-anchor="middle">nguồn · revision · license · ghi nguồn · sha256</text>
+            <path class="ar" d="M513,132 L513,158" marker-end="url(#ah1)"/>
+            <path class="ar" d="M220,70 C255,70 255,97 304,97" marker-end="url(#ah1)"/>
+            <path class="ar" d="M220,150 C255,150 255,105 304,105" marker-end="url(#ah1)"/>
+            <path class="ar" d="M220,230 C262,230 262,112 304,112" marker-end="url(#ah1)"/>
+            <rect class="bx" x="800" y="40" width="190" height="44" rx="8"/>
+            <text class="t" x="895" y="67" text-anchor="middle">làm seed</text>
+            <rect class="bx" x="800" y="96" width="190" height="44" rx="8"/>
+            <text class="t" x="895" y="123" text-anchor="middle">làm bộ đo</text>
+            <rect class="bx" x="800" y="152" width="190" height="44" rx="8"/>
+            <text class="t" x="895" y="179" text-anchor="middle">bài có đáp án</text>
+            <rect class="bx" x="800" y="208" width="190" height="44" rx="8"/>
+            <text class="t" x="895" y="235" text-anchor="middle">kho tài liệu</text>
+            <path class="ar ar-jev" d="M720,200 C770,200 760,62 798,62" marker-end="url(#ah1)"/>
+            <path class="ar ar-jev" d="M720,200 C770,200 760,118 798,118" marker-end="url(#ah1)"/>
+            <path class="ar ar-jev" d="M720,200 C770,200 770,174 798,174" marker-end="url(#ah1)"/>
+            <path class="ar ar-jev" d="M720,210 C770,210 770,230 798,230" marker-end="url(#ah1)"/>
+            <text class="tl" x="500" y="300" text-anchor="middle">Import là một pipeline Datagen: có tiến độ, huỷ được, giữ phần đã ghi, cùng giới hạn 2 job — không thêm hệ thống thứ hai</text>
+          </svg>
+        </div>
+        <figcaption>Import dùng chung <code>jobs</code>, <code>store</code> và trang Datagen hiện có. Phần mới là bộ lấy dữ liệu, bộ ánh xạ, và catalog.</figcaption>
+      </figure>
+      <div class="g3">
+        <div class="box"><h4>Lấy</h4><ul>
+          <li>Hugging Face: gọi <code>/rows</code> mỗi lần 100 dòng (giới hạn của API), dừng ở <code>limit</code>. Nghỉ và thử lại khi gặp 429. Chúng tôi đã gặp 429 thật khi kiểm.</li>
+          <li>URL: tải qua <code>util::fetch_safety</code>, vốn đã chặn loopback và mạng nội bộ.</li>
+          <li>File: upload multipart, giống <code>install-zip</code> của Space App.</li>
+        </ul></div>
+        <div class="box"><h4>Ánh xạ</h4><ul>
+          <li>Preset khai sẵn cột nào sang trường nào (§5).</li>
+          <li>Import tự do thì có bước xem trước 20 dòng, kèm gợi ý ánh xạ theo tên cột (<code>text</code>, <code>question</code>, <code>label</code>…).</li>
+          <li>Có <code>labelMap</code> tuỳ chọn để đổi nhãn gốc sang nhãn của SenClaw.</li>
+        </ul></div>
+        <div class="box"><h4>Kiểm</h4><ul>
+          <li>Bỏ dòng rỗng, dòng trùng chính xác, dòng quá dài. Đếm theo lý do, như các pipeline khác.</li>
+          <li>Ghi <code>sha256</code> của nguồn và <code>revision</code>, để import lại đúng bản cũ thì ra đúng dataset cũ.</li>
+        </ul></div>
+      </div>
+    </section>
+
+    <section id="s5" aria-labelledby="h5s">
+      <div class="sh"><span class="sn">§5</span><h2 id="h5s">Định dạng chuẩn</h2></div>
+      <p>Mỗi dataset gốc thuộc một trong bốn <b>dạng</b>. Dạng quyết định pipeline nào đọc được nó. Đây là các dạng mà pipeline hiện có đã dùng sẵn, nên không phải đổi pipeline.</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Dạng</th><th>Trường</th><th>Đọc bởi</th><th>Ví dụ ánh xạ</th></tr></thead>
+          <tbody>
+            <tr><td><code>labeled_text</code></td><td><code>text</code>, <code>label?</code></td><td><code>expand_seeds</code> (seed); <code>eval_skill_route</code> (bộ đo)</td><td>MASSIVE: <code>text→text</code>, <code>label→label</code>. Dolly: <code>instruction→text</code>, <code>category→label</code></td></tr>
+            <tr><td><code>qa_context</code></td><td><code>question</code>, <code>answer</code>, <code>context</code>, <code>source?</code></td><td><code>eval_search</code>; seed <code>doc_qa</code></td><td>XQuAD: <code>answers.text[0]→answer</code>, <code>id→source.id</code></td></tr>
+            <tr><td><code>problem_answer</code></td><td><code>problem</code>, <code>answer?</code></td><td><code>reasoning_traces</code>; <code>executable_qa</code></td><td>GSM8K: <code>question→problem</code>; <code>answer</code> lấy phần sau <code>####</code></td></tr>
+            <tr><td><code>chat</code></td><td><code>messages[]</code></td><td>bộ xuất fine-tune (giống <code>export_logs</code>)</td><td>Dolly: <code>instruction</code> + <code>context</code> → user, <code>response</code> → assistant</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Manifest có thêm phần provenance:</p>
+<pre><code>{
+  "pipeline": "import", "kind": "labeled_text", "state": "done",
+  "source": { "type": "hf", "dataset": "mteb/amazon_massive_intent", "config": "vi",
+              "split": "test", "revision": "940fd47a81…" },
+  "license": "CC-BY-4.0", "attribution": "MASSIVE, Amazon (FitzGerald et al., 2022)",
+  "mapping": { "text": "text", "label": "label" },
+  "labelMap": "senclaw-flows",            // tuỳ chọn, xem §6.3
+  "accepted": 2974, "rejected": { "duplicate": 0, "empty": 0 },
+  "sha256": "…", "importedAt": 1792000000000
+}</code></pre>
+    </section>
+
+    <section id="s6" aria-labelledby="h6s">
+      <div class="sh"><span class="sn">§6</span><h2 id="h6s">Flow chi tiết</h2></div>
+      <h3>6.1 Cài một mục trong catalog</h3>
+      <ol class="steps">
+        <li><div>Người dùng mở trang Datagen, tab <b>Dataset gốc</b>. UI gọi <code>GET /api/datagen/catalog</code> và nhận các thẻ: tên, dạng, ngôn ngữ, số dòng, license, nguồn, đã cài chưa.</div></li>
+        <li><div>Bấm <b>Cài</b>. Mục <i>có sẵn</i> được ghi ngay từ binary, không cần mạng. Mục <i>preset</i> thì UI hiện license và điều kiện ghi nguồn. Mục CC BY-SA, NC hoặc "chỉ cho nghiên cứu" phải tick đồng ý trước khi cài.</div></li>
+        <li><div><code>POST /api/datagen/jobs {"pipeline":"import","source":{"catalog":id}}</code> tạo job <code>pipeline: "import"</code> (thẻ hiện tiến độ <i>đã lấy x / tổng</i>). Bộ lấy gọi <code>/rows</code> theo trang 100 dòng, nghỉ 250 ms giữa các trang, và thử lại tối đa 8 lần khi gặp 429. Dataset viewer chỉ phục vụ phiên bản <b>hiện tại</b>: <code>/rows</code> không nhận revision. Vì thế commit ghim chỉ để <b>kiểm</b>. Manifest ghi commit thực sự đã đọc, và job có ghi chú khi commit đó khác commit ghim.</div></li>
+        <li><div>Mỗi dòng được ánh xạ sang dạng chuẩn, kiểm, rồi ghi ngay vào <code>data.jsonl</code>. Huỷ giữa chừng vẫn giữ phần đã ghi, như mọi pipeline khác. Xong thì job <code>done</code>, dataset hiện trong bảng với cột nguồn và license.</div></li>
+      </ol>
+      <h3>6.2 Import file / URL / dataset tự gõ</h3>
+      <div class="path"><span class="pn hum">chọn file · dán URL · gõ dataset HF</span><span class="pa">→</span><span class="pn">POST /import/preview</span><span class="pa">20 dòng + cột + gợi ý ánh xạ</span><span class="pa">→</span><span class="pn hum">chọn dạng, ánh xạ, tên, license</span><span class="pa">→</span><span class="pn eng">POST /jobs pipeline import</span><span class="pa">→ job import</span></div>
+      <p class="small">Bước xem trước không ghi gì. Trường <b>license</b> là ô bắt buộc: người dùng phải chọn một license hoặc "không rõ", và giá trị đó đi vào manifest. Với Hugging Face tự gõ, bộ import gọi <code>/splits</code> trước để liệt kê config/split. Dataset bị khoá (gated) hoặc không có bản parquet thì báo rõ lý do, không thử lại mãi.</p>
+      <h3>6.3 Dùng dataset gốc</h3>
+      <div class="g2">
+        <div class="box jev"><h4>Làm bộ đo router: MASSIVE-vi</h4>
+          <p>Gắn nhãn intent gốc sang flow SenClaw bằng một bảng <code>labelMap</code> có sẵn (<code>senclaw-flows</code>). Đây là dữ liệu, không phải code:</p>
+          <ul class="small">
+            <li><code>alarm_*</code>, <code>calendar_set</code> ("nhắc tôi sau mười phút", 209 câu) → <code>schedule</code> / <code>calendar</code></li>
+            <li><code>news_query</code> ("cho tôi biết tin tức thế giới", 124 câu) → app Tin Tức</li>
+            <li><code>weather_query</code> (156 câu), <code>qa_*</code> → <code>web-research</code></li>
+            <li><code>email_sendemail</code> (114 câu) → app email</li>
+            <li><code>general_quirky</code> ("bạn hay mắc lỗi gì", 169 câu) → <code>none</code>: chuyện phiếm, đúng chỗ Laya từng sai</li>
+            <li><code>iot_*</code>, <code>audio_*</code>, <code>music_*</code> → <code>none</code> (SenClaw không điều khiển thiết bị): mẫu âm rất tốt</li>
+          </ul>
+          <p class="small">Rồi chạy <code>eval_skill_route</code> (Flow 1 của tài liệu kèm) trên dataset này: <b>0 lời gọi LLM</b>, chỉ gọi router.</p></div>
+        <div class="box eng"><h4>Ba cách dùng khác</h4><ul>
+          <li><b>Seed:</b> <code>expand_seeds</code> nhận <code>seedsFrom: {dataset, perLabel: 3}</code>, lấy mẫu cân bằng theo nhãn từ dataset gốc thay cho dán tay. Dùng để sinh câu cho flow mà dataset công khai không có, ví dụ <code>mo_phong</code> (OASIS).</li>
+          <li><b>Bài có đáp án:</b> <code>reasoning_traces</code> nhận <code>problemsFrom: "gsm8k"</code>. Đáp án được so bằng code như hiện nay.</li>
+          <li><b>Kho tài liệu:</b> <code>eval_search</code> nạp <code>context</code> của XQuAD-vi vào một <b>knowledge space riêng</b> (bridge đã có tham số <code>space</code>), rồi hỏi bằng <code>question</code> và đo recall@k. Cách này tách hẳn khỏi memory của người dùng.</li>
+        </ul></div>
+      </div>
+    </section>
+
+    <section id="s7" aria-labelledby="h7s">
+      <div class="sh"><span class="sn">§7</span><h2 id="h7s">Giao diện desktop &amp; web</h2></div>
+      <p>Hai client dùng cùng một bố cục, đúng quy ước parity hiện có (web <code>DatagenPage.tsx</code>, desktop <code>lib/features/datagen/</code>). Trang Datagen có thêm một nút chuyển: <b>Job &amp; dataset</b> (như hiện nay) và <b>Dataset gốc</b> (mới).</p>
+      <div class="mock" aria-label="Mô phỏng tab Dataset gốc">
+        <div class="bar2"><span class="seg"><span>Job &amp; dataset</span><span class="on">Dataset gốc</span></span><span class="btn">Import file / URL…</span><span class="muted small">Lọc:</span><span class="btn">Tất cả dạng ▾</span><span class="btn">Tiếng Việt</span></div>
+        <div class="cards">
+          <div class="card"><h5>SenClaw flows (vi)</h5><div class="row"><span class="tag t-eng">có sẵn</span><span class="tag t-mut">labeled_text</span><span class="tag t-mut">vi</span></div><div class="muted">~150 câu cho các flow riêng: OASIS, Tin Tức, lịch, DAG, none</div><div class="foot"><span class="small muted">MIT · SenClaw</span><span class="btn pri">Cài</span></div></div>
+          <div class="card"><h5>MASSIVE · tiếng Việt</h5><div class="row"><span class="tag t-jev">preset</span><span class="tag t-mut">labeled_text</span><span class="tag t-mut">vi</span></div><div class="muted">2.974 câu, 59 intent, nhãn người viết. Có bảng gắn sang flow SenClaw.</div><div class="foot"><span class="small muted">CC BY 4.0 · Amazon</span><span class="btn pri">Cài</span></div></div>
+          <div class="card"><h5>XQuAD · tiếng Việt</h5><div class="row"><span class="tag t-jev">preset</span><span class="tag t-mut">qa_context</span><span class="tag t-warn">BY-SA</span></div><div class="muted">1.190 câu hỏi kèm đoạn văn, để đo tìm kiếm</div><div class="foot"><span class="small muted">CC BY-SA 4.0 · Google</span><span class="btn">Đã cài ✓</span></div></div>
+          <div class="card"><h5>GSM8K</h5><div class="row"><span class="tag t-jev">preset</span><span class="tag t-mut">problem_answer</span><span class="tag t-mut">en</span></div><div class="muted">1.319 bài toán có đáp án, cho reasoning_traces</div><div class="foot"><span class="small muted">MIT · OpenAI</span><span class="btn pri">Cài</span></div></div>
+        </div>
+      </div>
+      <div class="mock" aria-label="Mô phỏng hộp thoại import">
+        <div class="bar2"><b>Import dataset</b><span class="seg"><span class="on">File</span><span>URL</span><span>Hugging Face</span></span></div>
+        <div class="g2" style="margin:0">
+          <div class="box"><h4>Nguồn &amp; ánh xạ</h4><ul class="small">
+            <li>File: <code>cau-hoi-khach-hang.csv</code> · 1.204 dòng</li>
+            <li>Dạng: <b>labeled_text</b> ▾</li>
+            <li><code>text</code> ← cột <code>noi_dung</code> ▾ · <code>label</code> ← cột <code>loai</code> ▾</li>
+            <li>Tên: <code>khach-hang-thang-10</code> · Giới hạn: 5.000</li>
+            <li>License: <b>riêng tư / nội bộ</b> ▾ (bắt buộc)</li>
+          </ul></div>
+          <div class="box"><h4>Xem trước (20 dòng)</h4>
+            <div class="tscroll" style="margin:0"><table><thead><tr><th>text</th><th>label</th></tr></thead><tbody>
+              <tr><td>đơn hàng của tôi đến đâu rồi</td><td>tra_don</td></tr>
+              <tr><td>tôi muốn đổi size áo</td><td>doi_tra</td></tr>
+              <tr><td>shop có giao tối nay không</td><td>giao_hang</td></tr>
+            </tbody></table></div>
+            <p class="small muted" style="margin:8px 0 0">3 dòng rỗng và 12 dòng trùng sẽ bị bỏ · <span class="btn pri">Import</span></p></div>
+        </div>
+      </div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Phần</th><th>web-app</th><th>desktop</th></tr></thead>
+          <tbody>
+            <tr><td>Tab Dataset gốc + thẻ catalog</td><td><code>src/pages/DatagenPage.tsx</code> (thẻ giống <code>PatternsPanel.tsx</code> §"Thẻ catalog")</td><td><code>lib/features/datagen/datagen_screen.dart</code> + <code>datagen_catalog.dart</code> (mới)</td></tr>
+            <tr><td>Hộp thoại import (File / URL / HF, xem trước, ánh xạ)</td><td>Drawer mới trong <code>DatagenPage.tsx</code>, dùng <code>Upload</code> của antd</td><td><code>datagen_import_dialog.dart</code> (mới), chọn file bằng <code>file_picker</code></td></tr>
+            <tr><td>Cột nguồn/license + nút "Dùng làm seed / Dùng để đo"</td><td>bảng dataset hiện có</td><td>danh sách dataset hiện có</td></tr>
+            <tr><td>API client</td><td>gọi <code>api()</code> như hiện có</td><td><code>datagen_api.dart</code></td></tr>
+            <tr><td>Chuỗi tiếng Việt</td><td><code>src/i18n/vi.web.json</code></td><td><code>lib/core/i18n/vi/datagen.dart</code></td></tr>
+            <tr><td>Test</td><td>—</td><td><code>test/datagen_screen_test.dart</code>: thêm tab catalog, hộp thoại import, kiểm không tràn</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small muted">Nếu D5 của tài liệu kèm chuyển Datagen vào mục Labs, tab này đi theo, không đổi gì khác.</p>
+    </section>
+
+    <section id="s8" aria-labelledby="h8s">
+      <div class="sh"><span class="sn">§8</span><h2 id="h8s">REST &amp; MCP</h2></div>
+<pre><code>GET  /api/datagen/catalog                    các mục: id, title, kind, lang, rows, license, attribution,
+                                             source, flags, notice, needsConsent, bundled, installed, dataset
+POST /api/datagen/import/preview             {source, kind?, mapping?, labelMap?}
+                                             → { columns, rows[≤20], total, suggested{kind, mapping}, records[], splits? }
+POST /api/datagen/jobs  (đã có)              {"pipeline": "import", source, kind, mapping, labelMap?, maxRecords,
+                                              license, attribution?, acceptLicense?} → { job }
+                                             và seedsFrom / problemsFrom: {dataset, limit?, perLabel?}</code></pre>
+      <p class="small">Đã làm: không thêm route <code>/catalog/:id/install</code> hay <code>/import</code> riêng. Cài một mục catalog cũng chỉ là một job <code>import</code>. File tải lên được gửi kèm dưới dạng văn bản trong JSON (tối đa 8 MB), không dùng multipart.</p>
+      <ul>
+        <li><b>MCP:</b> không thêm tool mới. <code>datagen_start</code> nhận <code>pipeline: "import"</code> với <code>catalog_id</code> hoặc <code>path</code>, và các pipeline sinh nhận thêm <code>seeds_from</code>. Như vậy roster vẫn chỉ có 3 tool.</li>
+        <li><b>Phạm vi:</b> như hiện tại, import từ chat gắn <code>owner</code> là chat đó.</li>
+        <li><b>Đường dẫn:</b> <code>path</code> tương đối tính theo thư mục làm việc của chat. Không bao giờ đọc <code>~/.senclaw</code>, như luật hiện có của <code>doc_qa</code>.</li>
+        <li><b>Khoá lạ</b> vẫn trả 422 như các route Datagen khác.</li>
+        <li><b>OpenAPI:</b> làm mới <code>docs/openapi-daemon.yaml</code> (test <code>committed_spec_matches_the_routers</code>).</li>
+      </ul>
+    </section>
+
+    <section id="s9" aria-labelledby="h9s">
+      <div class="sh"><span class="sn">§9</span><h2 id="h9s">License &amp; an toàn</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Luật</th><th>Vì sao</th></tr></thead>
+          <tbody>
+            <tr><td>Chỉ <b>nhúng sẵn</b> dữ liệu MIT / Apache / CC BY, hoặc do SenClaw tự viết. CC BY-SA thì tải khi người dùng bấm Cài</td><td>Binary của SenClaw là MIT. Nhúng dữ liệu share-alike vào binary làm việc phân phối thêm điều kiện; tải về máy người dùng thì không</td></tr>
+            <tr><td>Manifest luôn có <code>license</code> + <code>attribution</code>. Dataset xuất ra (fine-tune) mang theo hai trường này</td><td>CC BY và BY-SA yêu cầu ghi nguồn khi dùng lại</td></tr>
+            <tr><td>Ghi license <b>gốc</b> khi mirror ghi khác: <code>mteb/amazon_massive_intent</code> ghi <code>apache-2.0</code>, bản gốc của Amazon là CC BY 4.0</td><td>Mirror không có quyền đổi license của bản gốc</td></tr>
+            <tr><td>Gắn cờ và bắt xác nhận với NC và "chỉ cho nghiên cứu"; quy tắc của MASSIVE: dev/test <b>không dùng để huấn luyện</b></td><td>Dùng làm bộ đo thì được, dùng để fine-tune thì không: UI ghi rõ ở nút "Dùng để huấn luyện"</td></tr>
+            <tr><td>Không hỗ trợ dataset bị khoá (gated) ở bản đầu; không gửi token Hugging Face</td><td>Tránh cầm thêm một loại secret; preset nào cũng công khai</td></tr>
+            <tr><td>Tải URL qua <code>util::fetch_safety</code>; trần dòng (mặc định 20.000), trần byte, trần thời gian; thư mục 0700, file 0600</td><td>Cùng luật với dataset sinh ra; file người dùng import có thể là dữ liệu riêng</td></tr>
+            <tr><td>Không bao giờ tự đẩy dataset lên đâu</td><td>Giữ non-goal của plan gốc</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s10" aria-labelledby="h10s">
+      <div class="sh"><span class="sn">§10</span><h2 id="h10s">Lộ trình</h2></div>
+      <div class="phases">
+        <div class="phase"><div class="ph"><span class="pid">I0</span><span class="size">cỡ S</span></div><h4>Lõi import + bộ có sẵn</h4>
+          <ul><li><code>src/datagen/import.rs</code>: đọc jsonl/json/csv, ánh xạ, kiểm, ghi</li><li><code>assets/datasets/senclaw-flows-vi</code> + catalog</li><li>REST <code>catalog</code>, <code>install</code>, <code>import</code> (file)</li></ul>
+          <div class="exit">Xong khi: cài bộ có sẵn không cần mạng; import một file CSV ra dataset có provenance</div></div>
+        <div class="phase"><div class="ph"><span class="pid">I1</span><span class="size">cỡ M</span></div><h4>Preset Hugging Face</h4>
+          <ul><li>bộ lấy <code>/rows</code> + <code>/splits</code>, ghim revision, thử lại khi 429</li><li>6 preset ở §3 + bảng <code>senclaw-flows</code></li><li>xem trước + import HF tự gõ</li></ul>
+          <div class="exit">Xong khi: cài được massive-vi, xquad-vi, gsm8k đúng số dòng</div></div>
+        <div class="phase"><div class="ph"><span class="pid">I2</span><span class="size">cỡ M</span></div><h4>UI hai client</h4>
+          <ul><li>tab Dataset gốc + hộp thoại import trên web và desktop</li><li>cột nguồn/license, nút "Dùng làm seed / để đo"</li><li>i18n vi, test desktop</li></ul>
+          <div class="exit">Xong khi: cùng thao tác cho cùng kết quả trên cả hai client</div></div>
+        <div class="phase"><div class="ph"><span class="pid">I3</span><span class="size">cỡ S–M</span></div><h4>Dùng làm đầu vào</h4>
+          <ul><li><code>seedsFrom</code>, <code>problemsFrom</code></li><li>massive-vi → <code>eval_skill_route</code> (P1 của tài liệu kèm)</li><li>xquad-vi → knowledge space riêng → <code>eval_search</code></li></ul>
+          <div class="exit">Xong khi: có báo cáo router trên 2.974 câu MASSIVE-vi</div></div>
+        <div class="phase"><div class="ph"><span class="pid">I4</span><span class="size">cỡ S</span></div><h4>Kit</h4>
+          <ul><li>khối <code>datasets</code> trong manifest Zen Kit, giống <code>patternSources</code></li><li>cài kit = đăng ký preset, không tự tải</li></ul>
+          <div class="exit">Xong khi: một kit kèm được bộ đo của nó</div></div>
+      </div>
+    </section>
+
+    <section id="s11" aria-labelledby="h11s">
+      <div class="sh"><span class="sn">§11</span><h2 id="h11s">Quyết định cần chốt</h2></div>
+      <div class="dec"><div class="dh"><span class="did">I-D1</span><h4>Nhúng sẵn những gì?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Chỉ bộ <code>senclaw-flows-vi</code> do SenClaw viết (MIT, vài chục KB); mọi thứ khác tải khi bấm Cài</li>
+          <li><span class="tag t-mut">khác</span>Nhúng thêm một lát nhỏ của MASSIVE-vi (CC BY) để có bộ đo router ngay khi chưa có mạng</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">I-D2</span><h4>Ai giữ bảng gắn intent MASSIVE → flow SenClaw?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>File dữ liệu trong repo senclaw (<code>assets/datasets/label-maps/senclaw-flows.json</code>), có test kiểm mọi tên flow/skill trong bảng là có thật</li>
+          <li><span class="tag t-mut">khác</span>Để người dùng tự gắn trong UI mỗi lần import</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">I-D3</span><h4>Có hỗ trợ dataset Hugging Face bị khoá (gated)?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Chưa: bản đầu chỉ dataset công khai</li>
+          <li><span class="tag t-mut">khác</span>Có: thêm token Hugging Face vào phần secret của daemon</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">I-D4</span><h4>Đặt "Dataset gốc" ở đâu trong UI?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Tab trong trang Datagen, theo trang Datagen đi tới đâu thì đi theo tới đó (D5 tài liệu kèm)</li>
+          <li><span class="tag t-mut">khác</span>Trang riêng "Thư viện dữ liệu"</li>
+        </ul></div>
+    </section>
+
+    <section id="s12" aria-labelledby="h12s">
+      <div class="sh"><span class="sn">§12</span><h2 id="h12s">Câu hỏi mở</h2></div>
+      <ol>
+        <li>Có cần thêm bộ tiếng Việt khác (đọc hiểu, toán) có license rõ không? UIT-ViQuAD cần hỏi nhóm tác giả về quyền dùng lại.</li>
+        <li>Knowledge space riêng cho <code>eval_search</code> có bị tính vào hạn mức hoặc chỉ mục chung không, và xoá sạch được sau khi đo không?</li>
+        <li>Có cho cập nhật preset khi Hugging Face có commit mới không, hay luôn giữ commit đã ghim để số đo so được với nhau?</li>
+        <li>CSV tiếng Việt từ Excel hay có BOM và kiểu mã hoá cũ (Windows-1258). Có cần đoán kiểu mã hoá, hay chỉ nhận UTF-8 và báo rõ?</li>
+      </ol>
+    </section>
+
+    <section id="s13" aria-labelledby="h13s">
+      <div class="sh"><span class="sn">§13</span><h2 id="h13s">Nguồn</h2></div>
+      <ul class="small">
+        <li>API Hugging Face dataset viewer, endpoint <code>/rows</code> (tối đa 100 dòng mỗi lần, có <code>num_rows_total</code> và <code>partial</code>): <a href="https://huggingface.co/docs/dataset-viewer/rows">huggingface.co/docs/dataset-viewer/rows</a></li>
+        <li>MASSIVE (51 ngôn ngữ, có vi-VN, CC BY 4.0): <a href="https://arxiv.org/pdf/2204.08582">arXiv 2204.08582</a> · <a href="https://amazon.science/blog/amazon-releases-51-language-dataset-for-language-understanding">Amazon Science</a></li>
+        <li>XQuAD (có tiếng Việt, CC BY-SA 4.0): <a href="https://www.tensorflow.org/datasets/catalog/xquad">TFDS</a> · <a href="https://aioz.network/blog/xquad-a-parallel-benchmark-for-cross-lingual-question-answering">AIOZ</a></li>
+        <li>GSM8K (MIT): <a href="https://tensorflow.org/datasets/community_catalog/huggingface/gsm8k">TFDS</a></li>
+        <li>Self-Instruct seed (175 câu, Apache-2.0): <a href="https://huggingface.co/datasets/HuggingFaceH4/self-instruct-seed/tree/main">HuggingFaceH4/self-instruct-seed</a> · <a href="https://arxiv.org/pdf/2212.10560">arXiv 2212.10560</a></li>
+        <li>Dolly-15k (CC BY-SA 3.0, dùng thương mại được): <a href="https://huggingface.co/datasets/databricks/databricks-dolly-15k/blob/refs%2Fpr%2F5/README.md?code=true">dataset card</a></li>
+        <li>Mind2Web (CC BY 4.0): <a href="https://arxiv.org/pdf/2306.06070">arXiv 2306.06070</a> · <a href="https://huggingface.co/datasets/osunlp/Mind2Web">osunlp/Mind2Web</a></li>
+        <li>UIT-ViQuAD (không có license rõ): <a href="https://nlp.uit.edu.vn/datasets">nlp.uit.edu.vn/datasets</a></li>
+        <li>Kiểm trực tiếp ngày 14/10/2026: <code>/splits</code>, <code>/rows</code>, <code>/filter</code> trên <code>datasets-server.huggingface.co</code>; tag license và commit trên <code>huggingface.co/api/datasets/&lt;id&gt;</code></li>
+        <li>Mã nguồn: <code>src/datagen/store.rs</code>, <code>src/mcp/datagen_server.rs</code>, <code>src/patterns/catalog.rs</code>, <code>src/kits/manifest.rs</code>, <code>web-app/src/pages/DatagenPage.tsx</code>, <code>web-app/src/components/plugins/PatternsPanel.tsx</code>, <code>desktop/lib/features/datagen/</code>, <code>desktop/lib/features/plugins/patterns_panel.dart</code></li>
+      </ul>
+    </section>
+  </main>
+</div>
+<script>
+(function(){
+  var box=document.getElementById('tocbox');
+  var mq=window.matchMedia('(max-width: 1039px)');
+  function syncToc(){ if(box){ box.open=!mq.matches; } }
+  syncToc();
+  if(mq.addEventListener){ mq.addEventListener('change',syncToc); }
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var map={};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)]=a; });
+  if(!('IntersectionObserver' in window)) return;
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('on'); });
+        var a=map[e.target.id]; if(a){ a.classList.add('on'); }
+      }
+    });
+  },{rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('main section[id]').forEach(function(s){ io.observe(s); });
+})();
+</script>
+</body>
+</html>

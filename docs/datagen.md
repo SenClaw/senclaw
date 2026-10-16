@@ -169,9 +169,121 @@ Turn bị bỏ khi:
 
 Mỗi bản ghi có thêm `source: {chat, turn}`.
 
+### `import` — nhập dataset do người viết
+
+Đưa một dataset có sẵn vào `datasets/`, chuẩn hoá về một trong bốn **dạng** mà các pipeline khác đọc thẳng được. Không
+gọi LLM. Mã nguồn: [`import.rs`](../src/datagen/import.rs), [`mapping.rs`](../src/datagen/mapping.rs),
+[`catalog.rs`](../src/datagen/catalog.rs). Thiết kế:
+[import-defaults.html](../plans/261014-2217-datagen-integration/import-defaults.html).
+
+| Dạng | Trường | Đọc bởi |
+|---|---|---|
+| `labeled_text` | `text`, `label?` | seed cho `expand_seeds`; bộ đo router |
+| `qa_context` | `question`, `answer`, `context` | bộ đo tìm kiếm; seed kiểu `doc_qa` |
+| `problem_answer` | `problem`, `answer?` | `reasoning_traces`, `executable_qa` |
+| `chat` | `user`, `assistant`, `system?` | dữ liệu fine-tune, giống `export_logs` |
+
+`source` là đúng một trong bốn nguồn:
+- `{"catalog": "<id>"}`: một mục trong catalog (bên dưới), mang sẵn dạng, ánh xạ, bảng đổi nhãn và license;
+- `{"hf": {"dataset", "config"?, "split"?}}`: dataset công khai trên Hugging Face, đọc qua dataset viewer API
+  (`/rows`, 100 dòng mỗi lần). Dataset bị khoá (gated) hoặc riêng tư bị từ chối;
+- `{"url": "https://…"}`: file JSONL / JSON / CSV / TSV, tối đa 32 MB;
+- `{"file": {"name", "content"}}`: như trên, gửi kèm trong request, tối đa 8 MB.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `kind` | bắt buộc (trừ catalog) | một trong bốn dạng |
+| `mapping` | đoán theo tên cột | trường → cột, vd. `{"text": "utterance", "label": "intent"}`. Cột là đường dẫn (`answers.text.0`); một trường có thể ghép nhiều cột (`{"from": ["a", "b"]}`) hoặc chỉ lấy phần sau một dấu (`{"from": "answer", "after": "####"}`) |
+| `labelMap` | không | tên bảng có sẵn (`massive-senclaw`) hoặc `{nhãn gốc: nhãn mới}`. Nhãn không có trong bảng, hoặc ánh xạ sang `null`, bị bỏ (`unmapped_label`) |
+| `license` | bắt buộc (trừ catalog) | license của nguồn, hoặc `private` / `unknown`. Ghi vào manifest cùng bản ghi |
+| `attribution` | không | tác giả, nguồn |
+| `maxRecords` | 20 000 | tối đa 100 000 |
+| `acceptLicense` | `false` | bắt buộc `true` với mục catalog có điều kiện (share-alike, chỉ để đo…) — người dùng phải đồng ý trước |
+
+Mỗi dòng bị bỏ khi:
+- thiếu trường bắt buộc (`missing_<trường>`);
+- quá dài (`too_long`);
+- không có trong bảng đổi nhãn (`unmapped_label`);
+- bị dataset viewer cắt ngắn (`cut_by_viewer`);
+- trùng một bản ghi đã có (`duplicate`).
+
+Manifest có thêm `provenance`:
+
+```json
+{"kind":"labeled_text","license":"CC-BY-4.0","attribution":"MASSIVE, Amazon …","flags":{"noTraining":true},
+ "source":{"type":"hf","catalog":"massive-vi","dataset":"mteb/amazon_massive_intent","config":"vi","split":"test",
+           "revision":"940fd47a81…","pinnedRevision":"940fd47a81…"},
+ "labelMap":"massive-senclaw","mapping":{"id":"id","text":"text","label":"label"},"sourceRows":2974,"dataSha256":"…"}
+```
+
+`dataSha256` là sha256 của `data.jsonl`. Dataset viewer chỉ phục vụ **phiên bản hiện tại** của dataset (`/rows` không nhận
+revision). Vì vậy commit ghim trong catalog chỉ để **kiểm**: import ghi lại commit thực sự đã đọc, và job có ghi chú nếu
+commit đó khác commit ghim. Dataset viewer giới hạn tốc độ: mỗi trang nghỉ 250 ms, và mỗi lần gọi thử lại tối đa 8 lần
+khi gặp 429 / 5xx.
+
+Bản ghi:
+
+```json
+{"id":"3","text":"im lặng","label":"none","sourceLabel":"audio_volume_mute","source":{"row":1}}
+```
+
+`accept` có thêm khi bảng đổi nhãn cho phép nhiều nhãn đúng (vd. `weather_query` → `["web-research", "agent-browser",
+"widget"]`).
+
+#### Catalog
+
+`GET /api/datagen/catalog` liệt kê các mục, mỗi mục kèm `installed` (đã có một lần import xong) và `dataset`. Mục *có
+sẵn* nằm trong binary nên cài không cần mạng. Chỉ dữ liệu SenClaw tự viết hoặc có license MIT / Apache / CC BY mới được
+nhúng sẵn; dữ liệu share-alike chỉ tải về khi bấm Cài.
+
+| Mục | Nguồn | Dòng | Dạng | License |
+|---|---|---|---|---|
+| `senclaw-flows-vi` | có sẵn, SenClaw viết | 144 | `labeled_text`, 12 nhãn = skill có sẵn + `none` | MIT |
+| `massive-vi` | `mteb/amazon_massive_intent` vi/test | 2 974 (giữ 2 030 sau khi đổi nhãn) | `labeled_text` | CC BY 4.0, chỉ để đo |
+| `xquad-vi` | `google/xquad` xquad.vi/validation | 1 190 | `qa_context` | CC BY-SA 4.0 |
+| `gsm8k` | `openai/gsm8k` main/test | 1 319 | `problem_answer` | MIT |
+| `self-instruct-seed` | `HuggingFaceH4/self-instruct-seed` | 175 | `labeled_text` | Apache-2.0 |
+| `dolly-15k` | `databricks/databricks-dolly-15k` | 15 011 | `labeled_text` (nhãn = loại việc) | CC BY-SA 3.0 |
+
+Các mục khai trong [`assets/datasets/catalog.json`](../assets/datasets/catalog.json), bảng đổi nhãn trong
+`assets/datasets/label-maps/`. Test kiểm:
+- mọi nhãn của `senclaw-flows-vi` và của `massive-senclaw` là tên một skill có thật trong `skills/` (hoặc `none`);
+- mục nào có điều kiện thì có `notice`;
+- mục có điều kiện không bao giờ được nhúng sẵn.
+
+Dataset nhập từ catalog đọc được từ **mọi** chat (dữ liệu công khai). Dataset khác chỉ chat tạo ra nó thấy.
+
+#### Xem trước
+
+`POST /api/datagen/import/preview` với `{source, kind?, mapping?, labelMap?}` không ghi gì. Trả về:
+- `columns`, theo thứ tự cột của file / dataset;
+- tối đa 20 `rows`;
+- `total`;
+- `suggested`: dạng và ánh xạ đoán được;
+- `records`: mỗi dòng thành bản ghi, hoặc `rejected` kèm lý do;
+- với Hugging Face: `splits`, `config`, `split`, `license`.
+
+### Dùng một dataset làm đầu vào
+
+`expand_seeds` và `executable_qa` nhận `seedsFrom`, `reasoning_traces` nhận `problemsFrom`:
+
+```json
+{"pipeline": "expand_seeds", "seedsFrom": {"dataset": "massive-vi", "perLabel": 3}, "target": 100}
+```
+
+- `limit`: số bản ghi tối đa, mặc định là trần của pipeline.
+- `perLabel`: số bản ghi tối đa cho mỗi nhãn.
+- Bản ghi được chọn ở các vị trí rải đều trong file, nên dataset xếp theo nhãn vẫn cho đủ các nhãn.
+- Bản ghi được đọc khi job bắt đầu và ghi vào `params` của manifest như seed thường.
+- Cho cả `seeds` lẫn `seedsFrom` thì bị từ chối.
+- Dataset đang được ghi thì bị từ chối.
+
 ## Dùng thế nào
 
-**Từ giao diện:** trang **Datagen** trên web (`/datagen`, `web-app/src/pages/DatagenPage.tsx`) và desktop (thanh điều hướng → Datagen, `desktop/lib/features/datagen/`). Cả hai cho chạy mọi pipeline, xem tiến độ và lý do loại, huỷ job, xem bản ghi theo trang, xoá dataset. Định dạng dòng trong form giống nhau:
+**Từ giao diện:** trang **Datagen** trên web (`/datagen`, `web-app/src/pages/DatagenPage.tsx`) và desktop (thanh điều hướng → Datagen, `desktop/lib/features/datagen/`). Cả hai cho chạy mọi pipeline, xem tiến độ và lý do loại, huỷ job, xem bản ghi theo trang, xoá dataset. Cả hai còn có:
+- tab **Dataset gốc**: thẻ catalog, mỗi thẻ có nút Cài (mục có điều kiện hỏi đồng ý trước);
+- nút **Nhập file / URL…**: tab File / URL / Hugging Face, có xem trước, chọn dạng, chọn cột và license;
+- nút **Dùng làm seed / Dùng làm bài toán** trên mỗi dataset, mở form job mới với dataset đó đã được chọn. Định dạng dòng trong form giống nhau:
 - `nhãn | câu yêu cầu` cho `expand_seeds`;
 - `câu hỏi || đáp án` cho `reasoning_traces` và `executable_qa`;
 - tài liệu ngăn bằng một dòng `---` cho `doc_qa`.
@@ -182,8 +294,8 @@ Hai trang hiển thị mọi job, không lọc theo chat.
 
 | Tool | Làm gì |
 |---|---|
-| `datagen_start` | trả về `jobId` ngay. Ngoài tham số của từng pipeline (viết snake_case), nhận thêm `seeds_file` / `problems_file`: file `.json` (mảng) hoặc `.jsonl` |
-| `datagen_status` | không có `job_id` thì liệt kê job gần đây và các dataset của **chat này** (không kèm `params`) |
+| `datagen_start` | trả về `jobId` ngay. Ngoài tham số của từng pipeline (viết snake_case), nhận thêm `seeds_file` / `problems_file`: file `.json` (mảng) hoặc `.jsonl`. `import` nhận `source` (`{"file": "<đường dẫn>"}` được đọc trong chat rồi gửi kèm; file trong thư mục của SenClaw bị từ chối), `kind`, `mapping`, `label_map`, `license`, `accept_license`, `max_records`. Các pipeline sinh nhận `seeds_from` / `problems_from` (tên dataset) và `per_label` |
+| `datagen_status` | không có `job_id` thì liệt kê job gần đây, các dataset của **chat này** và dataset nhập từ catalog (không kèm `params`), và catalog |
 | `datagen_cancel` | dừng job của chat này, giữ các bản ghi đã ghi |
 
 Gọi `datagen_start` đi qua permission prompt như mọi tool MCP khác.
@@ -207,7 +319,11 @@ POST /api/datagen/jobs/:id/cancel[?owner=]
 GET  /api/datagen/datasets[?owner=]  manifest mọi dataset trên đĩa
 GET  /api/datagen/datasets/:name/records?offset=&limit=[&owner=]   một trang bản ghi (tối đa 200) + tổng số
 DELETE /api/datagen/datasets/:name[?owner=]                         xoá dataset (409 khi job của nó còn chạy)
+GET  /api/datagen/catalog[?owner=]   catalog dataset gốc, mỗi mục kèm installed / dataset
+POST /api/datagen/import/preview     body: {"source", "kind"?, "mapping"?, "labelMap"?} — xem trước, không ghi gì
 ```
+
+Import là `POST /api/datagen/jobs` với `"pipeline": "import"`. Không có route riêng.
 
 `POST /api/datagen/jobs` nhận body tới 8 MB (văn bản dán trực tiếp, danh sách seed). Danh sách dataset không kèm
 `params`; tham số đầy đủ vẫn nằm trong `manifest.json`. Mỗi trang bản ghi tối đa 200 bản ghi và 2 MB.

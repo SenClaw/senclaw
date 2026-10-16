@@ -1304,8 +1304,10 @@ broke the file. See [docs/evals.md](docs/evals.md).
 Background jobs that write a dataset folder (`$SENCLAW_DATA_HOME/datasets/<name>/data.jsonl` + `manifest.json`):
 `expand_seeds` (grow labelled example requests, e.g. a flow-router eval set), `doc_qa` (multi-hop Q&A grounded in
 documents), `reasoning_traces` (judged step-by-step solutions), `executable_qa` (computable problems labelled by
-running their Python in the sandbox) and `export_logs` (trajectories → sharegpt / alpaca / messages, no LLM). REST
-`/api/datagen/*`, MCP `senclaw-datagen`, web page Datagen. Guide: [docs/datagen.md](docs/datagen.md).
+running their Python in the sandbox), `export_logs` (trajectories → sharegpt / alpaca / messages, no LLM) and `import`
+(datasets people wrote — a catalog entry, a public Hugging Face dataset, a URL or a file — normalised to four record
+kinds, no LLM). `seedsFrom` / `problemsFrom` feed a generating pipeline from a dataset on disk. REST
+`/api/datagen/*`, MCP `senclaw-datagen`, web and desktop page Datagen. Guide: [docs/datagen.md](docs/datagen.md).
 
 Rules for Claude:
 
@@ -1334,6 +1336,18 @@ Rules for Claude:
   and reads only `.md`/`.markdown`/`.txt` — a named file of another type is refused, not read.
 - **A run that accepts nothing is `failed`, with the reasons** — a dataset with zero records is not a success, and
   "the model kept failing" must read differently from "every candidate was too similar".
+- **Only MIT / Apache / CC BY or SenClaw-written data is compiled into the binary** (`assets/datasets/`, catalog
+  entries with `source.bundled`). Share-alike, non-commercial, research-only and evaluation-only entries download on
+  install, need `acceptLicense: true`, and carry a `notice` — a test enforces all three. Record the **source's**
+  license, not a mirror's (`mteb/amazon_massive_intent` says apache-2.0; MASSIVE is CC BY 4.0).
+- **The dataset viewer serves only the current revision.** A catalog pin is a check: the import records the commit it
+  read (`provenance.source.revision`) and notes a mismatch. Never claim an import reproduces the pinned commit.
+- **An import URL is fetched through `datagen::url_fetch`**, whose resolver drops private and loopback addresses — a
+  host name resolving to `127.0.0.1` would otherwise reach this daemon's own token-exempt API. Do not swap it for a
+  plain `reqwest::get`.
+- **An inline file's `content` never reaches the manifest** (`skip_serializing`); the provenance keeps its sha256.
+- **A label map drops what it does not map.** Map only intents whose SenClaw answer is clear, and list the other right
+  answers in `accept`; a guessed label makes the eval measure the guess.
 
 ## Where a model-supplied path is resolved
 

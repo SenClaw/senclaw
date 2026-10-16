@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Datagen trong SenClaw</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  --paper:#f6f5f1; --panel:#ffffff; --ink:#17171b; --ink-2:#45443f; --muted:#6c6a63;
+  --rule:#dcd9d0; --rule-2:#ebe9e3; --code-bg:#efeee8;
+  --jev:#1d5bbf; --jev-soft:#e7eefb;
+  --llm:#ad4f19; --llm-soft:#fbeee4;
+  --eng:#22704a; --eng-soft:#e3f1e9;
+  --hum:#6c3f9f; --hum-soft:#f0e8f8;
+  --bad:#b42318; --bad-soft:#fdeceb;
+  --warn:#835400; --warn-soft:#fbf1da;
+  --ok:#1f7a3d; --ok-soft:#e4f3e8;
+  --dot-text:#ffffff;
+  --f-display:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+    --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+    --jev:#86b4ff; --jev-soft:#18263d;
+    --llm:#f2a466; --llm-soft:#35231a;
+    --eng:#72d3a0; --eng-soft:#14301f;
+    --hum:#c9a3f3; --hum-soft:#2a1f3b;
+    --bad:#ff8f86; --bad-soft:#3a1a19;
+    --warn:#efc56f; --warn-soft:#342811;
+    --ok:#7fd79d; --ok-soft:#15301d;
+    --dot-text:#131316;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#131316; --panel:#1b1b1f; --ink:#ecebe6; --ink-2:#c8c6bf; --muted:#9c9991;
+  --rule:#34333a; --rule-2:#26252b; --code-bg:#1f1f24;
+  --jev:#86b4ff; --jev-soft:#18263d;
+  --llm:#f2a466; --llm-soft:#35231a;
+  --eng:#72d3a0; --eng-soft:#14301f;
+  --hum:#c9a3f3; --hum-soft:#2a1f3b;
+  --bad:#ff8f86; --bad-soft:#3a1a19;
+  --warn:#efc56f; --warn-soft:#342811;
+  --ok:#7fd79d; --ok-soft:#15301d;
+  --dot-text:#131316;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:15px/1.62 var(--f-body);-webkit-font-smoothing:antialiased}
+a{color:var(--jev);text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--jev);outline-offset:2px;border-radius:3px}
+.wrap{max-width:1200px;margin:0 auto;padding-inline:16px;padding-block:28px 72px;display:grid;grid-template-columns:minmax(0,1fr);gap:28px}
+@media (min-width:1040px){.wrap{grid-template-columns:212px minmax(0,1fr);gap:44px;padding-inline:28px}}
+/* TOC */
+.toc{font-size:13px;line-height:1.45}
+.toc details{border:1px solid var(--rule);border-radius:8px;background:var(--panel);padding:10px 14px}
+.toc summary{cursor:pointer;font-weight:600}
+.toc ol{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:2px}
+.toc a{display:grid;grid-template-columns:2.2em 1fr;gap:4px;color:var(--ink-2);text-decoration:none;padding:3px 6px;border-radius:4px}
+.toc a span{color:var(--muted);font:12px var(--f-mono)}
+.toc a:hover{background:var(--rule-2);color:var(--ink)}
+.toc a.on{background:var(--jev-soft);color:var(--ink)}
+@media (min-width:1040px){
+  .toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);align-self:start;max-height:calc(100vh - 40px);overflow:auto}
+  .toc details{border:0;background:none;padding:0}
+  .toc summary{list-style:none;font:600 11px var(--f-body);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);pointer-events:none}
+  .toc summary::-webkit-details-marker{display:none}
+}
+main{min-width:0}
+/* type */
+h1,h2,h3{text-wrap:balance}
+h1{font:700 clamp(28px,4.2vw,40px)/1.1 var(--f-display);letter-spacing:-.01em;margin:6px 0 14px}
+h2{font:600 26px/1.2 var(--f-display);margin:0}
+h3{font:600 16.5px/1.35 var(--f-body);margin:26px 0 8px}
+p,li{max-width:74ch}
+p{margin:0 0 12px}
+ul,ol{margin:0 0 12px;padding-left:22px}
+li{margin:3px 0}
+.eyebrow{font:600 11.5px var(--f-body);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:68ch}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+code{font-family:var(--f-mono);font-size:.86em;background:var(--code-bg);padding:.08em .32em;border-radius:3px;overflow-wrap:anywhere}
+pre{font:12.5px/1.55 var(--f-mono);background:var(--code-bg);border:1px solid var(--rule);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:0 0 14px;max-width:100%}
+pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+/* header */
+.masthead{border-bottom:1px solid var(--rule);padding-bottom:22px;margin-bottom:6px}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 18px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;border:1px solid var(--rule);background:var(--panel);border-radius:999px;padding:3px 10px;color:var(--ink-2)}
+.chip b{font-weight:600;color:var(--ink)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:18px}
+.fact{background:var(--panel);padding:12px 14px}
+.fact .k{font:600 11px var(--f-body);letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.fact .v{font:600 17px/1.3 var(--f-display);margin-top:3px}
+.fact .v.jev{color:var(--jev)} .fact .v.llm{color:var(--llm)} .fact .v.eng{color:var(--eng)} .fact .v.hum{color:var(--hum)}
+/* sections */
+section{padding-top:42px;scroll-margin-top:16px}
+.sh{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--rule);padding-bottom:8px;margin-bottom:16px}
+.sn{font:500 13px var(--f-mono);color:var(--muted);min-width:2.4em}
+.tldr{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px 18px 6px}
+.tldr li{margin:6px 0}
+/* grids & boxes */
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin:0 0 14px}
+.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:0 0 14px}
+.box{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px}
+.box h4{margin:0 0 6px;font:600 13px var(--f-body);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.box p:last-child,.box ul:last-child{margin-bottom:0}
+.box ul{padding-left:18px}
+.box.jev{border-top:3px solid var(--jev)} .box.llm{border-top:3px solid var(--llm)} .box.eng{border-top:3px solid var(--eng)} .box.hum{border-top:3px solid var(--hum)} .box.bad{border-top:3px solid var(--bad)}
+.note{border-left:3px solid var(--jev);background:var(--jev-soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:0 0 14px}
+.note.warn{border-color:var(--warn);background:var(--warn-soft)}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note p:last-child{margin-bottom:0}
+/* tables */
+.tscroll{overflow-x:auto;margin:0 0 14px;border:1px solid var(--rule);border-radius:10px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:13.5px;line-height:1.5}
+th{font:600 11.5px/1.3 var(--f-body);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 12px;border-bottom:1px solid var(--rule);background:var(--panel);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .ref{font:11.5px var(--f-mono);color:var(--muted);display:block;margin-top:2px;overflow-wrap:anywhere}
+/* tags */
+.tag{display:inline-block;font:600 10.5px/1 var(--f-body);letter-spacing:.06em;text-transform:uppercase;padding:4px 6px 3px;border-radius:4px;border:1px solid currentColor;white-space:nowrap;vertical-align:1px}
+.t-jev{color:var(--jev)} .t-llm{color:var(--llm)} .t-eng{color:var(--eng)} .t-hum{color:var(--hum)} .t-bad{color:var(--bad)} .t-warn{color:var(--warn)} .t-ok{color:var(--ok)} .t-mut{color:var(--muted)}
+.ev{font:500 10.5px var(--f-mono);padding:1px 5px;border-radius:3px;white-space:nowrap}
+.ev-m{background:var(--ok-soft);color:var(--ok)}
+.ev-e{background:var(--warn-soft);color:var(--warn)}
+.ev-p{background:var(--jev-soft);color:var(--jev)}
+/* diagrams */
+figure{margin:0 0 16px}
+.dscroll{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--panel);padding:10px}
+.dscroll svg{display:block;width:100%;min-width:760px;height:auto}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:8px;max-width:90ch}
+svg .bx{fill:var(--panel);stroke:var(--rule);stroke-width:1.2}
+svg .bx-jev{fill:var(--jev-soft);stroke:var(--jev);stroke-width:1.2}
+svg .bx-llm{fill:var(--llm-soft);stroke:var(--llm);stroke-width:1.2}
+svg .bx-eng{fill:var(--eng-soft);stroke:var(--eng);stroke-width:1.2}
+svg .bx-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.2}
+svg .bx-hum{fill:var(--hum-soft);stroke:var(--hum);stroke-width:1.2}
+svg .ct{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:6 4}
+svg .t{fill:var(--ink);font:600 13px var(--f-body)}
+svg .ts{fill:var(--ink-2);font:12px var(--f-body)}
+svg .tm{fill:var(--muted);font:11.5px var(--f-mono)}
+svg .tl{fill:var(--ink-2);font:italic 12px var(--f-body)}
+svg .ar{stroke:var(--ink-2);stroke-width:1.4;fill:none}
+svg .ar-jev{stroke:var(--jev)} svg .ar-llm{stroke:var(--llm)} svg .ar-eng{stroke:var(--eng)} svg .ar-bad{stroke:var(--bad)}
+svg .dash{stroke-dasharray:5 4}
+svg .ah{fill:var(--ink-2)}
+svg .dot{fill:var(--bad)}
+svg .dott{fill:var(--dot-text);font:700 11px var(--f-body)}
+svg .axis{stroke:var(--rule);stroke-width:1}
+svg .grid{stroke:var(--rule-2);stroke-width:1}
+svg .s-eng{fill:var(--eng)} svg .s-jev{fill:var(--jev)} svg .s-llm{fill:var(--llm)} svg .s-set{fill:var(--eng);opacity:.45}
+svg .s-old{fill:none;stroke:var(--bad);stroke-width:1.5;stroke-dasharray:6 4}
+/* bands */
+.bands{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px 14px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px;margin:0 0 14px}
+.bands .lbl{font-size:13px;font-weight:600}
+.bar{display:flex;height:30px;border-radius:6px;overflow:hidden;border:1px solid var(--rule);font-size:12px}
+.bar span{display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;padding:0 4px}
+.z-rev{background:var(--hum-soft);color:var(--hum)}
+.z-fb{background:var(--llm-soft);color:var(--llm)}
+.z-act{background:var(--jev-soft);color:var(--jev)}
+.axisrow{position:relative;height:18px;font:11.5px var(--f-mono);color:var(--muted)}
+.axisrow span{position:absolute;transform:translateX(-50%)}
+.axisrow span:first-child{transform:none} .axisrow span:last-child{transform:translateX(-100%)}
+@media (max-width:520px){.bands{grid-template-columns:minmax(0,1fr);gap:6px}.bands>span:empty{display:none}}
+/* steps */
+.steps{counter-reset:st;list-style:none;padding:0;margin:0 0 14px;display:grid;gap:8px}
+.steps li{counter-increment:st;display:grid;grid-template-columns:30px minmax(0,1fr);gap:10px;max-width:none;background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:10px 12px}
+.steps li::before{content:counter(st);font:600 13px var(--f-mono);color:var(--muted);padding-top:1px}
+.steps li b{font-weight:600}
+/* phases */
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:0 0 14px}
+.phase{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.phase .ph{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.phase .pid{font:600 20px var(--f-display);color:var(--jev)}
+.phase .size{font:500 11px var(--f-mono);color:var(--muted)}
+.phase h4{margin:0;font:600 15px/1.3 var(--f-body)}
+.phase ul{margin:0;padding-left:18px;font-size:13.5px}
+.phase .exit{margin-top:auto;font-size:12.5px;border-top:1px dashed var(--rule);padding-top:8px;color:var(--ink-2)}
+/* decisions */
+.dec{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;margin:0 0 12px}
+.dec .dh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px}
+.dec .did{font:600 13px var(--f-mono);color:var(--muted)}
+.dec h4{margin:0;font:600 16px/1.35 var(--f-body)}
+.opts{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}
+.opts li{max-width:none;border:1px solid var(--rule-2);border-radius:8px;padding:8px 10px;font-size:14px}
+.opts li.rec{border-color:var(--ok);background:var(--ok-soft)}
+.opts li .tag{margin-right:6px}
+.path{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin:0 0 14px;font-size:13px}
+.path .pn{font-weight:600;border:1px solid var(--rule);border-radius:6px;padding:3px 8px;background:var(--paper)}
+.path .pn.eng{border-color:var(--eng);background:var(--eng-soft)}
+.path .pn.hum{border-color:var(--hum);background:var(--hum-soft)}
+.path .pa{font:12px var(--f-mono);color:var(--muted)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+svg .bx-dash{fill:none;stroke:var(--muted);stroke-width:1.2;stroke-dasharray:5 4}
+svg .hd{fill:var(--muted);font:600 11px var(--f-body);letter-spacing:.08em}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="toc" aria-label="Mục lục">
+    <details id="tocbox" open>
+      <summary>Mục lục</summary>
+      <ol>
+        <li><a href="#tomtat"><span>—</span>Tóm tắt</a></li>
+        <li><a href="#s1"><span>§1</span>Datagen dùng khi nào</a></li>
+        <li><a href="#s2"><span>§2</span>Hiện trạng</a></li>
+        <li><a href="#s3"><span>§3</span>Bản đồ ghép nối</a></li>
+        <li><a href="#s4"><span>§4</span>Flow 1 · Skill router</a></li>
+        <li><a href="#s5"><span>§5</span>Flow 2 · Control plane</a></li>
+        <li><a href="#s6"><span>§6</span>Flow 3 · Memory &amp; wiki</a></li>
+        <li><a href="#s7"><span>§7</span>Flow 4 · LLM → Laya</a></li>
+        <li><a href="#s8"><span>§8</span>Flow 5 · Job dài từ chat</a></li>
+        <li><a href="#s9"><span>§9</span>Người dùng cuối</a></li>
+        <li><a href="#s10"><span>§10</span>Sửa trước khi ghép</a></li>
+        <li><a href="#s11"><span>§11</span>Lộ trình</a></li>
+        <li><a href="#s12"><span>§12</span>Cần chốt</a></li>
+        <li><a href="#s13"><span>§13</span>Câu hỏi mở</a></li>
+        <li><a href="#s14"><span>§14</span>Nguồn</a></li>
+      </ol>
+    </details>
+  </nav>
+
+  <main>
+    <header class="masthead">
+      <div class="eyebrow">Tài liệu thiết kế · SenClaw</div>
+      <h1>Datagen: ghép vào đâu trong SenClaw</h1>
+      <p class="lede">Datagen sinh dataset trong daemon. Hiện nó chạy được nhưng chưa có thành phần nào dùng tới dữ liệu nó tạo ra. Tài liệu này chỉ ra những chỗ trong SenClaw <b>hiện tại</b> cần dữ liệu đó, mô tả flow chi tiết cho từng chỗ, và những gì phải sửa trước khi ghép.</p>
+      <div class="meta">
+        <span class="chip"><b>Phiên bản</b> v0.1</span>
+        <span class="chip"><b>Ngày</b> 14/10/2026</span>
+        <span class="chip"><b>Trạng thái</b> Bản nháp để review</span>
+        <span class="chip"><b>Mã nguồn</b> senclaw <code>main</code> @ 20c68b6</span>
+        <span class="chip"><b>Đi kèm</b> <a href="import-defaults.html">Dataset gốc</a></span>
+        <span class="chip"><b>Đo trên</b> máy thật, model <code>google/gemma-4-e4b</code></span>
+      </div>
+      <div class="facts">
+        <div class="fact"><div class="k">Thành phần đang đọc dataset</div><div class="v">0</div></div>
+        <div class="fact"><div class="k">Dữ liệu thật đã có</div><div class="v eng">138 lượt route · 745 trang wiki</div></div>
+        <div class="fact"><div class="k">Ví dụ expand_seeds</div><div class="v jev">9/9 câu · 44 s · 6 lời gọi</div></div>
+        <div class="fact"><div class="k">Ví dụ doc_qa</div><div class="v llm">0/4 · bị cắt ở 1.112 token</div></div>
+      </div>
+    </header>
+
+    <section id="tomtat" aria-labelledby="h-tomtat">
+      <div class="sh"><h2 id="h-tomtat">Tóm tắt</h2></div>
+      <div class="tldr">
+        <ul>
+          <li><b>Datagen là gì.</b> Một "nhà máy" sinh <b>dữ liệu để đo và huấn luyện</b> các thành phần AI của chính SenClaw: bộ câu có nhãn, câu hỏi kèm đáp án có trích dẫn, lời giải có kiểm tra, dữ liệu fine-tune. Người dùng chính là người phát triển SenClaw, không phải người chat hằng ngày (§1).</li>
+          <li><b>Vấn đề.</b> Nhà máy chạy được, nhưng chưa có "khách". Không đoạn code nào đọc thư mục <code>datasets/</code>. Flow router, thành phần mà research định dùng dữ liệu này đầu tiên, chưa được viết. Trong khi đó 3 tool MCP của Datagen tốn khoảng 1.000 token ở <b>mọi</b> lượt chat (§2).</li>
+          <li><b>Ghép vào đâu.</b> Có năm chỗ trong SenClaw hiện tại đang thiếu dữ liệu để đo hoặc để học, theo thứ tự nên làm:
+            <ul>
+              <li>skill router (§4);</li>
+              <li>tìm kiếm memory/wiki (§6);</li>
+              <li>các spec của control plane (§5);</li>
+              <li>chưng cất LLM → Laya cho browser (§7);</li>
+              <li>chạy job dài từ chat qua <code>schedule_watch</code> (§8).</li>
+            </ul>
+            Ba chỗ đầu dùng được dữ liệu thật đã có trên máy.</li>
+          <li><b>Phải sửa trước.</b> Có ba lỗi:
+            <ul>
+              <li><code>doc_qa</code> bị cắt ở trần token nhưng lại báo "không parse được";</li>
+              <li>Datagen chưa xin tắt thinking ở các lời gọi cần trả JSON;</li>
+              <li>tool MCP nằm thường trực trong roster.</li>
+            </ul>
+            Ngoài ra chưa có skill nào dạy agent khi nào nên dùng Datagen (§10).</li>
+          <li><b>Đề xuất.</b>
+            <ul>
+              <li>Làm P0 (sửa lỗi) và P1 (đo skill router): việc nhỏ, có dữ liệu thật ngay.</li>
+              <li>Sau đó mới tới memory, control plane, rồi Laya (§11).</li>
+              <li>Có năm quyết định cần chốt (§12).</li>
+            </ul></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="s1" aria-labelledby="h1s">
+      <div class="sh"><span class="sn">§1</span><h2 id="h1s">Datagen dùng khi nào</h2></div>
+      <p>Mỗi job ghi một thư mục <code>~/senclaw/datasets/&lt;tên&gt;/</code> gồm <code>data.jsonl</code> (mỗi dòng một bản ghi đã qua kiểm) và <code>manifest.json</code> (tham số, model, số câu nhận / loại theo lý do, token). Năm pipeline:</p>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Pipeline</th><th>Đưa vào</th><th>Nhận về</th><th>Dùng khi</th></tr></thead>
+          <tbody>
+            <tr><td><code>expand_seeds</code></td><td>vài câu mẫu, mỗi câu một nhãn</td><td>nhiều câu mới cùng nhãn. Một bộ phân loại <b>không biết nhãn dự định</b> kiểm lại từng câu</td><td>cần bộ đo cho một thứ chọn giữa nhiều lựa chọn: skill, spec, flow</td></tr>
+            <tr><td><code>doc_qa</code></td><td>tài liệu <code>.md</code>/<code>.txt</code></td><td>câu hỏi nhiều bước + đáp án + trích dẫn có thật trong đoạn văn</td><td>cần bộ câu hỏi để đo tìm kiếm, hoặc quiz ôn tập</td></tr>
+            <tr><td><code>reasoning_traces</code></td><td>bài toán, có thể kèm đáp án</td><td>lời giải từng bước, đáp án so bằng code, được chấm điểm</td><td>dữ liệu suy luận cho model nhỏ</td></tr>
+            <tr><td><code>executable_qa</code></td><td>bài mẫu</td><td>bài mới + chương trình Python; nhãn là output khi chạy trong sandbox</td><td>dữ liệu tính toán có đáp án chắc chắn</td></tr>
+            <tr><td><code>export_logs</code></td><td>chat đã bật trajectory</td><td>ShareGPT / Alpaca / messages, không gọi LLM</td><td>dữ liệu fine-tune từ cách agent thật làm việc</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Gọi được từ ba chỗ:</p>
+      <ul>
+        <li>chat, qua MCP <code>datagen_start</code> / <code>datagen_status</code> / <code>datagen_cancel</code>;</li>
+        <li>REST <code>/api/datagen/*</code>;</li>
+        <li>trang Datagen trên web và desktop.</li>
+      </ul>
+    </section>
+
+    <section id="s2" aria-labelledby="h2s">
+      <div class="sh"><span class="sn">§2</span><h2 id="h2s">Hiện trạng: nhà máy chưa có khách</h2></div>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 1000 210" role="img" aria-labelledby="asis-t asis-d">
+            <title id="asis-t">Datagen hiện tại</title>
+            <desc id="asis-d">Đầu vào đi vào job Datagen, ghi ra thư mục dataset. Chưa có thành phần nào đọc thư mục đó.</desc>
+            <defs><marker id="ah1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <rect class="bx-hum" x="10" y="20" width="200" height="56" rx="8"/>
+            <text class="t" x="110" y="44" text-anchor="middle">Người / agent</text>
+            <text class="ts" x="110" y="63" text-anchor="middle">UI · chat MCP · REST</text>
+            <rect class="bx" x="10" y="120" width="200" height="56" rx="8"/>
+            <text class="t" x="110" y="144" text-anchor="middle">Đầu vào</text>
+            <text class="ts" x="110" y="163" text-anchor="middle">seed · tài liệu · trajectory</text>
+            <rect class="bx-llm" x="290" y="60" width="230" height="80" rx="8"/>
+            <text class="t" x="405" y="88" text-anchor="middle">Job Datagen (daemon)</text>
+            <text class="ts" x="405" y="108" text-anchor="middle">sinh → lọc → kiểm → ghi từng dòng</text>
+            <text class="tm" x="405" y="126" text-anchor="middle">≤ 2 job · trạng thái ở RAM</text>
+            <rect class="bx-eng" x="600" y="60" width="190" height="80" rx="8"/>
+            <text class="t" x="695" y="88" text-anchor="middle">datasets/&lt;tên&gt;/</text>
+            <text class="tm" x="695" y="108" text-anchor="middle">data.jsonl</text>
+            <text class="tm" x="695" y="124" text-anchor="middle">manifest.json</text>
+            <rect class="bx-dash" x="850" y="60" width="140" height="80" rx="8"/>
+            <text class="t" x="920" y="94" text-anchor="middle">?</text>
+            <text class="ts" x="920" y="114" text-anchor="middle">chưa ai đọc</text>
+            <path class="ar" d="M210,48 C250,48 250,90 288,90" marker-end="url(#ah1)"/>
+            <path class="ar" d="M210,148 C250,148 250,110 288,110" marker-end="url(#ah1)"/>
+            <path class="ar" d="M520,100 L598,100" marker-end="url(#ah1)"/>
+            <path class="ar dash" d="M790,100 L848,100" marker-end="url(#ah1)"/>
+          </svg>
+        </div>
+        <figcaption>Datagen đứng riêng: dataset được ghi xuống đĩa, rồi dừng ở đó.</figcaption>
+      </figure>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>Điều kiểm tra</th><th>Kết quả</th><th>Bằng chứng</th></tr></thead>
+          <tbody>
+            <tr><td>Code đọc <code>datasets/</code> ngoài <code>src/datagen</code></td><td>Không có</td><td>grep toàn bộ <code>src/</code>: chỉ có chỗ đăng ký module, route và MCP<span class="ref">src/lib.rs · main.rs · mcp/* · ui_server/core.rs</span></td></tr>
+            <tr><td>Flow router (bên dùng đầu tiên theo research)</td><td>Chưa viết</td><td>Không có <code>flow_route.rs</code><span class="ref">src/decision/ · research-261012-2244 §4, §7</span></td></tr>
+            <tr><td>Máy thật đã dùng Datagen chưa</td><td>Chưa, trước hai ví dụ dưới đây</td><td><code>GET /api/datagen/datasets</code> → <code>[]</code></td></tr>
+            <tr><td>Chi phí thường trực</td><td>≈ 1.000 token / lượt / mọi chat</td><td>3 tool luôn có trong roster; ước lượng từ mã nguồn ≈ 750 token chữ + schema<span class="ref">docs/datagen.md "Dùng thế nào" · src/mcp/helper.rs:548</span></td></tr>
+            <tr><td>Agent có biết khi nào dùng không</td><td>Không có skill nào</td><td><code>skills/</code> không có <code>datagen</code>; mô tả tool không nhắc <code>schedule_watch</code></td></tr>
+            <tr><td>UI</td><td>Mục riêng trên điều hướng chính của desktop và web</td><td>Plan gốc ghi "chưa có UI" là non-goal; UI được thêm ở đợt "100%"<span class="ref">plans/261012-2244-datagen-core/plan.md · desktop/lib/app/nav.dart:32</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Hai ví dụ chạy thật (14/10, model <code>google/gemma-4-e4b</code> qua LM Studio)</h3>
+      <div class="g2">
+        <div class="box eng"><h4>expand_seeds · khi nào dùng OASIS</h4>
+          <p>6 câu mẫu, 3 nhãn: <code>mo_phong</code>, <code>tin_tuc</code>, <code>lich</code>. Kết quả: <b>9/9 câu</b>, cân bằng 3/3/3, 6 lời gọi, 44 giây, không câu nào bị loại.</p>
+          <ul class="small">
+            <li><code>mo_phong</code>: "Nếu công ty mình bắt nhân viên phải vào văn phòng 3 ngày/tuần… phản ứng của team sẽ thế nào nhỉ?"</li>
+            <li><code>tin_tuc</code>: "Có tin tức gì mới về việc phát triển chip bán dẫn thế hệ mới không?"</li>
+            <li><code>lich</code>: "Nhắc tôi thanh toán hóa đơn điện nước ngày 15 hàng tháng nhé."</li>
+          </ul></div>
+        <div class="box bad"><h4>doc_qa · ôn tập từ docs/datagen.md</h4>
+          <p>Mục tiêu 4 cặp hỏi đáp. Kết quả: <b>thất bại, 0/4</b>, lý do <code>unparseable_output</code> cả 5 lần.</p>
+          <p class="small">Trần mỗi lời gọi là <code>512 + 2 × 300 = 1.112</code> token, và 5 lời gọi tiêu đúng <code>5.560 = 5 × 1.112</code> token đầu ra. Vậy lần nào cũng bị cắt đúng ở trần, JSON cụt. Datagen không phân biệt "bị cắt" với "sai định dạng" (§10).</p></div>
+      </div>
+    </section>
+
+    <section id="s3" aria-labelledby="h3s">
+      <div class="sh"><span class="sn">§3</span><h2 id="h3s">Bản đồ ghép nối</h2></div>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 1000 470" role="img" aria-labelledby="map-t map-d">
+            <title id="map-t">Bản đồ ghép nối Datagen</title>
+            <desc id="map-d">Bên trái là các nguồn dữ liệu sẵn có trong SenClaw, ở giữa là Datagen, bên phải là các thành phần cần dữ liệu. Nét đứt là phần chưa có.</desc>
+            <defs><marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <text class="hd" x="10" y="22">NGUỒN SẴN CÓ</text>
+            <text class="hd" x="330" y="22">DATAGEN</text>
+            <text class="hd" x="730" y="22">BÊN CẦN DỮ LIỆU</text>
+            <rect class="bx-eng" x="10" y="36" width="230" height="56" rx="8"/>
+            <text class="t" x="125" y="60" text-anchor="middle">Câu yêu cầu thật</text>
+            <text class="tm" x="125" y="78" text-anchor="middle">skill_route_log · 138 lượt</text>
+            <rect class="bx-eng" x="10" y="104" width="230" height="56" rx="8"/>
+            <text class="t" x="125" y="128" text-anchor="middle">Wiki</text>
+            <text class="tm" x="125" y="146" text-anchor="middle">~/senclaw/wiki · 745 trang</text>
+            <rect class="bx" x="10" y="172" width="230" height="56" rx="8"/>
+            <text class="t" x="125" y="196" text-anchor="middle">Trajectory chat</text>
+            <text class="tm" x="125" y="214" text-anchor="middle">tắt mặc định · 0 file</text>
+            <rect class="bx" x="10" y="240" width="230" height="56" rx="8"/>
+            <text class="t" x="125" y="264" text-anchor="middle">Input của quyết định</text>
+            <text class="tm" x="125" y="282" text-anchor="middle">recordDecisionInputs · tắt</text>
+            <rect class="bx-dash" x="10" y="308" width="230" height="56" rx="8"/>
+            <text class="t" x="125" y="332" text-anchor="middle">Bước browser do LLM quyết</text>
+            <text class="tm" x="125" y="350" text-anchor="middle">chưa ghi state</text>
+
+            <rect class="bx-llm" x="330" y="36" width="300" height="328" rx="10"/>
+            <text class="t" x="480" y="62" text-anchor="middle">Datagen (src/datagen)</text>
+            <text class="tm" x="352" y="92">expand_seeds</text>
+            <text class="tm" x="352" y="114">doc_qa</text>
+            <text class="tm" x="352" y="136">reasoning_traces</text>
+            <text class="tm" x="352" y="158">executable_qa</text>
+            <text class="tm" x="352" y="180">export_logs</text>
+            <rect class="bx-dash" x="346" y="198" width="268" height="72" rx="6"/>
+            <text class="ts" x="360" y="220">mới: eval_skill_route · eval_search</text>
+            <text class="ts" x="360" y="240">mới: to_eval_cases</text>
+            <text class="ts" x="360" y="260">mới: export_decisions</text>
+            <rect class="bx-eng" x="346" y="284" width="268" height="64" rx="6"/>
+            <text class="t" x="480" y="308" text-anchor="middle">datasets/&lt;tên&gt;/</text>
+            <text class="tm" x="480" y="328" text-anchor="middle">data.jsonl · manifest.json · report.json</text>
+
+            <rect class="bx-jev" x="730" y="36" width="260" height="56" rx="8"/>
+            <text class="t" x="860" y="60" text-anchor="middle">Skill router</text>
+            <text class="tm" x="860" y="78" text-anchor="middle">POST /api/decision/skills/check</text>
+            <rect class="bx-jev" x="730" y="104" width="260" height="56" rx="8"/>
+            <text class="t" x="860" y="128" text-anchor="middle">Tìm kiếm memory / wiki</text>
+            <text class="tm" x="860" y="146" text-anchor="middle">trộn cứng 0.7 vector + 0.3 FTS</text>
+            <rect class="bx-jev" x="730" y="172" width="260" height="56" rx="8"/>
+            <text class="t" x="860" y="196" text-anchor="middle">Spec control plane</text>
+            <text class="tm" x="860" y="214" text-anchor="middle">evals/cases · replay · shadow</text>
+            <rect class="bx-dash" x="730" y="240" width="260" height="56" rx="8"/>
+            <text class="t" x="860" y="264" text-anchor="middle">Laya (sen-sysone)</text>
+            <text class="tm" x="860" y="282" text-anchor="middle">fine-tune · ngoài repo</text>
+            <rect class="bx-dash" x="730" y="308" width="260" height="56" rx="8"/>
+            <text class="t" x="860" y="332" text-anchor="middle">Flow router · App Study</text>
+            <text class="tm" x="860" y="350" text-anchor="middle">chưa có · tuỳ chọn</text>
+
+            <path class="ar" d="M240,64 L328,90" marker-end="url(#ah2)"/>
+            <path class="ar" d="M240,132 L328,114" marker-end="url(#ah2)"/>
+            <path class="ar dash" d="M240,200 L328,180" marker-end="url(#ah2)"/>
+            <path class="ar dash" d="M240,268 L328,252" marker-end="url(#ah2)"/>
+            <path class="ar dash" d="M240,336 L328,262" marker-end="url(#ah2)"/>
+            <path class="ar ar-jev" d="M630,226 C690,226 680,64 728,64" marker-end="url(#ah2)"/>
+            <path class="ar ar-jev" d="M630,226 C690,226 680,132 728,132" marker-end="url(#ah2)"/>
+            <path class="ar ar-jev" d="M630,240 C690,240 690,200 728,200" marker-end="url(#ah2)"/>
+            <path class="ar dash" d="M630,260 C690,260 690,268 728,268" marker-end="url(#ah2)"/>
+            <path class="ar dash" d="M630,316 C690,316 690,336 728,336" marker-end="url(#ah2)"/>
+
+            <rect class="bx-hum" x="10" y="392" width="980" height="62" rx="10"/>
+            <text class="t" x="500" y="416" text-anchor="middle">Điều phối</text>
+            <text class="ts" x="500" y="438" text-anchor="middle">chat: skill datagen + datagen_start → schedule_watch(datagen_status) · REST /api/datagen · UI trong mục Labs · scheduler cho export định kỳ</text>
+          </svg>
+        </div>
+        <figcaption>Nét liền là phần có sẵn hôm nay, nét đứt là phần cần làm. Ba bên dùng màu xanh có thể ghép ngay vì đã có endpoint để chạy lại một câu và đo.</figcaption>
+      </figure>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>#</th><th>Chỗ ghép</th><th>Datagen làm gì</th><th>Có sẵn</th><th>Thiếu</th><th>Ưu tiên</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>Skill router</td><td><code>expand_seeds</code> sinh câu có nhãn = tên skill, rồi chạy lại từng câu qua router</td><td><code>POST /api/decision/skills/check</code> trả quyết định cũ và mới; 138 câu thật</td><td>bước <code>eval_skill_route</code>; nhãn cho câu thật</td><td><span class="tag t-ok">P1</span></td></tr>
+            <tr><td class="num">2</td><td>Tìm kiếm memory / wiki</td><td><code>doc_qa</code> trên wiki: câu hỏi kèm trang nguồn, đo recall@k</td><td>745 trang wiki; <code>/api/wiki/search</code></td><td>bước <code>eval_search</code>; sửa lỗi cắt ở trần của <code>doc_qa</code></td><td><span class="tag t-ok">P2</span></td></tr>
+            <tr><td class="num">3</td><td>Spec control plane</td><td>sinh câu cho <code>clarify.needed</code>, <code>input.guard.override</code>… thành case có <code>decision_assertions</code></td><td>schema case, <code>/api/control-plane/decisions/replay</code></td><td><code>to_eval_cases</code>; dựng <code>state</code> của spec từ câu</td><td><span class="tag t-warn">P3</span></td></tr>
+            <tr><td class="num">4</td><td>Laya cho browser</td><td>gom các bước Laya không chắc và LLM quyết thay thành dữ liệu học</td><td>băng act/fallback/review; trace metadata</td><td>ghi <code>state</code> của bước; <code>export_decisions</code>; huấn luyện ngoài repo</td><td><span class="tag t-mut">P4</span></td></tr>
+            <tr><td class="num">5</td><td>Job dài từ chat</td><td>agent bắt đầu job, rồi để <code>schedule_watch</code> chờ thay mình</td><td><code>datagen_status</code> trả <code>job.state</code>; watch mode</td><td>skill <code>datagen</code>; câu hướng dẫn trong mô tả tool</td><td><span class="tag t-ok">P0</span></td></tr>
+            <tr><td class="num">6</td><td>Flow router · App Study</td><td>dùng lại bước eval của (1); quiz từ <code>doc_qa</code></td><td>—</td><td>bản thân flow router; action bridge cho app</td><td><span class="tag t-mut">sau</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s4" aria-labelledby="h4s">
+      <div class="sh"><span class="sn">§4</span><h2 id="h4s">Flow 1 · Đo và chỉnh skill router</h2></div>
+      <p><b>Vì sao trước tiên.</b> Router quyết định mỗi lượt chat có nạp skill hay không. Comment đầu <code>skill_route.rs</code> ghi rằng nó được đo trên đúng <b>32 câu yêu cầu thật</b>, với 224 skill. Trên máy thật đã có 138 lượt route (117 lượt nạp skill, 21 lượt không), nhưng không ai biết lượt nào đúng. Endpoint chạy thử đã có, nên chỉ thiếu bộ câu có nhãn và bước so sánh.</p>
+      <figure>
+        <div class="dscroll">
+          <svg viewBox="0 0 1000 226" role="img" aria-labelledby="f1-t f1-d">
+            <title id="f1-t">Flow đo skill router</title>
+            <desc id="f1-d">Sáu bước: dựng seed từ trigger của skill và câu thật, sinh câu có nhãn, ghi dataset, chạy lại qua endpoint check, ra báo cáo, người chỉnh ngưỡng.</desc>
+            <defs><marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+            <rect class="bx-eng" x="10" y="50" width="146" height="96" rx="8"/>
+            <text class="t" x="83" y="76" text-anchor="middle">1 · Seed</text>
+            <text class="ts" x="83" y="96" text-anchor="middle">trigger + ví dụ</text>
+            <text class="ts" x="83" y="113" text-anchor="middle">của từng skill</text>
+            <text class="tm" x="83" y="132" text-anchor="middle">+ câu thật, + none</text>
+            <rect class="bx-llm" x="176" y="50" width="146" height="96" rx="8"/>
+            <text class="t" x="249" y="76" text-anchor="middle">2 · expand_seeds</text>
+            <text class="ts" x="249" y="96" text-anchor="middle">sinh câu mới</text>
+            <text class="ts" x="249" y="113" text-anchor="middle">kiểm nhãn mù</text>
+            <text class="tm" x="249" y="132" text-anchor="middle">LLM</text>
+            <rect class="bx-eng" x="342" y="50" width="146" height="96" rx="8"/>
+            <text class="t" x="415" y="76" text-anchor="middle">3 · Dataset</text>
+            <text class="ts" x="415" y="96" text-anchor="middle">câu + nhãn</text>
+            <text class="ts" x="415" y="113" text-anchor="middle">tách dev / test</text>
+            <text class="tm" x="415" y="132" text-anchor="middle">data.jsonl</text>
+            <rect class="bx-jev" x="508" y="50" width="146" height="96" rx="8"/>
+            <text class="t" x="581" y="76" text-anchor="middle">4 · Chạy lại</text>
+            <text class="ts" x="581" y="96" text-anchor="middle">từng câu qua</text>
+            <text class="ts" x="581" y="113" text-anchor="middle">/skills/check</text>
+            <text class="tm" x="581" y="132" text-anchor="middle">Laya + từ khoá</text>
+            <rect class="bx-eng" x="674" y="50" width="146" height="96" rx="8"/>
+            <text class="t" x="747" y="76" text-anchor="middle">5 · Báo cáo</text>
+            <text class="ts" x="747" y="96" text-anchor="middle">nạp đúng / nạp sai</text>
+            <text class="ts" x="747" y="113" text-anchor="middle">gợi ý / bỏ lỡ</text>
+            <text class="tm" x="747" y="132" text-anchor="middle">report.json</text>
+            <rect class="bx-hum" x="840" y="50" width="150" height="96" rx="8"/>
+            <text class="t" x="915" y="76" text-anchor="middle">6 · Chỉnh</text>
+            <text class="ts" x="915" y="96" text-anchor="middle">ngưỡng co-sign,</text>
+            <text class="ts" x="915" y="113" text-anchor="middle">trigger của skill</text>
+            <text class="tm" x="915" y="132" text-anchor="middle">người duyệt</text>
+            <path class="ar" d="M156,98 L174,98" marker-end="url(#ah3)"/>
+            <path class="ar" d="M322,98 L340,98" marker-end="url(#ah3)"/>
+            <path class="ar" d="M488,98 L506,98" marker-end="url(#ah3)"/>
+            <path class="ar" d="M654,98 L672,98" marker-end="url(#ah3)"/>
+            <path class="ar" d="M820,98 L838,98" marker-end="url(#ah3)"/>
+            <path class="ar dash" d="M915,146 C915,192 83,192 83,148" marker-end="url(#ah3)"/>
+            <text class="tl" x="500" y="214" text-anchor="middle">chạy lại sau mỗi lần đổi skill hoặc ngưỡng: số liệu so được giữa các phiên bản</text>
+          </svg>
+        </div>
+        <figcaption>Xanh lá là code (tất định), cam là LLM, xanh dương là router thật, tím là người.</figcaption>
+      </figure>
+      <ol class="steps">
+        <li><div><b>Dựng seed không cần LLM.</b> Mỗi <code>SkillCard</code> đã có <code>triggers</code> và câu ví dụ trong <code>description</code>. Lấy 2–3 câu cho mỗi skill trong nhóm muốn đo (không cần cả 224 skill). Thêm nhãn <code>none</code> cho chuyện phiếm và câu hỏi chung, đúng những chỗ Laya từng sai ("chào bạn" → <code>x-browse</code>).</div></li>
+        <li><div><b>Thêm câu thật (tuỳ chọn).</b> Lấy <code>prompt</code> trong <code>skill_route_log</code> làm seed chưa có nhãn. Câu thật thì gán nhãn bằng bộ phân loại mù của Datagen rồi người duyệt. Đây là dữ liệu chat thật: chỉ đọc khi được cho phép, và dataset để quyền 0600 như hiện tại.</div></li>
+        <li><div><b>Sinh.</b> <code>expand_seeds</code>, <code>labels</code> = mô tả của từng skill, <code>checkLabel</code> bật (mặc định khi có ≥ 2 nhãn), <code>target</code> 150–300. Lấy 20% làm <code>test</code>, không dùng khi chỉnh.</div></li>
+        <li><div><b>Chạy lại.</b> Pipeline mới <code>eval_skill_route</code> đọc dataset và gửi từng câu tới <code>POST /api/decision/skills/check</code>, nhận <code>RouteReport</code> gồm <code>legacy</code>, <code>route</code>, <code>engine_pick</code>, <code>engine_p</code>. Không gọi LLM nào, chỉ gọi Laya. Lượt nào Laya hết 1,5 s thì tính là đi theo luật dự phòng, đúng như lúc chạy thật.</div></li>
+        <li><div><b>Chấm.</b> Dùng đúng thước đo của nghiên cứu cũ: <i>nạp đúng</i>, <i>nạp sai</i> (tệ nhất), <i>chỉ gợi ý</i>, <i>bỏ lỡ</i>, tách theo luật cũ / router / Laya một mình. Ghi <code>report.json</code> cạnh dataset, kèm 10 câu sai tiêu biểu cho mỗi loại.</div></li>
+        <li><div><b>Chỉnh.</b> Người đọc báo cáo rồi sửa trigger của skill hay nạp sai, hoặc chỉnh luật co-sign trong <code>decide()</code>. Chạy lại để thấy số thay đổi. Không chỉnh tự động: router quyết định cho mọi lượt chat.</div></li>
+      </ol>
+      <div class="note"><p><b>Cần viết thêm:</b>
+        <ul>
+          <li>pipeline <code>eval_skill_route</code> trong <code>src/datagen/</code>, khoảng 200 dòng. Nó gọi thẳng <code>skill_route::route</code> trong tiến trình, khỏi phải đi qua HTTP;</li>
+          <li>một bảng báo cáo trong UI Labs.</li>
+        </ul>
+        Không cần thêm tool MCP: <code>datagen_start</code> nhận <code>pipeline: "eval_skill_route"</code>, <code>dataset: "&lt;tên&gt;"</code>.</p></div>
+    </section>
+
+    <section id="s5" aria-labelledby="h5s">
+      <div class="sh"><span class="sn">§5</span><h2 id="h5s">Flow 2 · Bằng chứng để đưa spec ra khỏi shadow</h2></div>
+      <p>Theo quy tắc của control plane, spec mới chạy <b>shadow</b> (không hành động) "cho tới khi eval chứng minh". Bộ eval hiện có 32 case viết tay. Chỉ 2 case (và 2 bản tiếng Việt) có <code>decision_assertions</code>, cho <code>clarify.needed</code> và <code>input.guard.override</code>. Với chừng đó case thì không spec nào đủ bằng chứng để chuyển sang active.</p>
+      <div class="path"><span class="pn">expand_seeds</span><span class="pa">nhãn: needs_clarify / clear</span><span class="pa">→</span><span class="pn eng">to_eval_cases</span><span class="pa">→</span><span class="pn">evals/cases/datagen-*.json</span><span class="pa">→</span><span class="pn">decisions/replay</span><span class="pa">→</span><span class="pn eng">độ chính xác theo spec</span><span class="pa">→</span><span class="pn hum">shadow → active?</span></div>
+      <ol class="steps">
+        <li><div><b>Sinh câu đối lập.</b> Ví dụ với <code>clarify.needed</code>: nhãn <code>needs_clarify</code> ("sửa lỗi trong file có vấn đề") và <code>clear</code> ("thêm cờ --verbose vào cli.py"). Câu đối lập giúp đo được cả hai hướng sai.</div></li>
+        <li><div><b>Đổi thành case.</b> Bước mới <code>to_eval_cases</code> ghi mỗi bản ghi thành một case theo schema §13. Các trường: <code>source: "datagen:&lt;dataset&gt;"</code>, <code>split</code> theo tỉ lệ, <code>user_scenario.task_instructions</code> = câu, và <code>criteria.decision_assertions: [{spec_id, acceptable, forbidden}]</code> suy từ nhãn. Không cần <code>env_assertions</code>, vì đây là case chỉ để đo quyết định.</div></li>
+        <li><div><b>Chạy.</b> Mỗi case gọi một lần <code>POST /api/control-plane/decisions/replay</code>, rẻ hơn nhiều so với chạy cả lượt chat. Cần xác minh: replay nhận <code>state</code> đã ghi, nên phải dựng được <code>state</code> của spec từ một câu yêu cầu (§13).</div></li>
+        <li><div><b>Quyết.</b> Spec chỉ chuyển sang <code>active</code> khi đạt ngưỡng trên phần <code>test</code>, và người bấm. Kết quả lưu cạnh dataset để lần sau so được.</div></li>
+      </ol>
+    </section>
+
+    <section id="s6" aria-labelledby="h6s">
+      <div class="sh"><span class="sn">§6</span><h2 id="h6s">Flow 3 · Đo tìm kiếm memory và wiki</h2></div>
+      <p>Memory đang trộn cứng 0.7 vector + 0.3 FTS (<code>src/memory/fts_search.rs</code>). Research §5 đề xuất đo lại ngưỡng và thử RRF, nhưng chưa có bộ câu hỏi nào để đo. <code>doc_qa</code> tạo đúng thứ cần: mỗi câu hỏi kèm <code>source.doc</code> (trang nguồn) và <code>supporting_facts</code>.</p>
+      <div class="path"><span class="pn">~/senclaw/wiki · 745 trang</span><span class="pa">chọn thư mục ≤ 500 file</span><span class="pa">→</span><span class="pn">doc_qa</span><span class="pa">→</span><span class="pn eng">eval_search</span><span class="pa">→</span><span class="pn">wiki search · memory search</span><span class="pa">→</span><span class="pn eng">recall@1/5/10 · MRR</span><span class="pa">→</span><span class="pn hum">chọn cách trộn</span></div>
+      <div class="g2">
+        <div class="box eng"><h4>Cách chấm</h4><ul>
+          <li>Trúng: top-k có trang <code>source.doc</code>, hoặc đoạn có ≥ 80% từ của một <code>supporting_fact</code>.</li>
+          <li>So các cấu hình trên cùng một bộ câu: 0.7/0.3 hiện tại, chỉ FTS, RRF.</li>
+          <li>Chạy lại sau mỗi lần đổi chunking hay model embedding.</li>
+        </ul></div>
+        <div class="box bad"><h4>Phải sửa trước</h4><ul>
+          <li><code>doc_qa</code> bị cắt ở trần trên model local, như ví dụ §2 (§10 #1).</li>
+          <li><code>doc_qa</code> đọc tối đa 500 file, mà wiki có 745 trang: phải chọn thư mục con, hoặc thêm tham số lấy mẫu.</li>
+          <li>Câu hỏi sinh từ chính trang nguồn dễ "trúng" quá. Nên xen câu hỏi nhiều bước (<code>multiHop</code>, mặc định bật).</li>
+        </ul></div>
+      </div>
+    </section>
+
+    <section id="s7" aria-labelledby="h7s">
+      <div class="sh"><span class="sn">§7</span><h2 id="h7s">Flow 4 · Chưng cất LLM → Laya cho browser</h2></div>
+      <p>Mỗi bước, browser engine hỏi Laya một lần, rồi chia theo độ tin cậy: <span class="tag t-jev">act</span>, <span class="tag t-llm">fallback</span> (LLM quyết thay), <span class="tag t-hum">review</span> (hỏi người). Mỗi bước rơi vào fallback là một trạng thái Laya không chắc, kèm câu trả lời của LLM. Gom các cặp đó lại là có dữ liệu để dạy Laya đúng những chỗ nó còn yếu.</p>
+      <div class="path"><span class="pn">browser.step band = fallback</span><span class="pa">→</span><span class="pn">ghi state + lựa chọn của LLM + kết quả verify</span><span class="pa">→</span><span class="pn eng">export_decisions</span><span class="pa">→</span><span class="pn">định dạng laya_fmt v5</span><span class="pa">→</span><span class="pn hum">huấn luyện ngoài repo</span><span class="pa">→</span><span class="pn">checkpoint mới · eval held-out</span></div>
+      <div class="note warn"><p><b>Chưa có nguyên liệu.</b>
+        <ul>
+          <li><code>record_trace</code> trong <code>browser_agent/run.rs</code> chỉ ghi metadata (spec, câu trả lời, độ tin cậy, band), không có <code>state</code> của trang.</li>
+          <li><code>record_decision_input</code> chỉ được gọi cho spec chat (<code>agent_pool/pool.rs:1721</code>), mặc định tắt, và máy thật có 0 file.</li>
+        </ul>
+        Muốn làm flow này phải ghi thêm state của bước browser vào một file riêng. File đó chứa nội dung trang web nên phải tắt mặc định và để quyền 0600, theo đúng quy tắc "trace chỉ là metadata". Việc huấn luyện nằm ngoài repo SenClaw (cách <code>laya-browser</code> v19s từng được export qua CI).</p></div>
+    </section>
+
+    <section id="s8" aria-labelledby="h8s">
+      <div class="sh"><span class="sn">§8</span><h2 id="h8s">Flow 5 · Chạy job dài từ chat mà không tốn lượt</h2></div>
+      <p>Một job vài trăm bản ghi có thể chạy nhiều phút. Mọi mảnh để agent chờ mà không tốn lượt đều đã có, chỉ chưa ai nối lại với nhau.</p>
+      <ol class="steps">
+        <li><div>Người dùng: <i>"Tạo bộ 150 câu để đo skill router, tiếng Việt."</i> Skill <code>datagen</code> (cần viết) giúp agent chọn pipeline và tham số, rồi <b>nói trước số lời gọi LLM</b>.</div></li>
+        <li><div>Agent gọi <code>datagen_start</code> và nhận <code>jobId</code> ngay. Lời gọi này đi qua permission prompt như mọi tool MCP.</div></li>
+        <li><div>Agent gắn <code>schedule_watch</code> lên <code>datagen_status {job_id}</code> với <code>done_when</code> = <code>job.state</code> thuộc <code>done, failed, cancelled</code>, rồi kết thúc lượt. Bên trong agent, tên tool là <code>mcp__core__datagen_status</code>.</div></li>
+        <li><div>Mỗi lần watch kiểm tra là một lần gọi tool, không tốn lượt LLM. Khi job xong, watch đánh thức chat. Agent tóm tắt số câu nhận, các lý do bị loại, và nếu là <code>eval_*</code> thì kèm báo cáo.</div></li>
+      </ol>
+      <p class="small muted">Cần làm: skill <code>skills/datagen/SKILL.md</code> và một câu trong mô tả <code>datagen_start</code> nhắc dùng <code>schedule_watch</code> thay vì chờ trong lượt. Đây đúng là lỗi watch mode sinh ra để chữa (CLAUDE.md, phần "Waiting on long jobs").</p>
+    </section>
+
+    <section id="s9" aria-labelledby="h9s">
+      <div class="sh"><span class="sn">§9</span><h2 id="h9s">Cho người dùng cuối (tuỳ chọn)</h2></div>
+      <p>Chỗ duy nhất Datagen có ích trực tiếp cho người dùng là <b>câu hỏi ôn tập từ tài liệu của chính họ</b> (<code>doc_qa</code>). Ví dụ app Study đã cài trên máy, hay một trợ lý ôn thi. Hiện Space App không gọi được Datagen: bridge không có action nào cho nó. Nếu cần thì thêm action <code>datagen.start</code> / <code>datagen.status</code>, gắn quyền của app và giới hạn số job.</p>
+      <p>Research đã hỏi điều này (câu 9: "Dataset nào quan trọng nhất: eval nội bộ, dữ liệu fine-tune Laya, hay dataset cho người dùng?") mà chưa được trả lời. Câu trả lời quyết định UI nên nằm ở đâu (§12 D1, D5).</p>
+    </section>
+
+    <section id="s10" aria-labelledby="h10s">
+      <div class="sh"><span class="sn">§10</span><h2 id="h10s">Sửa trước khi ghép</h2></div>
+      <div class="tscroll">
+        <table>
+          <thead><tr><th>#</th><th>Vấn đề</th><th>Bằng chứng</th><th>Sửa</th></tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td>Câu trả lời bị cắt ở trần token nhưng được báo là <code>unparseable_output</code></td><td>Trần <code>512 + 300 × perPassage</code>. Ví dụ §2: 5 lời gọi tiêu đúng 5 × 1.112 token<span class="ref">src/datagen/doc_qa.rs:203 · llm.rs:89</span></td><td>Đọc <code>finish == "length"</code> → lý do <code>truncated</code>, kèm gợi ý. Nâng trần theo số mục. Kiểm như vậy cho mọi pipeline</td></tr>
+            <tr><td class="num">2</td><td>Không xin tắt thinking ở các lời gọi cần trả JSON</td><td>Datagen gọi <code>chat_completion</code>, không qua <code>chat_completion_with</code><span class="ref">src/datagen/llm.rs:50 · commit 20c68b6</span></td><td>Truyền <code>CompletionOptions { thinking: Some(false) }</code> cho các bước sinh, phân loại và chấm</td></tr>
+            <tr><td class="num">3</td><td>Cờ thinking không tới được model của máy này</td><td>Model đang dùng là LM Studio ở <code>192.168.0.93:1234</code> (mạng LAN), mà luật hiện tại chỉ gửi tới loopback<span class="ref">llm_config.rs openai_completion_body</span></td><td>Chọn ở §12 D3: dải mạng riêng, hoặc thêm công tắc theo từng cấu hình model</td></tr>
+            <tr><td class="num">4</td><td>3 tool thường trực ≈ 1.000 token mỗi lượt</td><td><span class="ref">docs/datagen.md · helper.rs:548</span></td><td>Đưa 3 tool vào nhóm tool hoãn nạp (deferred), roster chỉ còn tên; skill <code>datagen</code> nạp đủ schema khi được kích hoạt. Hoặc thêm công tắc bật/tắt (§12 D2)</td></tr>
+            <tr><td class="num">5</td><td>Không có skill dạy agent dùng Datagen</td><td>Không có <code>skills/datagen</code></td><td>Viết skill: khi nào dùng, chọn pipeline, ước lượng chi phí, <code>schedule_watch</code></td></tr>
+            <tr><td class="num">6</td><td>UI nằm trên điều hướng chính</td><td><span class="ref">desktop nav.dart:32 · web Sidebar.tsx:187</span></td><td>Chuyển vào mục Labs / Developer (§12 D5). Giữ lại xem bản ghi và báo cáo eval</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="s11" aria-labelledby="h11s">
+      <div class="sh"><span class="sn">§11</span><h2 id="h11s">Lộ trình</h2></div>
+      <div class="phases">
+        <div class="phase"><div class="ph"><span class="pid">P0</span><span class="size">cỡ S</span></div><h4>Sửa và nối dây</h4>
+          <ul><li>§10 #1–#2: lý do <code>truncated</code>, tắt thinking</li><li>skill <code>datagen</code> + hướng dẫn watch</li><li>tool nạp theo nhu cầu; UI chuyển vào Labs</li></ul>
+          <div class="exit">Xong khi: <code>doc_qa</code> chạy đạt trên gemma-4-e4b; chat chạy được trọn Flow 5</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P1</span><span class="size">cỡ S–M</span></div><h4>Đo skill router</h4>
+          <ul><li>pipeline <code>eval_skill_route</code> + <code>report.json</code></li><li>seed từ trigger; câu thật có người duyệt</li><li>bảng báo cáo trong Labs</li></ul>
+          <div class="exit">Xong khi: có báo cáo trên ≥ 150 câu có nhãn, so được với kết quả 32 câu cũ</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P2</span><span class="size">cỡ M</span></div><h4>Đo tìm kiếm</h4>
+          <ul><li><code>doc_qa</code> trên thư mục wiki được chọn</li><li>pipeline <code>eval_search</code>: recall@k, MRR</li><li>so 0.7/0.3 với FTS và RRF</li></ul>
+          <div class="exit">Xong khi: có số liệu để chọn cách trộn</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P3</span><span class="size">cỡ M</span></div><h4>Eval cho spec</h4>
+          <ul><li><code>to_eval_cases</code></li><li>dựng <code>state</code> của spec từ câu</li><li>replay; ngưỡng để chuyển sang active</li></ul>
+          <div class="exit">Xong khi: một spec được chuyển active, hoặc giữ shadow, có số liệu chứng minh</div></div>
+        <div class="phase"><div class="ph"><span class="pid">P4</span><span class="size">cỡ L</span></div><h4>LLM → Laya</h4>
+          <ul><li>ghi state của bước fallback (tắt mặc định)</li><li><code>export_decisions</code> sang định dạng v5</li><li>huấn luyện và eval ngoài repo</li></ul>
+          <div class="exit">Xong khi: checkpoint mới giảm tỉ lệ fallback trên bộ held-out</div></div>
+      </div>
+      <p class="small muted">Flow router (research §4) dùng lại toàn bộ cơ chế của P1 khi được viết. App Study chỉ làm nếu D1 chọn "người dùng cuối".</p>
+    </section>
+
+    <section id="s12" aria-labelledby="h12s">
+      <div class="sh"><span class="sn">§12</span><h2 id="h12s">Quyết định cần chốt</h2></div>
+      <div class="dec"><div class="dh"><span class="did">D1</span><h4>Datagen dành cho ai?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Người phát triển SenClaw: đo và huấn luyện các thành phần nội bộ (§4–§7)</li>
+          <li><span class="tag t-mut">khác</span>Cả người dùng cuối: thêm action bridge cho app, quiz ôn tập (§9)</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D2</span><h4>Tool MCP của Datagen có mặt khi nào?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Hoãn nạp (deferred), chỉ để tên trong roster; skill <code>datagen</code> nạp đủ khi được kích hoạt (<code>apply_skill_activation</code>). Tiết kiệm phần lớn trong khoảng 1.000 token mỗi lượt</li>
+          <li><span class="tag t-mut">khác</span>Công tắc trong Settings, mặc định tắt</li>
+          <li><span class="tag t-mut">khác</span>Giữ thường trực như hiện tại</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D3</span><h4>Gửi cờ tắt thinking tới endpoint nào?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Thêm công tắc "server tự host" cho từng cấu hình model, bật sẵn cho loopback. Rõ ràng, không đoán theo IP</li>
+          <li><span class="tag t-mut">khác</span>Coi mọi IP mạng riêng (10/8, 172.16/12, 192.168/16) là tự host</li>
+          <li><span class="tag t-mut">khác</span>Giữ chỉ loopback; máy này phải tắt thinking ngay trong LM Studio</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D4</span><h4>Bước eval nằm ở đâu?</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Pipeline <code>eval_*</code> trong <code>src/datagen</code>: chạy được từ chat, REST và UI; gọi thẳng code router, không qua HTTP</li>
+          <li><span class="tag t-mut">khác</span>Script Python trong <code>scripts/evals/</code>, giống bộ eval của control plane</li>
+        </ul></div>
+      <div class="dec"><div class="dh"><span class="did">D5</span><h4>UI Datagen</h4></div>
+        <ul class="opts">
+          <li class="rec"><span class="tag t-ok">đề xuất</span>Chuyển vào mục Labs / Developer; thêm bảng báo cáo eval ở P1</li>
+          <li><span class="tag t-mut">khác</span>Bỏ hẳn UI, chỉ giữ chat và REST</li>
+          <li><span class="tag t-mut">khác</span>Giữ trên điều hướng chính (hợp lý nếu D1 chọn người dùng cuối)</li>
+        </ul></div>
+    </section>
+
+    <section id="s13" aria-labelledby="h13s">
+      <div class="sh"><span class="sn">§13</span><h2 id="h13s">Câu hỏi mở</h2></div>
+      <ol>
+        <li>Với mỗi spec của control plane (<code>clarify.needed</code>, <code>input.guard.override</code>), dựng <code>state</code> cho <code>decisions/replay</code> từ một câu yêu cầu được không, hay phải chạy cả lượt chat?</li>
+        <li>Định dạng và nơi huấn luyện Laya cho P4 (repo nào, CI nào), và ai duyệt dữ liệu chứa nội dung trang web?</li>
+        <li>Câu thật trong <code>skill_route_log</code> là nội dung chat. Có được dùng làm seed không, và ai duyệt nhãn?</li>
+        <li>Giới hạn 500 file của <code>doc_qa</code> so với 745 trang wiki: chọn thư mục con, hay thêm tham số lấy mẫu?</li>
+        <li>Trạng thái job đang nằm trong RAM. Job eval dài có cần chạy tiếp được sau khi daemon khởi động lại không?</li>
+      </ol>
+    </section>
+
+    <section id="s14" aria-labelledby="h14s">
+      <div class="sh"><span class="sn">§14</span><h2 id="h14s">Nguồn</h2></div>
+      <ul class="small">
+        <li><code>docs/datagen.md</code>; <code>plans/261012-2244-datagen-core/plan.md</code>; <code>plans/reports/research-261012-2244-camel-flows-datagen-memory.md</code> §3–§5, §7, §8</li>
+        <li><code>src/datagen/{doc_qa,llm,common}.rs</code>; <code>src/mcp/datagen_server.rs</code>; <code>src/mcp/helper.rs:548</code></li>
+        <li><code>src/decision/skill_route.rs</code> (comment đầu file: đo trên 224 skill, 32 câu yêu cầu thật); <code>src/gateway/ui_server/decision.rs</code> <code>decision_skills_check</code>; <code>src/db/schema.rs</code> <code>skill_route_log</code></li>
+        <li><code>docs/control-plane.md</code> §6–§8; <code>evals/cases/*.json</code> (32 case, 2+2 có <code>decision_assertions</code>)</li>
+        <li><code>src/memory/fts_search.rs</code> (0.7 + 0.3); <code>src/browser_agent/run.rs</code> <code>record_trace</code>; <code>src/agent/agent_pool/pool.rs:1721</code></li>
+        <li>Số liệu máy thật (14/10/2026): <code>skill_route_log</code> 138 dòng, 30 chat; <code>~/senclaw/wiki</code> 745 trang <code>.md</code>; <code>decision-inputs</code> 0 file; hai job ví dụ <code>vi-du-khi-nao-dung-oasis</code>, <code>vi-du-on-tap-datagen</code></li>
+      </ul>
+    </section>
+  </main>
+</div>
+<script>
+(function(){
+  var box=document.getElementById('tocbox');
+  var mq=window.matchMedia('(max-width: 1039px)');
+  function syncToc(){ if(box){ box.open=!mq.matches; } }
+  syncToc();
+  if(mq.addEventListener){ mq.addEventListener('change',syncToc); }
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var map={};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)]=a; });
+  if(!('IntersectionObserver' in window)) return;
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('on'); });
+        var a=map[e.target.id]; if(a){ a.classList.add('on'); }
+      }
+    });
+  },{rootMargin:'-20% 0px -70% 0px'});
+  document.querySelectorAll('main section[id]').forEach(function(s){ io.observe(s); });
+})();
+</script>
+</body>
+</html>
