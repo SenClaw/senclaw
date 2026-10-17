@@ -241,8 +241,10 @@ impl DefaultTaskExecutor {
         }
 
         // No probe declared → the agent-turn fallback. Wake the chat and let the
-        // agent check by whatever means the job actually needs, and decide for
-        // itself whether to keep waiting.
+        // agent check by whatever means the job actually needs. The wake says it
+        // is automatic and tells the agent to end the watch itself when the job
+        // is finished or cannot be determined — the raw resume prompt alone read
+        // as a new user request every interval.
         if cfg.is_agent_fallback() || self.mcp_manager.is_none() {
             cfg.checks += 1;
             self.persist_watch(task, &cfg);
@@ -251,7 +253,9 @@ impl DefaultTaskExecutor {
                 checks = cfg.checks,
                 "[TaskScheduler] watch: agent fallback, waking chat"
             );
-            return self.dispatch_into_chat(task, &cfg.resume_prompt).await;
+            return self
+                .dispatch_into_chat(task, &cfg.render_wake(&task.id))
+                .await;
         }
 
         let tool = cfg.tool.clone().unwrap_or_default();
@@ -449,5 +453,174 @@ impl DefaultTaskExecutor {
             .get_last_reply_text(&task.chat_jid)
             .unwrap_or_else(|| "(no reply)".into());
         Ok(reply)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::scheduler::watch::{DoneWhen, WatchConfig, AGENT_TURN_MAX_CHECKS};
+    use crate::types::{GroupBinding, ScheduleType, TaskStatus};
+    use std::sync::Mutex;
+
+    /// Stands in for the agent pool: records every prompt a wake delivers and,
+    /// when asked, ends the watch from inside the woken turn the way a model
+    /// calling `schedule_watch_stop` does.
+    struct Recorder {
+        prompts: Mutex<Vec<String>>,
+        stop_during_turn: Option<(Arc<Db>, String)>,
+    }
+
+    impl Recorder {
+        fn new(stop_during_turn: Option<(Arc<Db>, String)>) -> Arc<Self> {
+            Arc::new(Self {
+                prompts: Mutex::new(Vec::new()),
+                stop_during_turn,
+            })
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl AgentApi for Recorder {
+        async fn broadcast_reply(&self, _jid: &str, _text: &str, _token: Option<&str>) {}
+        async fn process_and_wait(
+            &self,
+            _jid: &str,
+            _group: &GroupBinding,
+            prompt: &str,
+        ) -> anyhow::Result<()> {
+            self.prompts.lock().unwrap().push(prompt.to_string());
+            if let Some((db, id)) = &self.stop_during_turn {
+                assert!(db.stop_watch(id)?, "the woken turn can stop its own watch");
+            }
+            Ok(())
+        }
+        async fn destroy(&self, _jid: &str) {}
+    }
+
+    const CHAT: &str = "web:main:mvcfwsil-s8v6hq";
+
+    /// The row the real install held on 2026-10-17: no probe, 60 s, the default
+    /// hour's worth of checks.
+    fn agent_turn_row(db: &Db, checks: i64) -> ScheduledTask {
+        let cfg = WatchConfig {
+            tool: None,
+            args: serde_json::json!({}),
+            done_when: DoneWhen::default(),
+            deadline_at: (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+            max_checks: 60,
+            checks,
+            error_streak: 0,
+            last_error: None,
+            resume_prompt: "Tôi đã tìm kiếm và báo cáo giá vàng hôm nay cho Benji. {{result}}"
+                .into(),
+            timeout_prompt: None,
+            label: Some("Giá vàng hôm nay".into()),
+        };
+        let task = ScheduledTask {
+            id: "f727a81b".into(),
+            group_folder: "main".into(),
+            chat_jid: CHAT.into(),
+            prompt: cfg.resume_prompt.clone(),
+            schedule_type: ScheduleType::Interval,
+            schedule_value: "60000".into(),
+            context_mode: ContextMode::Watch,
+            agent_mode: crate::types::AgentMode::Agent,
+            script_command: None,
+            watch_json: Some(cfg.to_json().unwrap()),
+            next_run: Some(chrono::Utc::now().to_rfc3339()),
+            last_run: None,
+            last_result: None,
+            status: TaskStatus::Active,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        db.insert_task(&task).unwrap();
+        task
+    }
+
+    fn row(db: &Db, id: &str) -> ScheduledTask {
+        db.get_tasks_by_group("main")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == id)
+            .expect("the watch row is never deleted")
+    }
+
+    #[tokio::test]
+    async fn a_wake_is_labelled_automatic_and_counts_toward_the_ceiling() {
+        let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
+        let task = agent_turn_row(&db, 0);
+        let api = Recorder::new(None);
+        let exec = DefaultTaskExecutor::new(Arc::clone(&db)).with_agent_api(api.clone());
+
+        exec.execute(task).await;
+
+        let prompts = api.prompts();
+        assert_eq!(prompts.len(), 1);
+        assert!(
+            prompts[0].contains("Automatic check 1 of 10"),
+            "{}",
+            prompts[0]
+        );
+        assert!(
+            prompts[0].contains("watch_id \"f727a81b\""),
+            "{}",
+            prompts[0]
+        );
+        assert!(!prompts[0].contains("{{result}}"), "{}", prompts[0]);
+        let after = row(&db, "f727a81b");
+        assert_eq!(after.status, TaskStatus::Active, "waking is not finishing");
+        assert_eq!(
+            WatchConfig::parse(after.watch_json.as_deref().unwrap())
+                .unwrap()
+                .checks,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn the_woken_turn_can_end_its_own_watch_and_nothing_wakes_it_again() {
+        let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
+        let task = agent_turn_row(&db, 0);
+        let api = Recorder::new(Some((Arc::clone(&db), task.id.clone())));
+        let exec = DefaultTaskExecutor::new(Arc::clone(&db)).with_agent_api(api.clone());
+
+        exec.execute(task).await;
+
+        assert_eq!(api.prompts().len(), 1);
+        assert_eq!(
+            row(&db, "f727a81b").status,
+            TaskStatus::Completed,
+            "the run's own bookkeeping must not revive it"
+        );
+        assert!(
+            db.get_active_watches(CHAT).unwrap().is_empty(),
+            "the strip has nothing left to show"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_watch_that_is_never_stopped_ends_itself_and_tells_the_chat() {
+        let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
+        let task = agent_turn_row(&db, AGENT_TURN_MAX_CHECKS);
+        let api = Recorder::new(None);
+        let exec = DefaultTaskExecutor::new(Arc::clone(&db)).with_agent_api(api.clone());
+
+        exec.execute(task).await;
+
+        let prompts = api.prompts();
+        assert_eq!(
+            prompts.len(),
+            1,
+            "one last turn says it is over; the 11th check is not another wake"
+        );
+        assert!(prompts[0].contains("will not be woken"), "{}", prompts[0]);
+        assert!(!prompts[0].contains("Automatic check"), "{}", prompts[0]);
+        assert_eq!(row(&db, "f727a81b").status, TaskStatus::Completed);
     }
 }

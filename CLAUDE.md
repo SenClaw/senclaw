@@ -654,12 +654,17 @@ Rules for Claude:
 - **Ownership comes from the chat env, never a tool parameter** — unlike the
   older `schedule_task` beside it. A watch speaks into a conversation; a
   caller-supplied jid would let one session speak into another.
-- **`interval_secs` and `timeout_secs` are clamped, not rejected** (15–3600 and
-  ≤86400). A model that asks for a 2-second poll should get a sane watch, not an
+- **`interval_secs` and `timeout_secs` are clamped, not rejected** (15–3600, or
+  60–3600 without a `tool`, and ≤86400). A model that asks for a 2-second poll should get a sane watch, not an
   error it has to recover from mid-turn.
 - Omitting `tool` is the **agent-turn fallback**, for jobs no single call can
   check — it still works, it just costs a turn per interval. `mcp_manager: None`
-  degrades every watch to it rather than failing.
+  degrades every watch to it rather than failing. It is **bounded harder than a
+  probe watch**: interval floor 60 s and at most `AGENT_TURN_MAX_CHECKS` (10)
+  wakes (`WatchBounds::clamp`, and `effective_max_checks` holds rows armed
+  before the cap to it too). The wake is `WatchConfig::render_wake`, never the
+  raw `resume_prompt`: it says it is automatic, which check it is, and that the
+  way out is `schedule_watch_stop` with the watch id.
 
 A watch is **visible and stoppable**: `GET /api/watches?chatJid=…` backs a strip
 above the composer in all three clients (`WatchStrip` in web / desktop /
@@ -696,6 +701,14 @@ More rules for Claude:
   `equals` / `in` reads the answer's `state` / `status` (top level or one object down, `state_field`) instead of
   comparing the whole object as text; a `resume_prompt` without `{{result}}` still gets the result appended — without
   it the woken agent reported placeholders and an invented path.
+- **A woken agent must be told how to end its watch, and the watch must end without it.** 2026-10-17, real install:
+  a model armed a tool-less watch on "giá vàng hôm nay" (a lookup, nothing to wait for) at 60 s with the default hour.
+  The wake sent the model's own `resume_prompt` verbatim — `{{result}}` unfilled, no mention that it was automatic —
+  so each wake read as a new request and was answered with another "I have finished" summary: 32 turns in 32
+  minutes until the user pressed Stop. Nothing said that `schedule_watch_stop` was the way out, and saying "done"
+  ends nothing. The fix is three layers, none enough alone: the tool description and skill say not to arm a watch
+  for a lookup; the wake names `schedule_watch_stop` and the watch id and says an announcement does not end it; and
+  the 10-wake cap ends it for a model that ignores both (the final turn says it is over, per "never end silently").
 - **`watch_stop` is scoped by chat, not by id alone** — an id-only lookup would
   let one conversation cancel another's wait.
 - **Stopping must report whether a row actually changed.** `update_task_status`

@@ -424,10 +424,17 @@ A DAG parent reaches `"done"` when every subtask is terminal — including the
 failed ones, because the scheduler is continue-on-error. So the resume prompt
 must check `failedTasks`, not assume success.
 
+**Do not arm a watch for something you can answer in this turn** — a web
+search, a price, a score, a calculation. A watch is for a job that is *still
+running* after you handed it off. "Giá vàng hôm nay" has nothing to wait for:
+armed anyway, it woke the chat every 60 s, and each wake produced another
+"I have finished" answer.
+
 ### What NOT to do
 
 | Anti-pattern | Why it fails |
 |---|---|
+| Arming a watch for a lookup you can answer now | Nothing is running, so nothing ever "finishes"; every wake is a full turn that has nothing new to say |
 | `sleep 30` then poll once | Burns the turn, and a job slower than the sleep is still unfinished. Then you give up. |
 | "Ask me again later for progress" | Pushes your job onto the user. The whole point is that it comes back on its own. |
 | Polling in a loop inside one turn | Blocks the session and hits the turn ceiling. |
@@ -454,11 +461,30 @@ Then **end your turn** and tell the user you will report back — do not keep po
 | Parameter | Notes |
 |---|---|
 | `resume_prompt` | Required. You are woken with this **and nothing else** — restate what was being waited on. `{{result}}` = the probe payload |
-| `tool` + `args` | Re-called each check with **no LLM**, so waiting is nearly free. Use the **exact name your tool list shows** — built-ins are `mcp__core__<tool>` under the default bundled server, not `mcp__senclaw-<domain>__<tool>`. Omit only when the job cannot be checked in one call — you are then woken every interval to check by hand, costing a full turn each time |
+| `tool` + `args` | Re-called each check with **no LLM**, so waiting is nearly free. Use the **exact name your tool list shows** — built-ins are `mcp__core__<tool>` under the default bundled server, not `mcp__senclaw-<domain>__<tool>`. Omit only when the job cannot be checked in one call — see "A watch without a `tool`" below |
 | `done_path` | Dot path into the result. **Call the probe tool once first and read the path off its real answer** — a guessed path resolves to nothing, counts as "not ready", and the watch waits out its full deadline on a finished job. AI Office's `office_get_task` answers `{events, steps, task}`, so the path is `task.status` — not `status`, not `data.task.status` |
 | `done_op` | `exists` (default), `equals`, `contains`, `in`, and their negations. Case-insensitive |
-| `interval_secs` | Default 60, clamped to 15–3600 |
+| `interval_secs` | Default 60, clamped to 15–3600 (60–3600 without a `tool`) |
 | `timeout_secs` | Default 3600, clamped to ≤ 86400 |
+
+### A watch without a `tool`: you are the check
+
+With no `tool` there is no probe, so **you** are woken every interval — a full
+turn each time, never closer than 60 s and **at most 10 times**. A job that
+needs longer asks for a coarser `interval_secs`, not more wakes. Each wake is a
+message starting `[Automatic check n of 10 …]`; it is not from the user.
+
+In that turn, do exactly one of these:
+
+- **The job has finished, or nothing you can do will tell you more** — give the
+  user the result (or say plainly that you cannot tell) **and call
+  `schedule_watch_stop` with the watch id the message names.** Saying you are
+  done does not end the watch: you are woken again until you stop it.
+- **It is still running** — say so in one line. Do not repeat what you already
+  told the user.
+
+If you notice the watch was never needed (nothing is running), stop it and
+answer. When the 10 checks run out the chat is told it is over, once.
 
 ### Two mistakes that waste the whole deadline
 
