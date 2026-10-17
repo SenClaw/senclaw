@@ -5707,6 +5707,23 @@ paths:
       - memory
       x-handler: facts_list
       x-untyped: true
+  /api/memory/facts/banks:
+    get:
+      operationId: get_api_memory_facts_banks
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Facts banks
+      tags:
+      - memory
+      x-handler: facts_banks
+      x-untyped: true
   /api/memory/facts/{id}:
     delete:
       operationId: delete_api_memory_facts_id
@@ -11006,5 +11023,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 393
-x-untyped-operations: 483
+x-route-count: 394
+x-untyped-operations: 484

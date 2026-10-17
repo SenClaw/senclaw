@@ -102,7 +102,16 @@ pub fn merge_near_duplicates(fused: Vec<Fused>, overlap: f64) -> (Vec<Fused>, us
 
 /// Lower-cased alphanumeric words; every CJK character stands alone because
 /// those scripts have no spaces to split on.
+///
+/// A fact's header is only the date it was said ("noted 2026-10-16"), the same
+/// for everything said that day. Counting it would make two short facts that
+/// differ in one word — "thích uống kombucha" and "thích uống matcha" — share
+/// enough terms to be folded into one, and the second value would never be
+/// recalled. A note's or node's header is its title and does identify it.
 fn terms_of(hit: &Hit) -> HashSet<String> {
+    if hit.arm == super::facts::FACTS {
+        return text_terms(&hit.body);
+    }
     let mut terms = text_terms(&hit.header);
     terms.extend(text_terms(&hit.body));
     terms
@@ -262,6 +271,39 @@ mod tests {
             reciprocal_rank_fusion(&[(arms[0], vec![a]), (arms[1], vec![b])]),
             DEFAULT_DUPLICATE_OVERLAP,
         )
+    }
+
+    fn fact(key: &str, body: &str) -> Hit {
+        Hit {
+            header: "noted 2026-10-16".into(),
+            ..hit("facts", key, body)
+        }
+    }
+
+    #[test]
+    fn two_short_facts_said_on_one_day_are_not_one_fact() {
+        // Different values of "likes": the shared date header must not make them
+        // look alike, or only one of the two is ever recalled.
+        let (out, folded) = merged(
+            fact("a", "Người dùng thích uống kombucha."),
+            fact("b", "Người dùng cũng thích uống matcha."),
+        );
+        assert_eq!((folded, out.len()), (0, 2));
+    }
+
+    #[test]
+    fn a_fact_restated_in_nearly_the_same_words_is_still_folded() {
+        let (out, folded) = merged(
+            fact(
+                "a",
+                "The daemon serves the web UI on port 18788 and the gateway on 18789",
+            ),
+            fact(
+                "b",
+                "The daemon serves the web UI on port 18788 and the gateway on 18789 by default",
+            ),
+        );
+        assert_eq!((folded, out.len()), (1, 1));
     }
 
     #[test]

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate};
 
 use super::extract::span_label;
-use super::store::StoredFact;
+use super::store::{Scope, StoredFact};
 use super::temporal::parse_window;
 use super::FactEngine;
 use crate::memory::cognitive::retrievers::build_fts_match;
@@ -61,6 +61,15 @@ fn hits(facts: &[StoredFact]) -> Vec<Hit> {
     facts.iter().map(to_hit).collect()
 }
 
+/// Which facts this question may see.
+fn scope(q: &RecallQuery) -> Scope<'_> {
+    if q.facts_by_chat {
+        Scope::Chat(&q.chat_jid)
+    } else {
+        Scope::Agent
+    }
+}
+
 /// Nearest facts by meaning; empty when no embedding model is configured.
 async fn semantic(engine: &FactEngine, q: &RecallQuery, limit: usize) -> Result<Vec<StoredFact>> {
     let (Some(model), Some(v)) = (engine.model_key(), engine.embed_query(&q.text).await) else {
@@ -68,7 +77,14 @@ async fn semantic(engine: &FactEngine, q: &RecallQuery, limit: usize) -> Result<
     };
     Ok(engine
         .store
-        .search_vector(&q.folder, &model, &v, MIN_SEMANTIC_SIMILARITY, limit)?
+        .search_vector(
+            &q.folder,
+            &model,
+            &v,
+            MIN_SEMANTIC_SIMILARITY,
+            limit,
+            scope(q),
+        )?
         .into_iter()
         .map(|(f, _)| f)
         .collect())
@@ -81,7 +97,9 @@ fn keyword(
     limit: usize,
 ) -> Result<Vec<StoredFact>> {
     match build_fts_match(&q.text) {
-        Some(m) => engine.store.search_keyword(&q.folder, &m, window, limit),
+        Some(m) => engine
+            .store
+            .search_keyword(&q.folder, &m, window, limit, scope(q)),
         None => Ok(Vec::new()),
     }
 }
@@ -168,9 +186,13 @@ impl RecallArm for GraphArm {
         let mut ranked: Vec<(String, f32)> = score.into_iter().collect();
         // Ties by id so the order is stable between runs.
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        ranked.truncate(q.limit);
+        // Entity and link expansion cannot filter by chat, so take a few more
+        // than needed and drop what this chat may not see.
+        ranked.truncate(q.limit * 3);
         let ids: Vec<String> = ranked.into_iter().map(|(id, _)| id).collect();
-        Ok(hits(&engine.store.get_many(&ids)?))
+        let mut visible = engine.store.get_visible(&q.folder, &ids, scope(q))?;
+        visible.truncate(q.limit);
+        Ok(hits(&visible))
     }
 }
 
@@ -234,7 +256,10 @@ impl RecallArm for TemporalArm {
         // gets the period's facts.
         let mut pool = keyword(engine, q, Some(window), TEMPORAL_POOL)?;
         let known: Vec<String> = pool.iter().map(|f| f.id.clone()).collect();
-        for f in engine.store.in_window(&q.folder, window, TEMPORAL_POOL)? {
+        for f in engine
+            .store
+            .in_window(&q.folder, window, TEMPORAL_POOL, scope(q))?
+        {
             if !known.contains(&f.id) {
                 pool.push(f);
             }
@@ -259,11 +284,93 @@ mod tests {
             entities: vec![],
             proof_count: 1,
             superseded_by: None,
+            origin: String::new(),
+            slot: None,
         }
     }
 
     fn ids(v: &[StoredFact]) -> Vec<&str> {
         v.iter().map(|f| f.id.as_str()).collect()
+    }
+
+    /// Two chats of one agent have each said something about Orion.
+    fn engine_with_two_chats() -> Arc<FactEngine> {
+        use crate::config::Config;
+        use crate::db::Db;
+        use crate::memory::engine::facts::store::{Inserted, NewFact};
+        let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
+        let engine = Arc::new(FactEngine::new(db, None));
+        for (origin, text) in [
+            ("web:a", "Lan works at Orion in chat a"),
+            ("web:b", "Lan works at Orion in chat b"),
+            ("", "Orion is in Hanoi"),
+        ] {
+            let r = engine
+                .store
+                .insert(
+                    "main",
+                    &NewFact {
+                        text: text.into(),
+                        kind: FactKind::World,
+                        occurred: Some((1_000_000, 1_086_400)),
+                        mentioned_at: 1_000_000,
+                        entities: vec!["orion".into()],
+                        embedding: None,
+                        model: None,
+                        source: "test".into(),
+                        origin: origin.into(),
+                        slot: None,
+                    },
+                )
+                .unwrap();
+            assert!(matches!(r, Inserted::New(_)));
+        }
+        engine
+    }
+
+    fn query(chat: &str, by_chat: bool) -> RecallQuery {
+        RecallQuery {
+            text: "orion".into(),
+            folder: "main".into(),
+            chat_jid: chat.into(),
+            facts_by_chat: by_chat,
+            limit: 10,
+            now: 1_000_000,
+        }
+    }
+
+    async fn found(engine: &Arc<FactEngine>, q: &RecallQuery) -> Vec<String> {
+        let mut out = Vec::new();
+        for arm in [
+            Box::new(KeywordArm(Arc::clone(engine))) as Box<dyn RecallArm>,
+            Box::new(GraphArm(Arc::clone(engine))),
+        ] {
+            for h in arm.search(q).await.unwrap() {
+                out.push(h.body);
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[tokio::test]
+    async fn no_arm_recalls_another_chats_fact_but_all_of_them_do_when_scoping_is_off() {
+        let engine = engine_with_two_chats();
+        // The graph arm grows from the keyword matches, and the entity they share
+        // ("orion") links every chat's fact to every other: it must still not
+        // bring another chat's fact in.
+        let got = found(&engine, &query("web:a", true)).await;
+        assert_eq!(got, ["Lan works at Orion in chat a", "Orion is in Hanoi"]);
+        let got = found(&engine, &query("web:b", true)).await;
+        assert_eq!(got, ["Lan works at Orion in chat b", "Orion is in Hanoi"]);
+        // No chat known: only what belongs to the whole agent.
+        assert_eq!(
+            found(&engine, &query("", true)).await,
+            ["Orion is in Hanoi"]
+        );
+        // Scoping off: one pool for the agent.
+        assert_eq!(found(&engine, &query("web:a", false)).await.len(), 3);
     }
 
     #[test]

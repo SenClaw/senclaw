@@ -14,7 +14,9 @@
 pub mod arms;
 pub mod defense;
 pub mod extract;
+mod restated;
 pub mod retain;
+pub mod slots;
 pub mod store;
 pub mod temporal;
 pub mod tools;
@@ -134,6 +136,7 @@ pub fn instance() -> Option<Arc<FactEngine>> {
 pub async fn retain_text(
     config: &crate::config::Config,
     bank: &str,
+    chat_jid: &str,
     text: &str,
     source: &str,
 ) -> Option<RetainReport> {
@@ -148,6 +151,13 @@ pub async fn retain_text(
         text,
         source,
         now: chrono::Utc::now().timestamp(),
+        // Per-chat scoping is the default; `SENCLAW_MEMORY_FACTS_SCOPE=agent`
+        // keeps every chat of an agent in one pool of facts.
+        origin: if config.memory.engine_facts_by_chat {
+            chat_jid
+        } else {
+            ""
+        },
     };
     Some(retain(&engine, llm.as_ref(), mode, &req).await)
 }
@@ -240,11 +250,15 @@ mod tests {
         // has not booted the fact store (a CLI one-shot, an early reflection).
         assert!(instance().is_none());
         let cfg = Config::from_env();
-        assert!(
-            retain_text(&cfg, "main", "User: a conversation window", "reflection")
-                .await
-                .is_none()
-        );
+        assert!(retain_text(
+            &cfg,
+            "main",
+            "web:t",
+            "User: a conversation window",
+            "reflection"
+        )
+        .await
+        .is_none());
     }
 
     #[tokio::test]

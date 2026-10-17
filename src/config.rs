@@ -327,6 +327,9 @@ pub struct MemoryConfig {
     pub chunk_overlap: u32,
     pub search_max_results: u32,
     pub search_min_score: f32,
+    /// Put the agent's `MEMORY.md` into every turn's context (standing facts and
+    /// instructions the agent keeps there). On by default; `SENCLAW_PRE_RETRIEVAL=false`
+    /// turns it off. Capped, see `agent_pool::pool::PINNED_MEMORY_MAX_CHARS`.
     pub pre_retrieval: bool,
     /// Token budget for the unified `<memory_context>` block, in estimated
     /// tokens (words — `chunker::estimate_tokens`), so real model tokens run
@@ -339,6 +342,11 @@ pub struct MemoryConfig {
     /// it as typed. `SENCLAW_MEMORY_ENGINE_DEFENSE`; parsed by
     /// `engine::facts::defense::Mode::parse`.
     pub engine_defense: String,
+    /// Facts are kept per chat: a conversation recalls what was said in it (and
+    /// what belongs to the whole agent) but never another chat's facts, the rule
+    /// curated notes follow. `SENCLAW_MEMORY_FACTS_SCOPE=agent` turns it off, so
+    /// every chat of an agent shares one pool of facts.
+    pub engine_facts_by_chat: bool,
     /// Auto-cognify each user message into the cognitive graph on arrival.
     /// Fires in a background `tokio::spawn` so it never adds latency to the
     /// agent's reply. When disabled, the cognitive graph only grows via
@@ -774,10 +782,13 @@ impl Config {
                 chunk_overlap: env_int("SENCLAW_CHUNK_OVERLAP", 80),
                 search_max_results: env_int("SENCLAW_SEARCH_MAX_RESULTS", 5),
                 search_min_score: env_int("SENCLAW_SEARCH_MIN_SCORE", 0.5_f32),
-                pre_retrieval: env_bool("SENCLAW_PRE_RETRIEVAL", false),
+                pre_retrieval: env_bool("SENCLAW_PRE_RETRIEVAL", true),
                 // At least 50: below that the packer would return one item at most.
                 engine_max_tokens: env_int::<u32>("SENCLAW_MEMORY_ENGINE_MAX_TOKENS", 600).max(50),
                 engine_defense: env_or("SENCLAW_MEMORY_ENGINE_DEFENSE", "redact"),
+                engine_facts_by_chat: !env_or("SENCLAW_MEMORY_FACTS_SCOPE", "chat")
+                    .trim()
+                    .eq_ignore_ascii_case("agent"),
                 cognitive_reflection: env_bool("SENCLAW_COGNITIVE_REFLECTION", true),
             },
             cognitive: CognitiveConfig {

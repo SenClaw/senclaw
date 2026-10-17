@@ -82,6 +82,10 @@ Agent có một lớp nhớ hợp nhất trên 3 hệ sẵn có (FTS, curated, c
 ### P5 — Hoàn thiện
 - `memory_reflect` 1-lần (nếu đo thấy cần), rerank runtime (spike llama.cpp rerank), connector MCP tới Hindsight, UI Settings → Memory (xem fact/observation + bằng chứng) trên web + desktop + channel_app, REST `/api/memory-engine/*` + `docs/openapi-daemon.yaml`, `docs/memory-engine.md`, mục `CLAUDE.md`.
 
+## P6 — Hợp nhất Knowledge vào Facts (đề xuất, 2026-10-17)
+
+Nghiên cứu + luồng update + lộ trình H0–H7: [research-261017-2030-unify-knowledge-into-facts.html](../reports/research-261017-2030-unify-knowledge-into-facts.html). Hướng khuyến nghị: **Facts + Sources** (một kho, một đường ghi; đồ thị chỉ còn là cách nhìn). **H1 đã làm** (2026-10-17): slot đơn trị cho supersession, eval dựng sẵn + extractor thật + `scripts/evals/memory-changed-mind.mjs`; số đo ở `plans/reports/eval-261017-2145-slot-supersession-real-model.md`. Chưa quyết: 6 câu hỏi mở ở cuối tài liệu.
+
 ## Quy ước phải giữ
 
 - `snake_case.rs`; `anyhow::Result`; truy cập DB qua `Db::with_conn`; không `env::var` trong thư viện (đi qua `Config`).

@@ -31,12 +31,15 @@ use crate::config::{Config, EmbeddingProvider};
 use crate::db::Db;
 use crate::memory::chunker::estimate_tokens;
 use crate::memory::cognitive::llm::LlmClient;
+use crate::memory::cognitive::llm_openai::OpenAiCompatLlm;
 use crate::memory::cognitive::{CognifyOptions, CognitiveSystem, NodeSet, NullEmbedder};
 use crate::memory::curated;
 use crate::memory::embedding::EmbeddingProvider as EmbeddingModel;
 use crate::memory::manager::MemoryManager;
+use crate::security::replication::fold;
 
-use super::facts::{self, defense, FactEngine, RetainRequest};
+use super::facts::store::Scope;
+use super::facts::{self, defense, extract, FactEngine, RetainRequest};
 use super::{
     format, legacy, recall, CognitiveArm, CuratedArm, RecallArm, RecallConfig, RecallQuery,
     Recalled,
@@ -86,7 +89,7 @@ struct Chunk {
     triplets: Vec<serde_json::Value>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Case {
     id: String,
     text: String,
@@ -247,6 +250,18 @@ fn fixture_now(fx: &Fixture) -> i64 {
 /// `vectors`: give the graph and the fact store an embedding model. Without
 /// one — the default install — both fall back to keyword, entity and date.
 async fn build_world(fx: &Fixture, vectors: bool) -> World {
+    build_world_with(fx, vectors, None).await.0
+}
+
+/// [`build_world`], with the fact windows optionally read by `real` instead of
+/// the script. Returns the retain report of each window, in fixture order. The
+/// script is held to storing everything it promised; a real model is only
+/// measured.
+async fn build_world_with(
+    fx: &Fixture,
+    vectors: bool,
+    real: Option<&dyn LlmClient>,
+) -> (World, Vec<facts::RetainReport>) {
     let embedder = || -> Option<Arc<dyn EmbeddingModel>> {
         vectors.then(|| Arc::new(HashedWords) as Arc<dyn EmbeddingModel>)
     };
@@ -313,7 +328,7 @@ async fn build_world(fx: &Fixture, vectors: bool) -> World {
     // embed, dedupe, store, link) with the extraction model scripted.
     let facts = Arc::new(FactEngine::new(Arc::clone(&db), embedder()));
     let fact_prompts = Arc::new(Mutex::new(Vec::new()));
-    let extractor = ScriptedFacts {
+    let scripted = ScriptedFacts {
         script: fx
             .fact_windows
             .iter()
@@ -321,30 +336,36 @@ async fn build_world(fx: &Fixture, vectors: bool) -> World {
             .collect(),
         seen: Arc::clone(&fact_prompts),
     };
+    let extractor: &dyn LlmClient = real.unwrap_or(&scripted);
+    let mut reports = Vec::new();
     for w in &fx.fact_windows {
         let report = facts::retain(
             &facts,
-            &extractor,
+            extractor,
             defense::Mode::Redact,
             &RetainRequest {
                 bank: &fx.folder,
                 text: &w.text,
                 source: "eval",
                 now: fixture_now(fx),
+                origin: "",
             },
         )
         .await;
-        assert_eq!(
-            report.stored,
-            w.facts.len(),
-            "window {:?} stored {} of {} scripted facts ({report:?})",
-            w.needle,
-            report.stored,
-            w.facts.len()
-        );
+        if real.is_none() {
+            assert_eq!(
+                report.stored,
+                w.facts.len(),
+                "window {:?} stored {} of {} scripted facts ({report:?})",
+                w.needle,
+                report.stored,
+                w.facts.len()
+            );
+        }
+        reports.push(report);
     }
 
-    World {
+    let world = World {
         mgr,
         sys,
         facts,
@@ -352,7 +373,8 @@ async fn build_world(fx: &Fixture, vectors: bool) -> World {
         folder: fx.folder.clone(),
         chat: fx.chat.clone(),
         _dir: dir,
-    }
+    };
+    (world, reports)
 }
 
 // ===== Running and grading =====
@@ -366,6 +388,11 @@ struct Row {
     leaked: bool,
     repeats: usize,
     tokens: usize,
+    /// `answered`, were diacritics not compared: a model that writes "xóa"
+    /// where the fixture has "xoá" is spelling, not forgetting. Only the real
+    /// extractor's printout reads it.
+    #[serde(skip)]
+    folded: bool,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
@@ -379,8 +406,13 @@ struct Totals {
 }
 
 fn grade(case: &Case, context: &str) -> Row {
+    let loose = fold(context);
     Row {
         id: case.id.clone(),
+        folded: case
+            .must_include
+            .iter()
+            .all(|m| loose.contains(fold(m).as_str())),
         answered: case
             .must_include
             .iter()
@@ -445,6 +477,7 @@ async fn run_engine(
         text: q.to_string(),
         folder: w.folder.clone(),
         chat_jid: w.chat.clone(),
+        facts_by_chat: true,
         limit: max,
         now,
     };
@@ -609,8 +642,40 @@ async fn compare_facts(label: &str, vectors: bool) -> (Vec<Row>, Vec<Row>) {
         "the fixture has no fact queries"
     );
     let world = build_world(&fx, vectors).await;
+    let rows = ask_fact_queries(label, &fx, &fx.fact_queries, &world, true).await;
+    assert_secrets_kept_out(&fx, &world.fact_prompts.lock().unwrap());
+    rows
+}
+
+/// Whatever else happened, the secret typed in the chat reached neither the
+/// extraction model nor anything it could have stored.
+fn assert_secrets_kept_out(fx: &Fixture, prompts: &[String]) {
+    assert!(!prompts.is_empty(), "the extractor was never called");
+    for secret in fx
+        .fact_queries
+        .iter()
+        .filter(|c| c.secret)
+        .flat_map(|c| c.must_exclude.iter())
+    {
+        assert!(
+            prompts.iter().all(|p| !p.contains(secret.as_str())),
+            "{secret:?} was sent to the extraction model"
+        );
+    }
+}
+
+/// Every fact query through the engine without and with the fact arms, graded
+/// and printed. `show_misses` also prints the context of a query the fact
+/// store failed or leaked on, for a run whose extraction is not scripted.
+async fn ask_fact_queries(
+    label: &str,
+    fx: &Fixture,
+    cases: &[Case],
+    world: &World,
+    show_misses: bool,
+) -> (Vec<Row>, Vec<Row>) {
     let max = Config::from_env().memory.search_max_results as usize;
-    let now = fixture_now(&fx);
+    let now = fixture_now(fx);
     let cfg = RecallConfig::default();
 
     let (mut without, mut with) = (Vec::new(), Vec::new());
@@ -619,9 +684,9 @@ async fn compare_facts(label: &str, vectors: bool) -> (Vec<Row>, Vec<Row>) {
         "{:<26} {:>12} {:>12}  fact arms (sem/key/gra/tem)",
         "query", "no facts", "with facts"
     );
-    for case in &fx.fact_queries {
-        let (plain, _) = run_engine(&world, &case.text, max, now, &cfg, false).await;
-        let (full, recalled) = run_engine(&world, &case.text, max, now, &cfg, true).await;
+    for case in cases {
+        let (plain, _) = run_engine(world, &case.text, max, now, &cfg, false).await;
+        let (full, recalled) = run_engine(world, &case.text, max, now, &cfg, true).await;
         let (a, b) = (grade(case, &plain), grade(case, &full));
         let per_arm = [
             "facts_semantic",
@@ -644,34 +709,36 @@ async fn compare_facts(label: &str, vectors: bool) -> (Vec<Row>, Vec<Row>) {
             "{:<26} {:>12} {:>12}  {per_arm}",
             case.id,
             if a.answered { "answered" } else { "-" },
-            if b.answered { "answered" } else { "MISSED" },
+            match (b.leaked, b.answered) {
+                (true, _) => "LEAKED",
+                (false, true) => "answered",
+                (false, false) => "MISSED",
+            },
         );
+        if show_misses && (b.leaked || !b.answered) {
+            eprintln!(
+                "    wanted {:?}, not {:?}{}",
+                case.must_include,
+                case.must_exclude,
+                if !b.leaked && b.folded {
+                    " — spelling only: it matches once diacritics are folded"
+                } else {
+                    ""
+                }
+            );
+            eprintln!("    injected: {}", full.replace('\n', "\n      "));
+        }
         without.push(a);
         with.push(b);
     }
     eprintln!(
-        "{label}: without facts {}/{}, with facts {}/{}",
-        without.iter().filter(|r| r.answered).count(),
+        "{label}: without facts {}/{}, with facts {}/{}, leaked {}",
+        answered(&without),
         without.len(),
-        with.iter().filter(|r| r.answered).count(),
-        with.len()
+        answered(&with),
+        with.len(),
+        with.iter().filter(|r| r.leaked).count()
     );
-
-    // Whatever else happened, the secret typed in the chat reached neither the
-    // extraction model nor anything it could have stored.
-    let prompts = world.fact_prompts.lock().unwrap();
-    assert!(!prompts.is_empty(), "the extractor was never called");
-    for secret in fx
-        .fact_queries
-        .iter()
-        .filter(|c| c.secret)
-        .flat_map(|c| c.must_exclude.iter())
-    {
-        assert!(
-            prompts.iter().all(|p| !p.contains(secret.as_str())),
-            "{secret:?} was sent to the extraction model"
-        );
-    }
     (without, with)
 }
 
@@ -709,6 +776,7 @@ async fn alone(w: &World, arm: Arc<dyn RecallArm>, text: &str, now: i64) -> Stri
         text: text.to_string(),
         folder: w.folder.clone(),
         chat_jid: w.chat.clone(),
+        facts_by_chat: true,
         limit: 5,
         now,
     };
@@ -810,4 +878,373 @@ async fn the_semantic_arm_needs_an_embedding_model_and_is_silent_without_one() {
     )
     .await;
     assert_eq!(none, "");
+}
+
+// ===== A real extraction model =====
+//
+// Everything above scripts the model that reads a conversation window into
+// facts, so it proves the pipeline and says nothing about whether a small
+// local model, reading Vietnamese, extracts what the fixture expects — or
+// names the right `KNOWN FACTS` line in `replaces`. The tests below run the
+// same windows and the same questions through the model at the endpoint named
+// by the environment, with the production client (`OpenAiCompatLlm`, so its
+// 60 s timeout is part of what is measured).
+//
+// They are `#[ignore]`: they cost model calls and the numbers move from run to
+// run. They measure rather than gate — the only assertions are that the model
+// answered at least once and that the secret never reached it.
+//
+//     SENCLAW_EVAL_LLM_BASE_URL=http://127.0.0.1:<port>/v1 \
+//     SENCLAW_EVAL_LLM_MODEL=<model id> [SENCLAW_EVAL_LLM_API_KEY=<key>] \
+//     <test binary> memory::engine::eval::real_extractor --ignored --nocapture
+
+/// The live daemon's ports: a model reached through them is the user's own
+/// install, which an eval must not touch.
+const LIVE_DAEMON_PORTS: [u16; 2] = [18788, 18789];
+
+/// One model call as the harness saw it.
+struct Call {
+    prompt: String,
+    reply: std::result::Result<String, String>,
+    millis: u128,
+}
+
+/// The model under test, remembering every call so a run can print what the
+/// model was shown and what it answered.
+struct Recording {
+    inner: OpenAiCompatLlm,
+    calls: Mutex<Vec<Call>>,
+}
+
+#[async_trait]
+impl LlmClient for Recording {
+    async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        let started = Instant::now();
+        let reply = self.inner.complete(system, user).await;
+        self.calls.lock().unwrap().push(Call {
+            prompt: user.to_string(),
+            reply: match &reply {
+                Ok(r) => Ok(r.clone()),
+                Err(e) => Err(format!("{e:#}")),
+            },
+            millis: started.elapsed().as_millis(),
+        });
+        reply
+    }
+}
+
+/// The model named by `SENCLAW_EVAL_LLM_BASE_URL` / `_MODEL` / `_API_KEY`
+/// (the key is optional: a local runtime wants none), and its name for the
+/// printout. Read here, once per test, and nowhere in library code.
+fn eval_model() -> (Recording, String) {
+    let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let (Some(base), Some(model)) = (
+        var("SENCLAW_EVAL_LLM_BASE_URL"),
+        var("SENCLAW_EVAL_LLM_MODEL"),
+    ) else {
+        panic!(
+            "set SENCLAW_EVAL_LLM_BASE_URL (an OpenAI-compatible endpoint) and \
+             SENCLAW_EVAL_LLM_MODEL; SENCLAW_EVAL_LLM_API_KEY is optional"
+        );
+    };
+    let port = reqwest::Url::parse(&base)
+        .ok()
+        .and_then(|u| u.port_or_known_default());
+    assert!(
+        !port.is_some_and(|p| LIVE_DAEMON_PORTS.contains(&p)),
+        "SENCLAW_EVAL_LLM_BASE_URL points at the live daemon's port; start a scratch runtime instead"
+    );
+    let key = var("SENCLAW_EVAL_LLM_API_KEY").unwrap_or_default();
+    let inner = OpenAiCompatLlm::new(base, key, model.clone()).expect("build the model client");
+    (
+        Recording {
+            inner,
+            calls: Mutex::new(Vec::new()),
+        },
+        model,
+    )
+}
+
+/// The `[F1] text` lines a prompt carried after `KNOWN FACTS:`, in order.
+fn shown_facts(prompt: &str) -> Vec<String> {
+    let Some((_, known)) = prompt.split_once("\n\nKNOWN FACTS:") else {
+        return Vec::new();
+    };
+    known
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix('['))
+        .filter_map(|l| l.split_once("] "))
+        .map(|(_, text)| text.to_string())
+        .collect()
+}
+
+fn clip(s: &str, max_bytes: usize) -> String {
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut = crate::util::text::truncate_on_char_boundary(&flat, max_bytes);
+    if cut.len() < flat.len() {
+        format!("{cut}…")
+    } else {
+        flat
+    }
+}
+
+/// `replaces` as the model wrote it, across the whole run.
+#[derive(Default)]
+struct ReplaceTally {
+    /// Numbers the model named in `replaces`.
+    claimed: usize,
+    /// Of those, numbers beyond the `KNOWN FACTS` list it was shown.
+    unshown: usize,
+    /// Facts the model extracted, and how many of them came with a usable slot.
+    facts: usize,
+    slotted: usize,
+}
+
+/// Print what the model was shown and answered for one window, next to what
+/// retain made of it.
+fn print_window(
+    n: usize,
+    w: &FactWindow,
+    report: &facts::RetainReport,
+    calls: &[Call],
+    tally: &mut ReplaceTally,
+) -> Vec<extract::Extracted> {
+    let mut all = Vec::new();
+    eprintln!(
+        "\n[{n}] {:?} — {} chunk(s), model said {} ms, scripted fixture has {} fact(s)",
+        w.needle,
+        report.chunks,
+        calls.iter().map(|c| c.millis).sum::<u128>(),
+        w.facts.len()
+    );
+    if !report.redacted.is_empty() {
+        eprintln!("    scrubbed before the model: {:?}", report.redacted);
+    }
+    for call in calls {
+        let shown = shown_facts(&call.prompt);
+        for (i, text) in shown.iter().enumerate() {
+            eprintln!("    shown   [F{}] {}", i + 1, clip(text, 160));
+        }
+        let raw = match &call.reply {
+            Ok(raw) => raw,
+            Err(e) => {
+                eprintln!("    CALL FAILED: {}", clip(e, 300));
+                continue;
+            }
+        };
+        match extract::parse_facts(raw) {
+            Err(e) => eprintln!(
+                "    UNUSABLE REPLY ({}): {}",
+                clip(&e.to_string(), 120),
+                clip(raw, 1500)
+            ),
+            Ok(parsed) if parsed.is_empty() => eprintln!("    extracted nothing"),
+            Ok(parsed) => {
+                for f in &parsed {
+                    let when = f
+                        .occurred
+                        .map_or("-".to_string(), |(s, e)| extract::span_label(s, e));
+                    let replaces: Vec<String> =
+                        f.replaces.iter().map(|r| format!("F{r}")).collect();
+                    let slot = f.slot.as_ref().map_or("-".to_string(), |s| {
+                        format!(
+                            "{}{}",
+                            s.label(),
+                            if s.single_valued() { " (single)" } else { "" }
+                        )
+                    });
+                    eprintln!(
+                        "    extracted [{}] {} (when {when}, entities {:?}, slot {slot}, replaces {replaces:?})",
+                        f.kind.as_str(),
+                        clip(&f.text, 200),
+                        f.entities
+                    );
+                    tally.facts += 1;
+                    tally.slotted += f.slot.is_some() as usize;
+                    tally.claimed += f.replaces.len();
+                    tally.unshown += f.replaces.iter().filter(|r| **r > shown.len()).count();
+                }
+                all.extend(parsed);
+            }
+        }
+    }
+    eprintln!(
+        "    retained: extracted {} stored {} reinforced {} superseded {} (by slot {}) failed chunks {}",
+        report.extracted,
+        report.stored,
+        report.reinforced,
+        report.superseded,
+        report.superseded_by_slot,
+        report.failed_chunks
+    );
+    all
+}
+
+/// What the real model wrote for the old stance of a changed-mind case: the
+/// facts it extracted from the window whose scripted fact carries the stale
+/// phrase, that name the same non-generic entity. The fixture's phrase alone
+/// would miss "thích sử dụng React" for "thích dùng React", and a stale fact
+/// nobody recognises is a leak nobody sees.
+fn stale_facts(fx: &Fixture, case: &Case, parsed: &[Vec<extract::Extracted>]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for phrase in &case.must_exclude {
+        for (w, window) in fx.fact_windows.iter().enumerate() {
+            for scripted in &window.facts {
+                let text = scripted["text"].as_str().unwrap_or_default();
+                if !fold(text).contains(&fold(phrase)) {
+                    continue;
+                }
+                let subjects: Vec<String> = scripted["entities"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.as_str())
+                    .map(facts::store::entity_key)
+                    .filter(|e| e != "user")
+                    .collect();
+                for f in parsed.get(w).into_iter().flatten() {
+                    if f.entities.iter().any(|e| subjects.contains(e)) && !out.contains(&f.text) {
+                        out.push(f.text.clone());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The fixture's windows and questions through a real model.
+async fn run_real_extractor(label: &str, vectors: bool) {
+    let fx = fixture();
+    let (model, model_name) = eval_model();
+    let (world, reports) = build_world_with(&fx, vectors, Some(&model)).await;
+    let calls = model.calls.lock().unwrap();
+
+    eprintln!(
+        "\n== real extractor: {label}, model {model_name}, {} window(s) ==",
+        fx.fact_windows.len()
+    );
+    let mut tally = ReplaceTally::default();
+    let mut parsed: Vec<Vec<extract::Extracted>> = Vec::new();
+    let mut next = 0;
+    for (n, (w, report)) in fx.fact_windows.iter().zip(&reports).enumerate() {
+        // One model call per chunk, in order: a window owns the next
+        // `chunks` calls (a blocked window made none).
+        let mine = &calls[next..(next + report.chunks).min(calls.len())];
+        next += report.chunks;
+        parsed.push(print_window(n + 1, w, report, mine, &mut tally));
+    }
+
+    let honoured: usize = reports.iter().map(|r| r.superseded).sum();
+    let by_slot: usize = reports.iter().map(|r| r.superseded_by_slot).sum();
+    let ignored = tally.claimed.saturating_sub(honoured);
+    eprintln!(
+        "\nslots: the model gave one for {} of {} facts; {by_slot} fact(s) retired by rule, {} by a named `replaces`",
+        tally.slotted,
+        tally.facts,
+        honoured.saturating_sub(by_slot)
+    );
+    eprintln!(
+        "\nreplaces: the model named {} (honoured {honoured}, ignored {ignored}; \
+         {} of the ignored pointed past the KNOWN FACTS list it was shown, the rest were \
+         refused as another subject or came with a fact that was already stored)",
+        tally.claimed, tally.unshown
+    );
+    let stored = world
+        .facts
+        .store
+        .recent(&fx.folder, 100, true, Scope::Agent)
+        .expect("list the facts");
+    eprintln!("\nstore after the run (newest first):");
+    for f in &stored {
+        eprintln!(
+            "    {} {}",
+            if f.superseded_by.is_some() {
+                "retired"
+            } else {
+                "live   "
+            },
+            clip(&f.text, 200)
+        );
+    }
+    // A changed-mind case proves nothing unless the old fact made it into the
+    // store to be retired. A stale fact that is still live is a leak even when
+    // the model worded it differently from the fixture's phrase, so the
+    // questions are graded against that wording too.
+    let mut graded = fx.fact_queries.clone();
+    for case in graded
+        .iter_mut()
+        .filter(|c| !c.secret && !c.must_exclude.is_empty())
+    {
+        let stale = stale_facts(&fx, case, &parsed);
+        if stale.is_empty() {
+            eprintln!(
+                "    {}: no fact about the old stance was extracted, so this case did not exercise `replaces`",
+                case.id
+            );
+        }
+        for text in stale {
+            let verdict = match stored.iter().find(|f| f.text == text) {
+                None => "not in the store (folded into an earlier fact), so `replaces` was not exercised",
+                Some(f) if f.superseded_by.is_some() => "retired by the new fact",
+                Some(_) => {
+                    case.must_exclude.push(text.clone());
+                    "STILL LIVE: nothing retired it"
+                }
+            };
+            eprintln!("    {}: {:?} {verdict}", case.id, clip(&text, 120));
+        }
+    }
+
+    let failed_calls = calls.iter().filter(|c| c.reply.is_err()).count();
+    assert!(
+        failed_calls < calls.len(),
+        "no call reached the model ({failed_calls} of {} failed): check SENCLAW_EVAL_LLM_BASE_URL",
+        calls.len()
+    );
+    let mut millis: Vec<u128> = calls.iter().map(|c| c.millis).collect();
+    millis.sort_unstable();
+    let prompts: Vec<String> = calls.iter().map(|c| c.prompt.clone()).collect();
+    drop(calls);
+
+    let (without, with) = ask_fact_queries(label, &fx, &graded, &world, true).await;
+    assert_secrets_kept_out(&fx, &prompts);
+
+    let leaked = with.iter().filter(|r| r.leaked).count();
+    eprintln!(
+        "\nsummary [{model_name}, {label}]: extracted {} stored {} reinforced {} \
+         failed chunks {}; replaces named {} honoured {honoured} ignored {ignored}; \
+         slots {}/{} (retired by rule {by_slot}); \
+         queries answered {}/{} ({} once diacritics are folded; without facts {}), leaked {leaked}; \
+         model calls {} (failed {failed_calls}), median {} ms",
+        reports.iter().map(|r| r.extracted).sum::<usize>(),
+        reports.iter().map(|r| r.stored).sum::<usize>(),
+        reports.iter().map(|r| r.reinforced).sum::<usize>(),
+        reports.iter().map(|r| r.failed_chunks).sum::<usize>(),
+        tally.claimed,
+        tally.slotted,
+        tally.facts,
+        answered(&with),
+        with.len(),
+        with.iter().filter(|r| r.folded).count(),
+        answered(&without),
+        prompts.len(),
+        millis[millis.len() / 2],
+    );
+}
+
+/// The default install: no embedding provider, so the fact arms rest on
+/// keyword, entity and date.
+#[tokio::test]
+#[ignore = "calls a real model: set SENCLAW_EVAL_LLM_BASE_URL and SENCLAW_EVAL_LLM_MODEL"]
+async fn real_extractor_keyword_only() {
+    run_real_extractor("keyword only", false).await;
+}
+
+/// With the hashed-words stand-in as the embedding model: the semantic arm
+/// runs, and a reworded fact can be folded into one already stored.
+#[tokio::test]
+#[ignore = "calls a real model: set SENCLAW_EVAL_LLM_BASE_URL and SENCLAW_EVAL_LLM_MODEL"]
+async fn real_extractor_with_vectors() {
+    run_real_extractor("hashed-word vectors", true).await;
 }

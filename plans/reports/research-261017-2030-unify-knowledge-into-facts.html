@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hợp nhất Knowledge vào Facts — nghiên cứu và luồng update</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#16202b; --muted:#5b6876; --line:#dfe4ea;
+  --accent:#2457d6; --accent-soft:#e7eefc; --ok:#17803d; --ok-soft:#e3f5ea;
+  --warn:#9a5b00; --warn-soft:#fdf1dc; --bad:#b3261e; --bad-soft:#fbe7e5;
+  --new:#6b3fd1; --new-soft:#efe9fb; --code:#eef1f5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+    --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+    --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+    --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+  --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+  --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+  --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px 64px}
+header{padding:40px 0 20px}
+header .kicker{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:30px;line-height:1.2;margin:6px 0 10px}
+header p{margin:0;color:var(--muted);max-width:800px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -16px;padding:8px 16px;overflow-x:auto;white-space:nowrap}
+nav a{display:inline-block;margin-right:14px;color:var(--muted);text-decoration:none;font-size:13px;padding:4px 0}
+nav a:hover{color:var(--accent)}
+section{margin-top:44px}
+h2{font-size:21px;margin:0 0 4px}
+h2 + .lead{color:var(--muted);margin:0 0 18px}
+h3{font-size:16px;margin:22px 0 8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.chip{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;margin-right:4px;vertical-align:middle}
+.c-ok{background:var(--ok-soft);color:var(--ok)}
+.c-warn{background:var(--warn-soft);color:var(--warn)}
+.c-bad{background:var(--bad-soft);color:var(--bad)}
+.c-new{background:var(--new-soft);color:var(--new)}
+.c-info{background:var(--accent-soft);color:var(--accent)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--code);padding:1px 5px;border-radius:5px;word-break:break-word}
+pre{background:var(--code);border-radius:10px;padding:12px 14px;overflow-x:auto;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:10px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:color-mix(in srgb,var(--panel) 80%,var(--line))}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tldr{border-left:4px solid var(--accent);background:var(--accent-soft)}
+.tldr ul{margin:8px 0 0;padding-left:20px}
+.tldr li{margin:5px 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.kpi b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi span{font-size:12px;color:var(--muted)}
+.flow{display:flex;flex-direction:column}
+.step{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:22px}
+.step:not(:last-child)::after{content:"";position:absolute;left:28px;bottom:-22px;height:22px;border-left:2px solid var(--line)}
+.step:not(:last-child)::before{content:"";position:absolute;left:23px;bottom:-24px;border:6px solid transparent;border-top:8px solid var(--line);border-bottom:0}
+.step h4{margin:0 0 2px;font-size:14px}
+.step p{margin:0;font-size:13px;color:var(--muted)}
+.step.new{border-color:var(--new);background:var(--new-soft)}
+.step.store{border-style:dashed}
+.note{font-size:13px;color:var(--muted)}
+.legend{font-size:12.5px;color:var(--muted);margin:10px 0 0}
+.callout{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14px}
+.callout.warn{background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+.callout.bad{background:var(--bad-soft);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
+.callout.ok{background:var(--ok-soft);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.callout b:first-child{display:block;margin-bottom:2px}
+.states{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.state{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13px}
+.state b{display:block}
+.arrow{color:var(--muted);font-size:13px}
+footer{margin-top:56px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+.theme{float:right;font-size:12px;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:4px 10px;cursor:pointer}
+@media (max-width:560px){h1{font-size:24px}.kpi b{font-size:21px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <button class="theme" id="theme" type="button" aria-label="Đổi giao diện sáng/tối">Sáng / Tối</button>
+  <div class="kicker">SenClaw · nghiên cứu thiết kế · 2026-10-17 · đề xuất, chưa triển khai</div>
+  <h1>Hợp nhất Knowledge vào Facts</h1>
+  <p>Hôm nay "Knowledge" (đồ thị tri thức) và "Facts" (kho fact) là hai kho chạy song song, có hai luồng ghi và hai bộ công cụ. Tài liệu này đo kho đồ thị thật trên máy, so khái niệm hai bên, đề xuất một kho duy nhất, và vẽ <b>luồng update</b> đích cùng lộ trình chuyển dữ liệu.</p>
+</header>
+
+<nav aria-label="Mục lục">
+  <a href="#tom-tat">Tóm tắt</a>
+  <a href="#hien-trang">Hiện trạng đo được</a>
+  <a href="#anh-xa">Ánh xạ khái niệm</a>
+  <a href="#phuong-an">Phương án</a>
+  <a href="#thiet-ke">Thiết kế đích</a>
+  <a href="#update">Luồng update</a>
+  <a href="#doc">Luồng đọc</a>
+  <a href="#migrate">Chuyển dữ liệu</a>
+  <a href="#tuong-thich">Tương thích</a>
+  <a href="#lo-trinh">Lộ trình</a>
+  <a href="#cau-hoi">Câu hỏi mở</a>
+</nav>
+
+<section id="tom-tat">
+  <h2>Tóm tắt</h2>
+  <p class="lead">Nên hợp nhất, nhưng theo hướng <b>"Facts + Sources"</b> chứ không phải ép mọi thứ thành fact hay chuyển nguyên triplet.</p>
+  <div class="card tldr">
+    <b>Khuyến nghị</b>
+    <ul>
+      <li><b>Đồ thị hiện nay mỏng hơn vẻ ngoài.</b> 2.121 chunk văn bản nhưng chỉ <b>578</b> đã được trích xuất quan hệ (1.526 bị bỏ qua vì lúc đó không có LLM); <b>94%</b> cạnh đã bị decay xếp "ngủ"; chỉ khoảng <b>205</b> cạnh mang quan hệ có nghĩa (còn lại là <code>MENTIONS</code>, <code>ASSOCIATED_WITH</code>, <code>is_a</code>); <b>0</b> cạnh bị thay thế.</li>
+      <li><b>Phần lớn nội dung không vào recall mỗi lượt.</b> Arm đồ thị chỉ đọc thẻ <code>group:&lt;agent&gt;/default_memory</code> (639/2.121 chunk). Khối lớn nhất — bộ nhớ riêng của các Space App (moltbook 1.256 chunk…) — chỉ truy cập được qua API <code>space</code>.</li>
+      <li><b>Hai kho đang làm cùng việc ở hai nơi:</b> đều có thực thể, liên kết, dedupe, thay thế fact cũ (đồ thị: theo cardinality của predicate; Facts: theo <code>replaces</code> do model nêu), embedding, scope. Giữ hai bản là giữ gấp đôi mã, gấp đôi lỗi, gấp đôi giao diện.</li>
+      <li><b>Hợp nhất giải quyết luôn lỗi đã đo hôm nay:</b> đổi ý không kích hoạt vì model nhỏ không nêu <code>replaces</code> (<code>replaces_claimed=0</code> ở cả hai lượt thử). Cơ chế "slot" của đồ thị (predicate đơn trị → fact mới thay fact cũ bằng luật) có thể mang sang Facts, không cần model chỉ số thứ tự.</li>
+      <li><b>Một đường ghi duy nhất</b> cho mọi nguồn (chat, tóm tắt compaction, upload, <code>cog_add</code>, <code>knowledge.save</code> của app): làm sạch → quét secret → <b>lưu nguồn thô</b> → trích xuất → giải quyết (trùng / nhắc lại / thay thế) → lưu fact + thực thể + liên kết. Trích xuất chạy nền, có hàng đợi và thử lại, nên không bao giờ mất dữ liệu khi LLM tắt.</li>
+      <li><b>Chuyển dữ liệu không cần LLM ở bước đầu:</b> chunk → nguồn (giữ chữ và vector đã có), thực thể → bảng thực thể, ~205 cạnh có nghĩa → fact theo mẫu câu. Trích xuất fact thật từ 2.121 chunk là tuỳ chọn, chạy nền, theo từng scope.</li>
+      <li><b>Giữ <code>/api/cognitive/*</code>, <code>knowledge.*</code> và <code>cog_*</code> làm lớp tương thích</b> vài phiên bản: ít nhất 5 Space App đang gọi chúng.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="hien-trang">
+  <h2>Hiện trạng đo được</h2>
+  <p class="lead">Truy vấn chỉ-đọc vào <code>~/.senclaw/senclaw_cognitive.db</code> ngày 2026-10-17 (chỉ đếm, không đọc nội dung).</p>
+  <div class="kpis">
+    <div class="kpi"><b>2.121</b><span>chunk văn bản (TB 727 ký tự, tối đa 2.505)</span></div>
+    <div class="kpi"><b>578</b><span>chunk đã trích xuất quan hệ (27%)</span></div>
+    <div class="kpi"><b>1.526</b><span>chunk "bỏ qua vì không có LLM", chưa bao giờ trích xuất</span></div>
+    <div class="kpi"><b>520</b><span>thực thể · 33 loại · mention TB 1,0</span></div>
+    <div class="kpi"><b>1.503</b><span>cạnh · <b>1.416</b> đã archived (94%)</span></div>
+    <div class="kpi"><b>0</b><span>cạnh bị thay thế (<code>valid_to</code>)</span></div>
+    <div class="kpi"><b>1.858</b><span>chunk có vector (88%)</span></div>
+    <div class="kpi"><b>131</b><span>chunk có ít nhất một cạnh <code>MENTIONS</code> (6%)</span></div>
+  </div>
+
+  <h3>Cạnh theo loại</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Predicate</th><th>Số cạnh</th><th>Là gì</th></tr></thead>
+    <tbody>
+      <tr><td><code>MENTIONS</code></td><td class="num">810</td><td>chunk nhắc thực thể — dấu vết nguồn gốc, không phải tri thức</td></tr>
+      <tr><td><code>ASSOCIATED_WITH</code></td><td class="num">270</td><td>suy luận đồng xuất hiện (không LLM), tính lại được</td></tr>
+      <tr><td><code>is_a</code></td><td class="num">218</td><td>thực thể → loại; trùng với <code>type_name</code> của nút</td></tr>
+      <tr><td>quan hệ có nghĩa (<code>includes</code>, <code>is</code>, <code>requests</code>, <code>has_id</code>…)</td><td class="num">205</td><td>phần "tri thức" thật, chiếm 14% số cạnh</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Nội dung đến từ đâu (theo thẻ; một chunk có thể mang nhiều thẻ)</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Thẻ / phạm vi</th><th>Chunk</th><th>Ghi bởi</th><th>Vào recall mỗi lượt?</th></tr></thead>
+    <tbody>
+      <tr><td><code>global / moltbook</code></td><td class="num">1.256</td><td>Space App moltbook (<code>knowledge.save</code>, không gian riêng của app)</td><td><span class="chip c-bad">không</span></td></tr>
+      <tr><td><code>global / default_memory</code></td><td class="num">1.402</td><td>mọi lần app lưu qua bridge cũng gắn thẻ này</td><td><span class="chip c-bad">không</span> (arm chỉ đọc thẻ <i>group</i>)</td></tr>
+      <tr><td><code>global / feedback</code>, <code>trending</code></td><td class="num">447 · 87</td><td>Space App</td><td><span class="chip c-bad">không</span></td></tr>
+      <tr><td><code>group / default_memory</code></td><td class="num">639</td><td>hội thoại cũ, <code>cog_add</code>, upload — theo agent (<code>main</code> 206, <code>ssh</code> 141…)</td><td><span class="chip c-ok">có</span> (arm <code>cognitive</code>, khi <code>preCognitive</code> bật)</td></tr>
+      <tr><td><code>persona / soul*</code></td><td class="num">≥ 78</td><td>ingest <code>SOUL.md</code> — trùng với system prompt đã chứa SOUL.md mỗi phiên</td><td><span class="chip c-warn">không cần</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout warn"><b>Đồ thị đã co</b>Ngày 2026-08-08 đồ thị có 5.634 nút / 21.112 cạnh (<a href="../../docs/temporal-graph-research.md">temporal-graph-research</a>); nay còn 2.674 nút / 1.503 cạnh. Nguyên nhân chưa truy ra (có thể do maintenance dọn rác và gộp thực thể); nhưng nó cho thấy phần cấu trúc quan hệ vốn đã không bền.</div>
+
+  <h3>Bốn cổng ghi vào "Knowledge" hôm nay</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Cổng</th><th>Ai dùng</th><th>Đi qua</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/cognitive/add</code>, <code>/upload</code></td><td>Trang Knowledge; app <code>ai-chat</code> (upload)</td><td><code>CognitiveSystem::cognify</code> → chunk → trích xuất triplet</td></tr>
+      <tr><td>Bridge <code>knowledge.save / search / recall</code></td><td>Space App (moltbook…); mỗi app một <code>space</code> riêng, mặc định = id app</td><td>cùng <code>cognify</code>, gắn thẻ <code>global/default_memory</code> + <code>space</code></td></tr>
+      <tr><td>Tool <code>cog_add</code> / <code>cog_cognify</code></td><td>agent trong chat</td><td>cùng <code>cognify</code>, thẻ <code>group:&lt;agent&gt;/default_memory</code></td></tr>
+      <tr><td>Ingest <code>SOUL.md</code></td><td>daemon (watcher)</td><td>cùng <code>cognify</code>, thẻ <code>persona</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Cổng thứ năm đã tắt hôm nay: hội thoại (reflection) giờ chỉ ghi vào kho Facts.</p>
+</section>
+
+<section id="anh-xa">
+  <h2>Ánh xạ khái niệm: đồ thị → Facts</h2>
+  <p class="lead">Mỗi thứ của đồ thị hoặc đã có chỗ tương ứng trong Facts, hoặc nên bỏ, hoặc là thứ Facts đang thiếu.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Đồ thị (Knowledge)</th><th>Facts hiện có</th><th>Quyết định</th></tr></thead>
+    <tbody>
+      <tr><td>nút <code>chunk</code> (văn bản nguồn)</td><td>— (kho ghi chú có <code>memory_chunks</code>, nhưng cho file <code>.md</code>)</td><td><span class="chip c-new">thêm</span> bảng <b>Sources</b>: chữ nguồn + hash + vector + trạng thái trích xuất; fact trỏ về nguồn</td></tr>
+      <tr><td>nút <code>entity</code> + <code>entity_type</code></td><td>chuỗi khoá chữ thường trong <code>mem_fact_entities</code></td><td><span class="chip c-new">thêm</span> bảng <b>Entities</b> (khoá, loại, bí danh) để gộp alias ("HN" ↔ "Hà Nội") — logic merge của đồ thị mang sang</td></tr>
+      <tr><td>cạnh <code>MENTIONS</code></td><td><code>mem_fact_entities</code></td><td>tương đương; <b>bỏ</b> cạnh, giữ liên kết fact ↔ thực thể ↔ nguồn</td></tr>
+      <tr><td>cạnh <code>ASSOCIATED_WITH</code></td><td>liên kết ngữ nghĩa/thời gian (<code>mem_links</code>), arm <code>facts_graph</code></td><td><b>bỏ</b> — tính lại khi cần từ đồng xuất hiện</td></tr>
+      <tr><td>cạnh <code>is_a</code></td><td>—</td><td>trở thành <code>entity.type</code>; <b>bỏ</b> cạnh</td></tr>
+      <tr><td>cạnh quan hệ có nghĩa (subject–predicate–object)</td><td>fact là câu tự đủ nghĩa</td><td>chuyển thành fact theo mẫu câu + <b>giữ</b> <code>(subject, predicate)</code> làm <b>slot</b> (xem dưới)</td></tr>
+      <tr><td>supersession theo <code>cog_predicate_meta</code> (33 đơn trị / 14 đa trị)</td><td><code>replaces</code> do model nêu số thứ tự</td><td><span class="chip c-new">mang sang</span> — luật theo slot đơn trị, không cần model; <code>replaces</code> vẫn dùng bổ sung</td></tr>
+      <tr><td><code>valid_from / valid_to</code>, truy vấn <code>as_of</code></td><td><code>occurred_*</code>, <code>mentioned_at</code>, <code>superseded_at</code></td><td>đủ để trả lời "tại ngày X thì đúng gì": <code>mentioned_at ≤ X</code> và (<code>superseded_at</code> rỗng hoặc &gt; X)</td></tr>
+      <tr><td>Hebbian strengthen, decay, LTP, tier</td><td>recency (±10%) và <code>proof_count</code> (±5%)</td><td><b>bỏ</b>: 94% cạnh bị archive, mention TB 1,0 và salience TB 0,5 cho thấy động lực này gần như không phân biệt được gì. Xếp hạng bằng RRF × recency × bằng chứng đã đủ</td></tr>
+      <tr><td>node set (<code>group</code> / <code>persona</code> / <code>custom</code> / <code>global</code>)</td><td><code>bank</code> (thư mục agent) + <code>origin</code> (chat)</td><td><span class="chip c-new">mở rộng</span> <code>bank</code> thành khoá không gian: <code>main</code>, <code>app:moltbook</code>, <code>space:ai-office/nghien-cuu</code></td></tr>
+      <tr><td>spreading activation, GraphCompletion, GNN</td><td>RRF của 4 arm; mở rộng theo thực thể và liên kết</td><td>giữ <code>facts_graph</code>; GNN/LightGCN chỉ giữ nếu đo thấy có ích (chưa có số liệu)</td></tr>
+      <tr><td>Recall có LLM tổng hợp (<code>cog_recall</code>)</td><td>không (đường đọc không gọi model)</td><td>giữ như tính năng <b>theo yêu cầu</b> trên nền recall hợp nhất, không vào đường đọc mỗi lượt</td></tr>
+      <tr><td>ingest SOUL.md vào đồ thị</td><td>—</td><td><b>bỏ</b>: SOUL.md đã nằm trong system prompt</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Cái đồ thị làm được mà Facts chưa: "slot"</h3>
+  <p>Đồ thị biết <code>sell_price</code> chỉ có một giá trị tại một thời điểm, nên giá mới thay giá cũ mà không cần ai nêu. Facts thì dựa vào model chỉ ra "fact F2 bị thay" — và đo hôm nay cho thấy model nhỏ không làm việc đó trên đường thật (0/2 lượt, trong khi harness dựng sẵn được 15/18).</p>
+  <p>Đề xuất: trong cùng một lần gọi trích xuất, model trả thêm <b>tuỳ chọn</b> <code>subject</code> và <code>predicate</code> cho fact có dạng thuộc tính ("Người dùng · framework frontend ưa thích"). Mã chuẩn hoá thành <code>slot = (khoá chủ thể, predicate)</code>. Predicate nằm trong danh sách <b>đơn trị</b> (đã có seed 33 từ đồ thị) thì fact mới <i>tự động</i> thay fact cũ cùng slot; predicate lạ coi là đa trị — giữ nguyên nguyên tắc của đồ thị: "giữ một fact cũ thì cứu được, giết nhầm một fact đúng thì không". Việc model nêu <code>subject/predicate</code> là việc cũ mà các model nhỏ đã làm (578 chunk đã được trích triplet), dễ hơn việc trỏ số <code>[F2]</code>.</p>
+</section>
+
+<section id="phuong-an">
+  <h2>Phương án</h2>
+  <p class="lead">Ba cách hợp nhất, so theo những gì đã đo.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Tiêu chí</th><th>A · Giữ hai kho, chỉ gộp giao diện</th><th>B · Facts + Sources <span class="chip c-ok">khuyến nghị</span></th><th>C · Fact thành nút của đồ thị</th></tr></thead>
+    <tbody>
+      <tr><td>Ý tưởng</td><td>"Knowledge" là một tab hiển thị cả hai kho; hai luồng ghi vẫn tách</td><td>Một kho: nguồn thô + fact + thực thể + liên kết; đồ thị chỉ còn là cách <i>nhìn</i></td><td>Fact là một loại nút trong <code>cog_nodes</code>; dùng lại Hebbian/decay</td></tr>
+      <tr><td>Số luồng ghi</td><td>2 (đã tách) → vẫn 2</td><td><b>1</b></td><td>1</td></tr>
+      <tr><td>Giải quyết đổi ý (lỗi đo hôm nay)</td><td>không</td><td>có, bằng slot đơn trị + <code>replaces</code></td><td>có (đã có cardinality) nhưng thừa hưởng decay</td></tr>
+      <tr><td>Hợp với số đo</td><td>không: giữ phần 94% cạnh ngủ</td><td>bỏ decay/LTP, giữ phần có giá trị</td><td>giữ nguyên máy móc ít dùng</td></tr>
+      <tr><td>Nội dung app vào recall</td><td>không đổi (vẫn ngoài recall)</td><td>có thể, theo cấu hình <code>bank</code> mỗi agent đọc</td><td>có thể</td></tr>
+      <tr><td>Chi phí chuyển đổi</td><td>thấp</td><td>trung bình (bảng mới + migration + tương thích API)</td><td>cao: viết lại phần Facts đã làm lên đồ thị</td></tr>
+      <tr><td>Rủi ro chính</td><td>nợ kỹ thuật tăng; hai bộ giao diện cho người dùng</td><td>mất cấu trúc quan hệ nếu chuyển cẩu thả (chặn bằng slot + dry-run)</td><td>đi ngược phần đã đầu tư và đo ở Facts</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout ok"><b>Vì sao B</b>Hindsight (nguồn ý tưởng của kho Facts) cũng đi theo B: lược đồ của nó gồm <code>memory_units</code> (fact), <code>entities</code>, <code>unit_entities</code>, <code>entity_cooccurrences</code>, <code>memory_links</code> và <code>documents</code> — fact là đơn vị chính, thực thể và liên kết dẫn xuất từ fact, tài liệu chỉ là nguồn gốc (theo báo cáo nghiên cứu ngày 2026-10-16). Số đo ở đây ủng hộ cùng hướng: giá trị nằm ở văn bản có ngày và thực thể, không ở dư chấn Hebbian.</div>
+</section>
+
+<section id="thiet-ke">
+  <h2>Thiết kế đích</h2>
+  <p class="lead">Bốn bảng, một khoá phạm vi.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3 style="margin-top:0">Dữ liệu</h3>
+      <ul>
+        <li><b>Source</b> <code>mem_sources</code>: văn bản thô đã làm sạch, <code>kind</code> (<code>chat-window</code>, <code>compaction</code>, <code>upload</code>, <code>app</code>, <code>note</code>), hash (dedupe), vector, trạng thái trích xuất <code>pending | done | no_facts | skipped</code>, <code>bank</code>, <code>origin</code>.</li>
+        <li><b>Fact</b> <code>mem_facts</code> (đã có): + <code>source_id</code>, + <code>slot_subject</code>, <code>slot_predicate</code>.</li>
+        <li><b>Entity</b> <code>mem_entities</code>: khoá, loại, bí danh; nối với fact qua <code>mem_fact_entities</code> (đã có).</li>
+        <li><b>Link</b> <code>mem_links</code> (đã có): ngữ nghĩa, thời gian.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Phạm vi (ai thấy gì)</h3>
+      <ul>
+        <li><code>bank</code> = khoá không gian: thư mục agent (<code>main</code>), hoặc <code>app:&lt;id&gt;</code>, hoặc <code>space:&lt;tên&gt;</code>.</li>
+        <li><code>origin</code> = chat đã nói (đã làm hôm nay); rỗng = cả không gian. Quy tắc <code>Scope</code> giữ nguyên.</li>
+        <li>Agent đọc <code>bank</code> của chính nó; app đọc <code>app:&lt;id&gt;</code>. Việc một agent đọc thêm không gian của app là <b>cấu hình tường minh</b>, mặc định tắt.</li>
+        <li><code>global/default_memory</code> hiện gắn cho mọi bản lưu của app không còn ý nghĩa: bỏ.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="update">
+  <h2>Luồng update</h2>
+  <p class="lead">Một đường ghi cho mọi nguồn; mỗi bước có một việc và một cách thất bại không làm mất dữ liệu.</p>
+  <div class="grid g2">
+    <div>
+      <h3 style="margin-top:0">Đường ghi duy nhất <span class="chip c-new">đích</span></h3>
+      <div class="flow">
+        <div class="step"><h4>1 · Nguồn vào</h4><p>Cửa sổ hội thoại · tóm tắt compaction · upload · <code>cog_add</code> · <code>knowledge.save</code> của app · sửa tay trên giao diện. Mỗi nguồn khai báo <code>bank</code>, <code>origin</code>, <code>kind</code>.</p></div>
+        <div class="step new"><h4>2 · Chuẩn hoá và quét secret</h4><p><code>sanitize</code> (bỏ phong bì kênh) → <code>defense::scrub</code>. Chạy trước mọi thứ khác, kể cả lưu nguồn: secret không bao giờ vào kho.</p></div>
+        <div class="step store"><h4>3 · Lưu nguồn thô</h4><p>Cắt chunk, dedupe theo hash, embed nếu có model (không có thì để trống, bù sau). Trạng thái <code>pending</code>. <b>Từ đây dữ liệu không mất</b> dù mọi bước sau hỏng.</p></div>
+        <div class="step new"><h4>4 · Hàng đợi trích xuất (nền)</h4><p>Một worker lấy nguồn <code>pending</code>, giới hạn tốc độ theo ngân sách model; ưu tiên cửa sổ chat, rồi upload, rồi app. Không LLM → giữ <code>pending</code>, thử lại khi có LLM (thay cho "SkippedNoLlm" hiện nay, vốn đã làm 1.526 chunk bị bỏ quên).</p></div>
+        <div class="step new"><h4>5 · Trích xuất</h4><p>Một lần gọi/chunk, prompt kèm <code>KNOWN FACTS</code> (chỉ những fact chat/không gian đó được thấy). Model trả fact (câu tự đủ nghĩa, ngày, thực thể) và <b>tuỳ chọn</b> <code>subject/predicate</code> và <code>replaces</code>.</p></div>
+        <div class="step new"><h4>6 · Giải quyết</h4><p>Với mỗi fact: trùng hash / cosine ≥ 0,95 / "nói lại" → <b>nhắc lại</b> (<code>proof_count</code>+1). Cùng slot đơn trị hoặc <code>replaces</code> hợp lệ → <b>thay</b> (cũ bị ẩn, giữ lịch sử). Còn lại → <b>mới</b>. Entity: chuẩn hoá khoá, gộp bí danh.</p></div>
+        <div class="step store"><h4>7 · Lưu fact, thực thể, liên kết</h4><p>Gắn <code>source_id</code>; liên kết ngữ nghĩa top 5 (≥ 0,7) và thời gian ±24h. Nguồn chuyển <code>done</code> hoặc <code>no_facts</code>.</p></div>
+        <div class="step"><h4>8 · Bảo trì (hiếm)</h4><p>Bù vector cho nguồn/fact chưa có · gộp bí danh bằng vector (không LLM) · thử lại <code>pending</code> · dọn nguồn rác. <b>Không decay, không LTP.</b></p></div>
+      </div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Vòng đời một fact</h3>
+      <div class="states">
+        <div class="state"><b>ứng viên</b>model vừa trả</div><span class="arrow">→ giải quyết →</span>
+        <div class="state"><b>mới</b>proof 1</div>
+      </div>
+      <div class="states">
+        <div class="state"><b>mới</b></div><span class="arrow">nói lại →</span>
+        <div class="state"><b>được củng cố</b>proof n</div>
+      </div>
+      <div class="states">
+        <div class="state"><b>hiện hành</b></div><span class="arrow">đổi ý / slot đơn trị →</span>
+        <div class="state"><b>bị thay</b>ẩn, giữ lịch sử (<code>superseded_by</code>)</div>
+      </div>
+      <div class="states">
+        <div class="state"><b>bị thay</b></div><span class="arrow">xoá fact thay thế →</span>
+        <div class="state"><b>sống lại</b>trigger đã có</div>
+      </div>
+      <div class="states">
+        <div class="state"><b>bất kỳ</b></div><span class="arrow">người dùng quên →</span>
+        <div class="state"><b>đã xoá</b>vĩnh viễn</div>
+      </div>
+
+      <h3>Nguồn → phạm vi → chế độ</h3>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Nguồn</th><th>bank · origin</th><th>Trích xuất</th></tr></thead>
+        <tbody>
+          <tr><td>Cửa sổ chat (2.000 ký tự / im 2 phút)</td><td>agent · chat</td><td>ngay, ưu tiên cao</td></tr>
+          <tr><td>Tóm tắt compaction</td><td>agent · chat</td><td>ngay</td></tr>
+          <tr><td>Upload / "Add knowledge"</td><td>agent hoặc <code>space</code> do người chọn · rỗng</td><td>nền, theo tài liệu</td></tr>
+          <tr><td><code>cog_add</code> của agent</td><td>agent · chat</td><td>ngay (nội dung ngắn, đã được chọn lọc)</td></tr>
+          <tr><td><code>knowledge.save</code> của app</td><td><code>app:&lt;id&gt;</code> · rỗng</td><td>nền, có trần số lần gọi/ngày; chỉ lưu nguồn khi vượt trần</td></tr>
+          <tr><td>Sửa tay (thêm/sửa/quên fact)</td><td>theo agent đang xem</td><td>không — người nhập là nguồn đáng tin</td></tr>
+          <tr><td><code>SOUL.md</code>, <code>USER.md</code></td><td>—</td><td><b>không vào kho</b> (đã ở system prompt)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <h3>Luật quyết định ở bước 6</h3>
+<pre>fact F (bank, origin, text, when, entities, slot?, replaces?)
+known = fact hiện hành mà (bank, origin) được thấy, gần với F nhất
+1. restated(known, F)            → nhắc lại known (proof+1); dừng
+2. cosine(F, k) ≥ 0,95 cùng kind  → nhắc lại k;             dừng
+3. lưu F (mới)
+4. với slot đơn trị (subject, predicate):
+     mọi fact hiện hành cùng slot, khác giá trị  → bị F thay
+5. với từng số n trong replaces (hợp lệ, cùng chủ đề) → known[n] bị F thay
+6. liên kết ngữ nghĩa / thời gian; gắn source_id</pre>
+  <p class="note">Bước 4 là phần mới. Nó chỉ chạm fact <i>cùng bank và cùng phạm vi chat</i>, nên không bao giờ thay fact của chat khác. Predicate lạ hoặc đa trị (<code>likes</code>, <code>knows</code>) thì bỏ qua bước 4.</p>
+</section>
+
+<section id="doc">
+  <h2>Luồng đọc</h2>
+  <p class="lead">Gần như không đổi: arm cũ thay bằng arm trên kho hợp nhất. Vẫn 0 lần gọi model.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Arm</th><th>Đọc</th><th>Ghi chú</th></tr></thead>
+    <tbody>
+      <tr><td><code>facts_semantic / keyword / graph / temporal</code></td><td>fact hiện hành trong phạm vi chat</td><td>không đổi; <code>facts_graph</code> mở rộng theo thực thể (bảng Entities có bí danh nên bắt thêm "HN" ↔ "Hà Nội")</td></tr>
+      <tr><td><code>sources</code> <span class="chip c-new">mới</span></td><td>chunk nguồn khớp từ khoá/vector</td><td>thay arm <code>cognitive</code>; chỉ lấp chỗ trống khi fact chưa trích xuất xong — để nội dung vừa upload hay nội dung app tìm được ngay</td></tr>
+      <tr><td><code>curated</code></td><td>ghi chú <code>.md</code></td><td>giữ; <code>MEMORY.md</code> vẫn ghim</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><b>as_of</b>: "tại ngày X thì đúng gì" = fact có <code>mentioned_at ≤ X</code> và (<code>superseded_at</code> rỗng hoặc &gt; X). Thay <code>cog_history</code> và truy vấn <code>as_of</code> của đồ thị.</li>
+    <li><b>Recall có tổng hợp</b> (<code>cog_recall</code>): giữ làm lệnh theo yêu cầu, chạy trên kết quả recall hợp nhất.</li>
+    <li><b>Không gian của app</b>: <code>knowledge.search/recall</code> đọc <code>bank = app:&lt;id&gt;</code>, cùng các arm.</li>
+  </ul>
+</section>
+
+<section id="migrate">
+  <h2>Chuyển dữ liệu hiện có</h2>
+  <p class="lead">Bước đầu không gọi LLM, chạy thử không ghi (dry-run), có sao lưu và đường lui.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Đối tượng</th><th>Số lượng thật</th><th>Thành</th><th>LLM?</th></tr></thead>
+    <tbody>
+      <tr><td>nút <code>chunk</code></td><td class="num">2.121</td><td><b>Source</b>: giữ nguyên chữ, hash, vector (1.858 đã có); <code>kind</code>/<code>bank</code> suy từ thẻ; trạng thái <code>pending</code> cho 1.526 chunk chưa trích xuất, <code>no_facts</code> cho 17, <code>done</code> cho 578</td><td>không</td></tr>
+      <tr><td>nút <code>entity</code> + <code>entity_type</code></td><td class="num">520 + 33</td><td><b>Entity</b> (khoá, loại), gộp bí danh theo <code>props.aka</code> đã có</td><td>không</td></tr>
+      <tr><td>cạnh quan hệ có nghĩa</td><td class="num">205</td><td><b>Fact</b> theo mẫu "<i>chủ thể</i> — <i>predicate</i> — <i>đối tượng</i>" kèm slot; ngày từ <code>valid_from</code></td><td>không</td></tr>
+      <tr><td><code>MENTIONS</code></td><td class="num">810</td><td>liên kết nguồn ↔ thực thể</td><td>không</td></tr>
+      <tr><td><code>ASSOCIATED_WITH</code>, <code>is_a</code></td><td class="num">270 · 218</td><td>bỏ (tính lại / thành <code>entity.type</code>)</td><td>không</td></tr>
+      <tr><td>chunk <code>persona / soul*</code></td><td class="num">≥ 78</td><td>bỏ (đã ở system prompt)</td><td>không</td></tr>
+      <tr><td>thẻ node set</td><td class="num">161 bộ</td><td><code>bank</code>/<code>origin</code>: <code>group:main</code> → <code>main</code>; <code>global/moltbook</code> → <code>app:moltbook</code>; <code>custom:ai-office:*</code> → <code>space:…</code></td><td>không</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Trích xuất fact thật từ 2.121 chunk — tuỳ chọn, chạy nền</h3>
+  <p>Một lần gọi cho mỗi chunk. Số đo trên <code>gemma-4-e2b</code> cục bộ: 11–30 giây mỗi lần trích xuất (trung vị 11,5 giây ở harness, 15–30 giây qua đường chat), nên 2.121 chunk cỡ <b>7–18 giờ</b> trên máy đó (chưa đo trên <code>gemma-4-e4b</code> hay model đám mây). Vì vậy: chạy theo từng scope (agent trước, app sau), có nút dừng, ưu tiên thấp hơn chat, và <b>không chặn</b> việc dùng nguồn thô — nguồn đã tìm được bằng từ khoá ngay sau bước chuyển.</p>
+
+  <div class="callout warn"><b>An toàn</b>Sao lưu <code>senclaw_cognitive.db</code> trước (đã có thói quen <code>sqlite3 .backup</code>); bảng đồ thị <b>giữ nguyên, chỉ đọc</b> ít nhất hai bản phát hành sau khi chuyển; báo cáo dry-run ghi số liệu từng đối tượng và những gì sẽ bỏ; chạy lại được (idempotent theo hash nguồn).</div>
+</section>
+
+<section id="tuong-thich">
+  <h2>Tương thích và giao diện</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Bề mặt</th><th>Người dùng</th><th>Sau hợp nhất</th></tr></thead>
+    <tbody>
+      <tr><td><code>/api/cognitive/search · spaces · stats · top-nodes · node/:id · upload · add</code></td><td>app <code>ai-chat</code>, <code>ai-office</code>, <code>search</code>, <code>zeach</code></td><td>giữ nguyên hợp đồng, đọc kho hợp nhất (nút = fact/nguồn/thực thể); <code>spaces</code> liệt kê <code>bank</code>. Đánh dấu cũ, gỡ sau ≥ 2 bản</td></tr>
+      <tr><td>Bridge <code>knowledge.save / search / recall</code></td><td>Space App (moltbook…)</td><td>giữ; <code>save</code> → đường ghi duy nhất với <code>bank = app:&lt;id&gt;</code></td></tr>
+      <tr><td>Tool <code>cog_add / cog_search / cog_recall / cog_forget / cog_history</code></td><td>agent</td><td>giữ tên, trỏ sang cùng đường ghi/đọc; <code>memory_search_facts</code>/<code>memory_forget_fact</code> trở thành cách gọi chính</td></tr>
+      <tr><td>Trang Knowledge (web, desktop)</td><td>người dùng</td><td>Tab: <b>Facts</b> (chính), <b>Nguồn</b>, <b>Đồ thị</b> (nhìn thực thể + liên kết), <b>Thêm tri thức</b>, <b>Bảo trì</b>. Bỏ "Decay log"</td></tr>
+      <tr><td><code>preCognitive</code> / <code>memoryRecall</code></td><td>Settings → Agent behavior</td><td><code>preCognitive</code> thành công tắc của arm <code>sources</code>; kho Facts vẫn luôn đọc</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="lo-trinh">
+  <h2>Lộ trình và cổng nghiệm thu</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Pha</th><th>Làm gì</th><th>Xong khi</th></tr></thead>
+    <tbody>
+      <tr><td><b>H0</b></td><td>Chốt quyết định ở mục "Câu hỏi mở"; dựng bộ eval cho slot (đổi ý trên đường thật, giá cả đơn trị, thuộc tính đa trị)</td><td>có ca đo mà hiện tại <b>đỏ</b></td></tr>
+      <tr><td><b>H1</b> <span class="chip c-ok">đã làm 2026-10-17</span></td><td>Slot + supersession theo predicate đơn trị trong Facts (prompt thêm <code>subject/predicate</code>, bảng <code>predicate_meta</code> mang sang). Chưa đụng đồ thị</td><td>ca đổi ý xanh trên model nhỏ thật; eval cũ không tụt; không fact nào của chat khác bị thay</td></tr>
+      <tr><td><b>H2</b></td><td>Bảng Sources + hàng đợi trích xuất; đường ghi duy nhất cho upload, <code>cog_add</code>, <code>knowledge.save</code> (sau cờ cấu hình)</td><td>tắt LLM rồi bật lại thì không còn chunk "bỏ qua vĩnh viễn"; nguồn tìm được ngay bằng từ khoá</td></tr>
+      <tr><td><b>H3</b></td><td>Bảng Entities + gộp bí danh bằng vector</td><td>"HN" ↔ "Hà Nội" được bắt trong eval</td></tr>
+      <tr><td><b>H4</b></td><td>Công cụ chuyển dữ liệu (dry-run → chạy thật) + báo cáo; trích xuất nền tuỳ chọn</td><td>dry-run khớp số liệu mục trên; chạy hai lần không nhân đôi</td></tr>
+      <tr><td><b>H5</b></td><td>Đổi arm <code>cognitive</code> → <code>sources</code>; lớp tương thích API/tool; giao diện Knowledge mới (web + desktop)</td><td>5 app còn chạy (4 qua REST, moltbook qua bridge); eval recall ≥ hiện tại; p95 đọc không tăng</td></tr>
+      <tr><td><b>H6</b></td><td>Tắt ghi vào đồ thị; gỡ decay/LTP/ingest SOUL; bảng đồ thị chỉ đọc</td><td>hai bản phát hành không có báo lỗi hồi quy</td></tr>
+      <tr><td><b>H7</b></td><td>Xoá mã và bảng đồ thị, tài liệu cũ chuyển thành lịch sử</td><td>người dùng xác nhận</td></tr>
+    </tbody>
+  </table></div>
+
+  <p class="note"><b>H1 đã làm</b> (slot đơn trị, chưa kèm bảng Sources/Entities): trên model 2B, 11/11 ca đổi ý dựng sẵn bị ẩn, trong đó 3 lần chỉ nhờ luật; qua đường chat thật kịch bản khó từ 1/3 lên 2/3 (mẫu nhỏ). Còn yếu ở fact nhiều thuộc tính. Chi tiết: <code>plans/reports/eval-261017-2145-slot-supersession-real-model.md</code>.</p>
+
+  <h3>Rủi ro</h3>
+  <div class="callout bad"><b>Mất cấu trúc quan hệ</b>Chuyển 205 cạnh thành câu chữ làm mất khả năng duyệt theo predicate. Giảm nhẹ: giữ slot, giữ liên kết thực thể, và chỉ chuyển sau khi H1 đã chứng minh slot hoạt động. Đồ thị gốc vẫn giữ nguyên, chỉ đọc.</div>
+  <div class="callout warn"><b>Chi phí trích xuất nền</b>Tài liệu và nội dung app nhiều hơn chat nhiều lần. Cần trần ngân sách và ưu tiên; không được để hàng đợi làm chậm hay làm hỏng cửa sổ chat.</div>
+  <div class="callout warn"><b>Slot sai</b>Một predicate bị phân loại nhầm đơn trị sẽ ẩn fact đúng. Giảm nhẹ: chỉ danh sách seed đơn trị mới tự thay thế, predicate lạ mặc định đa trị, fact bị thay luôn khôi phục được (xoá fact thay thế thì fact cũ sống lại) và hiện được bằng "Hiện fact đã bị thay".</div>
+  <div class="callout warn"><b>Vòng lặp vọng lại</b>Đo hôm nay: câu trả lời của assistant nhắc lại điều vừa recall rồi bị trích xuất thành fact mới. Hợp nhất không tự sửa; cần quyết định riêng về việc có đưa lời assistant vào cửa sổ trích xuất hay không (xem câu hỏi mở).</div>
+
+  <h3>Không làm</h3>
+  <ul>
+    <li>Không gọi model trên đường đọc.</li>
+    <li>Không ghi <code>USER.md</code> từ fact (rủi ro chèn lệnh qua chat nhóm).</li>
+    <li>Không giữ decay/LTP "cho chắc": chúng không đo được lợi ích nào.</li>
+    <li>Không xoá đồ thị trước khi người dùng xác nhận bản chuyển.</li>
+  </ul>
+</section>
+
+<section id="cau-hoi">
+  <h2>Câu hỏi mở — cần bạn quyết</h2>
+  <ol>
+    <li><b>Slot có đáng làm trước?</b> Đề xuất đặt H1 lên đầu vì nó sửa lỗi đổi ý đã đo, độc lập với việc hợp nhất. Có đồng ý tách H1 làm việc riêng?</li>
+    <li><b>Nội dung của Space App</b> (moltbook…) có nên được agent chính đọc khi recall không, hay vẫn chỉ app đó đọc? Quyết định này định ra <code>bank</code> mà agent được phép đọc.</li>
+    <li><b>Trích xuất nền cho 2.121 chunk cũ</b>: chạy hết, chỉ chạy các scope agent, hay không chạy (chỉ dùng nguồn thô)? Phụ thuộc model và chi phí chấp nhận được.</li>
+    <li><b>Lời của assistant trong cửa sổ trích xuất</b>: giữ (ngữ cảnh cho đại từ) hay bỏ (chặn vòng lặp vọng lại)? Cần thử trên đường thật cả hai cách.</li>
+    <li><b>Lịch gỡ lớp tương thích</b>: hai bản phát hành có đủ cho các app <code>ai-chat</code>, <code>ai-office</code>, <code>search</code>, <code>zeach</code> chuyển sang API mới không?</li>
+    <li><b>Đồ thị trực quan</b> (trang Graph explorer): giữ như một cách nhìn dẫn xuất từ thực thể + liên kết, hay bỏ?</li>
+  </ol>
+</section>
+
+<footer>
+  Nguồn: <code>src/memory/cognitive/{schema,cognify,graph_store,decay_tick,maintenance,soul_ingest,retrievers}.rs</code>, <code>src/memory/engine/arms.rs</code> (arm <code>cognitive</code> chỉ đọc <code>NodeSet::group(folder,"default_memory")</code>), <code>src/gateway/ui_server/space.rs</code> (bridge <code>knowledge.*</code>), <code>docs/knowledge-cognitive-flow.md</code>, <code>docs/temporal-graph-research.md</code>, <code>docs/memory-engine.md</code>; báo cáo đo <code>plans/reports/test-261017-1905-memory-engine-end-to-end-local-model.md</code>. Số liệu đồ thị: <code>~/.senclaw/senclaw_cognitive.db</code>, 2026-10-17, chỉ-đọc. Các con số "model nhỏ" lấy từ đo trên <code>gemma-4-e2b</code>; chưa đo trên <code>gemma-4-e4b</code>.
+</footer>
+</div>
+<script>
+(function(){
+  var b=document.getElementById('theme'), r=document.documentElement;
+  try{var s=localStorage.getItem('theme'); if(s) r.setAttribute('data-theme',s);}catch(e){}
+  b.addEventListener('click',function(){
+    var dark=r.getAttribute('data-theme')==='dark' || (!r.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
+    var next=dark?'light':'dark'; r.setAttribute('data-theme',next);
+    try{localStorage.setItem('theme',next);}catch(e){}
+  });
+})();
+</script>
+</body>
+</html>

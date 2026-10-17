@@ -20,6 +20,7 @@ use axum::Router;
 
 use super::core::AppError;
 use crate::memory::cognitive::retrievers::build_fts_match;
+use crate::memory::engine::facts::store::Scope;
 use crate::memory::engine::facts::{self, FactEngine, StoredFact};
 
 const DEFAULT_LIMIT: u32 = 50;
@@ -37,6 +38,8 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
 fn router<S: Clone + Send + Sync + 'static>(resolver: Resolver) -> Router<S> {
     Router::new()
         .route("/api/memory/facts", get(facts_list))
+        // A literal sibling of `:id`; ids are generated, never the word "banks".
+        .route("/api/memory/facts/banks", get(facts_banks))
         .route("/api/memory/facts/:id", delete(fact_forget))
         .with_state(resolver)
 }
@@ -65,6 +68,14 @@ fn wire(f: &StoredFact) -> serde_json::Value {
         "entities": f.entities,
         "proofCount": f.proof_count,
         "supersededBy": f.superseded_by,
+        // The chat it was said in; empty for the whole agent.
+        "origin": f.origin,
+        // Which attribute of whom it states, when the extractor said (a new
+        // value for a single-valued one replaces the old by rule).
+        "slot": f.slot.as_ref().map(|s| serde_json::json!({
+            "subject": s.subject,
+            "predicate": s.predicate,
+        })),
     })
 }
 
@@ -94,12 +105,14 @@ async fn facts_list(
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT) as usize;
     let found = match q.q.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         Some(text) => match build_fts_match(text) {
-            Some(m) => engine.store.search_keyword(&q.bank, &m, None, limit),
+            Some(m) => engine
+                .store
+                .search_keyword(&q.bank, &m, None, limit, Scope::Agent),
             None => Ok(Vec::new()),
         },
         None => engine
             .store
-            .recent(&q.bank, limit, q.history.unwrap_or(false)),
+            .recent(&q.bank, limit, q.history.unwrap_or(false), Scope::Agent),
     }
     .map_err(internal)?;
     Ok(Json(serde_json::json!({
@@ -107,6 +120,20 @@ async fn facts_list(
         "total": engine.store.count(&q.bank).map_err(internal)?,
         "count": found.len(),
         "facts": found.iter().map(wire).collect::<Vec<_>>(),
+    })))
+}
+
+/// GET /api/memory/facts/banks — the agents that have facts, so a client can
+/// offer them instead of asking for a folder name.
+async fn facts_banks(State(resolve): State<Resolver>) -> Result<Json<serde_json::Value>, AppError> {
+    let banks = engine(&resolve)?.store.banks().map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "banks": banks.iter().map(|b| serde_json::json!({
+            "bank": b.bank,
+            "current": b.current,
+            "replaced": b.replaced,
+            "lastMentionedAt": b.last_mentioned_at,
+        })).collect::<Vec<_>>(),
     })))
 }
 
@@ -164,6 +191,8 @@ mod tests {
                         embedding: None,
                         model: None,
                         source: "test".into(),
+                        origin: String::new(),
+                        slot: None,
                     },
                 )
                 .unwrap()
@@ -208,6 +237,108 @@ mod tests {
             .iter()
             .map(|f| f["text"].as_str().unwrap().to_string())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_fact_says_which_attribute_it_states_when_it_has_a_slot() {
+        let (e, _) = seeded();
+        e.store
+            .insert(
+                "main",
+                &NewFact {
+                    text: "Lan lives in Hue".into(),
+                    kind: FactKind::World,
+                    occurred: None,
+                    mentioned_at: 99,
+                    entities: vec![],
+                    embedding: None,
+                    model: None,
+                    source: "test".into(),
+                    origin: String::new(),
+                    slot: crate::memory::engine::facts::slots::read("Lan", "lives in"),
+                },
+            )
+            .unwrap();
+        let (_, body) = call(Some(e), Method::GET, "/api/memory/facts?bank=main").await;
+        let facts = body["facts"].as_array().unwrap();
+        let lan = facts
+            .iter()
+            .find(|f| f["text"] == "Lan lives in Hue")
+            .unwrap();
+        assert_eq!(lan["slot"]["subject"], "lan");
+        assert_eq!(lan["slot"]["predicate"], "lives_in");
+        // Most facts state no attribute.
+        assert!(facts
+            .iter()
+            .filter(|f| f["text"] != "Lan lives in Hue")
+            .all(|f| f["slot"].is_null()));
+    }
+
+    #[tokio::test]
+    async fn a_fact_says_which_chat_it_was_said_in() {
+        let (e, _) = seeded();
+        e.store
+            .insert(
+                "main",
+                &NewFact {
+                    text: "Lan works at Orion".into(),
+                    kind: FactKind::World,
+                    occurred: None,
+                    mentioned_at: 99,
+                    entities: vec![],
+                    embedding: None,
+                    model: None,
+                    source: "test".into(),
+                    origin: "web:a".into(),
+                    slot: None,
+                },
+            )
+            .unwrap();
+        let (_, body) = call(Some(e), Method::GET, "/api/memory/facts?bank=main").await;
+        let facts = body["facts"].as_array().unwrap();
+        let lan = facts
+            .iter()
+            .find(|f| f["text"] == "Lan works at Orion")
+            .unwrap();
+        assert_eq!(lan["origin"], "web:a");
+        // The owner's listing is the whole agent's: facts of every chat and the untagged.
+        assert!(facts.iter().any(|f| f["origin"] == ""));
+        assert_eq!(facts.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn banks_list_each_agent_with_current_and_replaced_counts() {
+        let (e, ids) = seeded();
+        // "The deploy is on Friday" (ids[2]) is replaced by "Sen prefers dark mode".
+        assert!(e.store.supersede("main", &ids[2], &ids[1], 50).unwrap());
+        let (status, body) = call(Some(e), Method::GET, "/api/memory/facts/banks").await;
+        assert_eq!(status, StatusCode::OK);
+        let banks = body["banks"].as_array().unwrap();
+        assert_eq!(banks.len(), 2);
+        let main = banks.iter().find(|b| b["bank"] == "main").unwrap();
+        assert_eq!(
+            (main["current"].as_u64(), main["replaced"].as_u64()),
+            (Some(2), Some(1))
+        );
+        assert_eq!(main["lastMentionedAt"], 30);
+        let other = banks.iter().find(|b| b["bank"] == "other").unwrap();
+        assert_eq!(
+            (other["current"].as_u64(), other["replaced"].as_u64()),
+            (Some(1), Some(0))
+        );
+        // The bank spoken of most recently comes first.
+        assert_eq!(banks[0]["bank"], "other");
+    }
+
+    #[tokio::test]
+    async fn banks_is_empty_without_facts_and_503_before_the_store_starts() {
+        let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
+        let empty = Arc::new(FactEngine::new(db, None));
+        let (status, body) = call(Some(empty), Method::GET, "/api/memory/facts/banks").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["banks"].as_array().unwrap().len(), 0);
+        let (status, _) = call(None, Method::GET, "/api/memory/facts/banks").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

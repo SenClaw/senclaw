@@ -11,7 +11,7 @@
 use chrono::NaiveDate;
 
 use super::extract::span_label;
-use super::store::{FactStore, StoredFact};
+use super::store::{FactStore, Scope, StoredFact};
 use super::temporal::parse_window;
 use crate::memory::cognitive::retrievers::build_fts_match;
 
@@ -21,26 +21,27 @@ pub const MAX_LIMIT: usize = 30;
 /// Facts for a lookup: the newest ones when there is no query, otherwise the
 /// best word matches, then — when the query names a time ("hôm qua", "tháng 3")
 /// — whatever happened in that period, so "what did we do yesterday" works
-/// with no word in common.
+/// with no word in common. `scope` is what the asking conversation may see.
 pub fn lookup(
     store: &FactStore,
     bank: &str,
     query: &str,
     today: NaiveDate,
     limit: usize,
+    scope: Scope<'_>,
 ) -> anyhow::Result<Vec<StoredFact>> {
     let limit = limit.clamp(1, MAX_LIMIT);
     let query = query.trim();
     if query.is_empty() {
-        return store.recent(bank, limit, false);
+        return store.recent(bank, limit, false, scope);
     }
     let window = parse_window(query, today);
     let mut found = match build_fts_match(query) {
-        Some(m) => store.search_keyword(bank, &m, window, limit)?,
+        Some(m) => store.search_keyword(bank, &m, window, limit, scope)?,
         None => Vec::new(),
     };
     if let Some(window) = window {
-        for f in store.in_window(bank, window, limit)? {
+        for f in store.in_window(bank, window, limit, scope)? {
             if found.len() >= limit {
                 break;
             }
@@ -77,9 +78,21 @@ pub fn render(facts: &[StoredFact]) -> String {
         .join("\n")
 }
 
-/// Forget one of the agent's own facts by its full id.
-pub fn forget(store: &FactStore, bank: &str, id: &str) -> String {
-    match store.delete_in_bank(bank, id.trim()) {
+/// Forget one of the agent's own facts by its full id — one `scope` lets the
+/// caller see, so a chat cannot delete a fact it was never shown.
+pub fn forget(store: &FactStore, bank: &str, id: &str, scope: Scope<'_>) -> String {
+    let id = id.trim();
+    let visible = store
+        .get(id)
+        .ok()
+        .flatten()
+        .is_some_and(|f| scope.allows(bank, &f.origin));
+    let outcome = if visible {
+        store.delete_in_bank(bank, id)
+    } else {
+        Ok(false)
+    };
+    match outcome {
         Ok(true) => format!("Forgot fact {}.", id.trim()),
         Ok(false) => format!(
             "No fact with id '{}' in this agent's memory. Use memory_search_facts to find the id.",
@@ -112,6 +125,8 @@ mod tests {
             embedding: None,
             model: None,
             source: "test".into(),
+            origin: String::new(),
+            slot: None,
         };
         match s.insert(bank, &f).unwrap() {
             Inserted::New(id) => id,
@@ -127,12 +142,63 @@ mod tests {
         v.iter().map(|f| f.text.as_str()).collect()
     }
 
+    fn add_in(s: &FactStore, bank: &str, origin: &str, text: &str) -> String {
+        let f = NewFact {
+            text: text.into(),
+            kind: FactKind::World,
+            occurred: None,
+            mentioned_at: 10,
+            entities: vec![],
+            embedding: None,
+            model: None,
+            source: "test".into(),
+            origin: origin.into(),
+            slot: None,
+        };
+        match s.insert(bank, &f).unwrap() {
+            Inserted::New(id) => id,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_chat_can_neither_see_nor_forget_what_another_chat_said() {
+        let s = store();
+        let mine = add_in(&s, "main", "web:a", "Sen likes tea");
+        let theirs = add_in(&s, "main", "web:b", "Sen likes coffee");
+        let shared = add_in(&s, "main", "", "Sen lives in Hue");
+        let a = Scope::Chat("web:a");
+
+        let listed = lookup(&s, "main", "", today(), 10, a).unwrap();
+        // Same second, so the order between them is not defined: compare as a set.
+        let mut listed = texts(&listed);
+        listed.sort_unstable();
+        assert_eq!(listed, ["Sen likes tea", "Sen lives in Hue"]);
+        let searched = lookup(&s, "main", "sen", today(), 10, a).unwrap();
+        assert_eq!(texts(&searched).len(), 2);
+        assert!(!texts(&searched).contains(&"Sen likes coffee"));
+
+        // A guessed or leaked id gets the same answer as one that does not exist.
+        let refused = forget(&s, "main", &theirs, a);
+        assert!(refused.starts_with("No fact with id"), "{refused}");
+        assert_eq!(s.count("main").unwrap(), 3);
+        assert!(forget(&s, "main", &mine, a).starts_with("Forgot"));
+        assert!(forget(&s, "main", &shared, a).starts_with("Forgot"));
+        assert_eq!(
+            s.count("main").unwrap(),
+            1,
+            "only the other chat's fact is left"
+        );
+        // The owner's unscoped view still reaches it.
+        assert!(forget(&s, "main", &theirs, Scope::Agent).starts_with("Forgot"));
+    }
+
     #[test]
     fn no_query_lists_the_newest_first() {
         let s = store();
         add(&s, "main", "older fact about Hue", None, 10);
         add(&s, "main", "newer fact about Hanoi", None, 20);
-        let got = lookup(&s, "main", "  ", today(), 10).unwrap();
+        let got = lookup(&s, "main", "  ", today(), 10, Scope::Agent).unwrap();
         assert_eq!(
             texts(&got),
             ["newer fact about Hanoi", "older fact about Hue"]
@@ -144,7 +210,7 @@ mod tests {
         let s = store();
         add(&s, "main", "Emily moved to Hue", None, 10);
         add(&s, "main", "The deploy is on Friday", None, 20);
-        let got = lookup(&s, "main", "emily", today(), 10).unwrap();
+        let got = lookup(&s, "main", "emily", today(), 10, Scope::Agent).unwrap();
         assert_eq!(texts(&got), ["Emily moved to Hue"]);
     }
 
@@ -159,7 +225,7 @@ mod tests {
             Some("2026-03-02"),
             11,
         );
-        let got = lookup(&s, "main", "hôm qua", today(), 10).unwrap();
+        let got = lookup(&s, "main", "hôm qua", today(), 10, Scope::Agent).unwrap();
         assert_eq!(texts(&got), ["Fixed the login bug"]);
     }
 
@@ -174,7 +240,7 @@ mod tests {
             Some("2026-10-15"),
             11,
         );
-        let got = lookup(&s, "main", "login hôm qua", today(), 10).unwrap();
+        let got = lookup(&s, "main", "login hôm qua", today(), 10, Scope::Agent).unwrap();
         assert_eq!(got.len(), 2);
     }
 
@@ -184,17 +250,24 @@ mod tests {
         add(&s, "main", "mine", None, 1);
         add(&s, "other", "not mine", None, 2);
         assert_eq!(
-            texts(&lookup(&s, "main", "", today(), 10).unwrap()),
+            texts(&lookup(&s, "main", "", today(), 10, Scope::Agent).unwrap()),
             ["mine"]
         );
         for i in 0..40 {
             add(&s, "main", &format!("fact number {i}"), None, 100 + i);
         }
         assert_eq!(
-            lookup(&s, "main", "", today(), 1000).unwrap().len(),
+            lookup(&s, "main", "", today(), 1000, Scope::Agent)
+                .unwrap()
+                .len(),
             MAX_LIMIT
         );
-        assert_eq!(lookup(&s, "main", "", today(), 0).unwrap().len(), 1);
+        assert_eq!(
+            lookup(&s, "main", "", today(), 0, Scope::Agent)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -202,7 +275,7 @@ mod tests {
         let s = store();
         let id = add(&s, "main", "Emily moved to Hue", Some("2026-03"), 10);
         let undated = add(&s, "main", "Sen likes tea", None, 1_792_152_000);
-        let out = render(&lookup(&s, "main", "", today(), 10).unwrap());
+        let out = render(&lookup(&s, "main", "", today(), 10, Scope::Agent).unwrap());
         assert!(
             out.contains(&format!("{id} · 2026-03 · Emily moved to Hue")),
             "{out}"
@@ -221,18 +294,18 @@ mod tests {
         let theirs = add(&s, "other", "their fact", None, 2);
 
         assert_eq!(
-            forget(&s, "main", &format!("  {mine} ")),
+            forget(&s, "main", &format!("  {mine} "), Scope::Agent),
             format!("Forgot fact {mine}.")
         );
         assert_eq!(s.count("main").unwrap(), 0);
 
-        let refused = forget(&s, "main", &theirs);
+        let refused = forget(&s, "main", &theirs, Scope::Agent);
         assert!(refused.starts_with("No fact with id"), "{refused}");
         assert_eq!(
             s.count("other").unwrap(),
             1,
             "another agent's fact is untouched"
         );
-        assert!(forget(&s, "main", "nope").contains("memory_search_facts"));
+        assert!(forget(&s, "main", "nope", Scope::Agent).contains("memory_search_facts"));
     }
 }

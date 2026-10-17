@@ -634,7 +634,8 @@ Rules for Claude:
 - **Never splice recall into the user message or the persisted history.** That was the old behaviour and the reason a long
   chat carried the same few hundred words per turn forever.
 - **`MEMORY.md` is not an arm.** It is pinned context — standing instructions — and a query-dependent retrieval could omit
-  them. It rides in the same turn context, verbatim, when `memory.pre_retrieval` is on.
+  them. It rides in the same turn context, verbatim, **on by default** (`SENCLAW_PRE_RETRIEVAL=false` turns it off), cut at
+  `PINNED_MEMORY_MAX_CHARS` (8,000) so a file that grew cannot eat every turn.
 - **Notes and the graph are read only when the user left them on** (`ArmSelection` from `get_memory_read_switches`, one
   read of the settings file for both). The fact store has no switch.
 - **Fusion identity is `(hit.arm, hit.key)` across ALL lists.** The four fact arms are four strategies over one store, so
@@ -642,12 +643,34 @@ Rules for Claude:
   must reuse that store's label; `Item::sources` names the *strategy*.
 - **Scrub secrets before the model sees the text** — `retain` does it; any new consumer of conversation text goes through
   `defense::scrub` first. It removes credentials and card numbers only, never emails, phones or names.
+- **Read the first complete JSON value of a reply, and make up only closing brackets** (`extract::facts_array`). Slicing
+  first `{` to last `}` lost every fact of a window whenever a small model dropped or doubled a closer (4 of 133 real replies).
+  A reply that stops inside a string is never patched: that would store half a sentence.
+- **One garbled element costs that element, not the window** (`extract::salvage_elements`). When the array is not JSON even
+  with its closers made up (a fact that starts its key twice, `{"text{"text":…`, 2 of 140 real replies), each element is
+  parsed on its own and the ones that do not parse are dropped. Never find the elements by matching braces while tracking
+  strings: the stray quote turns every string after it inside out. Such a reply is **not** a failed chunk (`failed_chunks`
+  counts replies that yielded nothing to read); it logs a warn with `kept` / `dropped`. Zero elements read, or an array the
+  reply never closed (cut off — the length limit, not a glitch), stays an error.
+- **A fact the model only says again is reinforced, not stored** (`facts::restated`), and any change must survive it: a
+  different number, date, negation or name, a listed entity that moved, a `when` that differs, or a `replaces` makes the new
+  fact a new fact. Never widen it to word overlap alone — "Sen lives in Huế" is most of the words of "Sen lives in Hà Nội".
+  The same rule runs between the facts of ONE reply (`without_restated_siblings`, before anything is stored, so a short fact
+  said first is still the one left out): there every word of the dropped fact must be in the kept one, a dated fact is never
+  dropped for an undated one, and the drop counts in `RetainReport::folded`, not `reinforced` — one reply is one mention.
 - **Retain never raises.** Every failure is counted in `RetainReport` and logged; a conversation that cannot be extracted is
   skipped and the chat is unaffected.
 - **A model's `replaces` is a claim, not an order.** `retain` honours it only for a number in that chunk's own `KNOWN FACTS`
   list and only when `same_subject` agrees (a shared non-generic entity, else enough shared words). The old fact is hidden
   (`superseded_by`) after the new one is stored, never deleted; every read filters `superseded_by IS NULL`, and deleting the
   replacement restores what it replaced (`mem_facts_restore`). A new read query on `mem_facts` must carry that filter.
+- **A new value for a single-valued attribute replaces the old one by rule** (`facts::slots`): the extractor may give a
+  `subject` + `predicate`; `retain` supersedes the current fact of the same slot that the chat may see, only for predicates in
+  `SINGLE_VALUED` or named `favorite_*`/`preferred_*`/`current_*`/`primary_*`/`main_*`/`default_*` (plural = many-valued), and
+  never for a statement dated earlier than the fact it would hide. Unknown predicates are many-valued by default — hiding a true
+  fact is silent, keeping a stale one is not. Do not guess a slot from wording; a model that gives none changes nothing.
+- **Graph expansion never follows a generic subject** (`user`, `assistant`…, `GENERIC_SUBJECTS`) and **fold ignores a fact's date
+  header** (`fusion::terms_of`): both made unrelated facts about the user look related or identical once a store held a dozen.
 - **Schema additions to `mem_facts` go through `LATE_COLUMNS`** (guarded `ALTER`, run before the schema script) — an install
   that already has the table must upgrade in place.
 - **The agent's own fact tools are folder-scoped**: `memory_search_facts` / `memory_forget_fact` live in the MCP memory server
@@ -658,8 +681,15 @@ Rules for Claude:
   not 1 March). `temporal::parse_window` resolves "yesterday" against `RecallQuery::now` in the machine's timezone; tests use
   noon UTC so the date is the same in every timezone.
 - **An entity shared by more than 500 facts is a hub** (`HUB_ENTITY_FACTS`) and graph expansion skips it.
-- **Facts are scoped by agent folder, not by chat** (the reflection window carries no chat jid). Unlike curated notes, nothing
-  stops a fact from one chat reaching another chat of the same folder.
+- **Facts are scoped by chat.** Each fact carries `origin` (the chat JID) and a conversation sees its own facts plus the
+  agent-wide ones (`origin` empty) — the rule curated notes follow (`memory_session_rank`), applied by `store::Scope` in every
+  read the recall arms, the agent tools and retain make. Never add a read of `mem_facts` that skips a `Scope` (the REST listing
+  and the Facts UI use `Scope::Agent` on purpose: they are the owner's view). Reflection windows are per chat
+  (`reflection::window_key`), the same words in two chats are two facts (`fact_hash` includes `origin`), and what the extractor
+  is shown — so what it can name in `replaces` — is limited to what that chat may see. `SENCLAW_MEMORY_FACTS_SCOPE=agent`
+  restores one pool per agent.
+- **Note chunks without a vector are backfilled** (`MemoryManager::backfill_embeddings`, bounded per sync): the sync is
+  incremental by file hash, so without it a model that starts working later never reaches notes indexed before.
 - **The profile (`USER.md`) is not written by the engine.** It has tiers and a read-only rule for group chats; writing it from
   extracted text would let anyone in a group set the owner's standing directives. It changes only through `profile_update` and
   Settings.

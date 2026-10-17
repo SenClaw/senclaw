@@ -98,6 +98,9 @@ pub struct McpMemoryServer {
     folder: String,
     profiles_dir: PathBuf,
     custom_memory_dir: Option<PathBuf>,
+    /// The chat asking (`SENCLAW_CHAT_JID`); empty when not told, in which case
+    /// the fact tools see only what belongs to the whole agent.
+    chat_jid: String,
 }
 
 impl McpMemoryServer {
@@ -119,6 +122,7 @@ impl McpMemoryServer {
             custom_memory_dir: std::env::var("SENCLAW_CUSTOM_MEMORY_DIR")
                 .ok()
                 .map(PathBuf::from),
+            chat_jid: std::env::var("SENCLAW_CHAT_JID").unwrap_or_default(),
         }))
     }
 
@@ -140,6 +144,20 @@ impl McpMemoryServer {
         Ok(crate::memory::engine::facts::FactStore::new(Arc::new(db)))
     }
 
+    /// What the fact tools may show: this chat's facts and the agent-wide ones,
+    /// or all of the agent's with `SENCLAW_MEMORY_FACTS_SCOPE=agent`.
+    fn facts_scope(&self) -> crate::memory::engine::facts::store::Scope<'_> {
+        use crate::memory::engine::facts::store::Scope;
+        if crate::config::Config::from_env()
+            .memory
+            .engine_facts_by_chat
+        {
+            Scope::Chat(&self.chat_jid)
+        } else {
+            Scope::Agent
+        }
+    }
+
     fn open_db_and_provider(&self) -> Result<(Db, Option<Box<dyn EmbeddingProvider>>)> {
         let cfg = crate::config::Config::from_env();
         let mut db_cfg = cfg.clone();
@@ -148,7 +166,6 @@ impl McpMemoryServer {
         let provider = create_embedding_provider(&cfg, Arc::new(Db::open(&db_cfg)?));
         Ok((db, provider))
     }
-
 }
 
 #[rmcp::tool_router(server_handler, vis = "pub")]
@@ -275,6 +292,7 @@ impl McpMemoryServer {
             p.query.as_deref().unwrap_or(""),
             today,
             p.limit.unwrap_or(tools::DEFAULT_LIMIT),
+            self.facts_scope(),
         ) {
             Ok(found) => tools::render(&found),
             Err(e) => format!("Error: {e}"),
@@ -291,7 +309,12 @@ impl McpMemoryServer {
         >,
     ) -> String {
         match self.fact_store() {
-            Ok(store) => crate::memory::engine::facts::tools::forget(&store, &self.folder, &p.id),
+            Ok(store) => crate::memory::engine::facts::tools::forget(
+                &store,
+                &self.folder,
+                &p.id,
+                self.facts_scope(),
+            ),
             Err(e) => format!("Error: {e}"),
         }
     }

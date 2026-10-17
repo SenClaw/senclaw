@@ -14,6 +14,8 @@
 //! The tables are additive (`CREATE … IF NOT EXISTS`); nothing existing is
 //! migrated.
 
+use super::retain::GENERIC_SUBJECTS;
+use super::slots::Slot;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
@@ -45,10 +47,14 @@ CREATE TABLE IF NOT EXISTS mem_facts (
   source         TEXT NOT NULL DEFAULT '',
   proof_count    INTEGER NOT NULL DEFAULT 1,
   superseded_by  TEXT,
-  superseded_at  INTEGER
+  superseded_at  INTEGER,
+  origin         TEXT NOT NULL DEFAULT '',
+  slot_subject   TEXT,
+  slot_predicate TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_facts_hash ON mem_facts(bank, content_hash);
 CREATE INDEX IF NOT EXISTS idx_mem_facts_bank_time ON mem_facts(bank, occurred_start);
+CREATE INDEX IF NOT EXISTS idx_mem_facts_slot ON mem_facts(bank, slot_subject, slot_predicate);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS mem_facts_fts USING fts5(fact_id UNINDEXED, text);
 
@@ -85,6 +91,11 @@ const LATE_COLUMNS: &[(&str, &str)] = &[
     ("proof_count", "INTEGER NOT NULL DEFAULT 1"),
     ("superseded_by", "TEXT"),
     ("superseded_at", "INTEGER"),
+    // The chat the fact was said in; empty means the whole agent.
+    ("origin", "TEXT NOT NULL DEFAULT ''"),
+    // Which attribute of whom the fact states (see `slots`); null for most facts.
+    ("slot_subject", "TEXT"),
+    ("slot_predicate", "TEXT"),
 ];
 
 /// Create the fact tables. Idempotent.
@@ -159,6 +170,67 @@ pub struct NewFact {
     /// models are not comparable.
     pub model: Option<String>,
     pub source: String,
+    /// The chat the statement was made in (its JID); empty for a fact that
+    /// belongs to the whole agent. See [`Scope`].
+    pub origin: String,
+    /// Which attribute of whom it states, when known.
+    pub slot: Option<Slot>,
+}
+
+/// Who may see a fact.
+///
+/// Facts belong to an agent (the bank), but one agent folder serves many chats
+/// and they are not always the same people, so a fact is also tagged with the
+/// chat it came from and a conversation sees only its own and the agent-wide
+/// ones. The rule is the one curated notes follow
+/// ([`crate::memory::curated::memory_session_rank`]): another chat's session is
+/// never shown, an untagged (legacy, uploaded) fact is shown everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// Every fact of the agent: the owner's management view, and the whole
+    /// agent's recall when per-chat scoping is switched off.
+    Agent,
+    /// What the conversation with this chat JID may see.
+    Chat(&'a str),
+}
+
+/// How many times more rows a scoped query reads than it returns, so that
+/// another chat's facts crowding the top of a ranking do not starve this
+/// chat's.
+const SCOPE_OVERFETCH: usize = 5;
+
+impl Scope<'_> {
+    pub fn allows(self, bank: &str, origin: &str) -> bool {
+        match self {
+            Scope::Agent => true,
+            Scope::Chat(chat) => {
+                crate::memory::curated::memory_session_rank(origin, chat, bank) >= 0
+            }
+        }
+    }
+
+    fn fetch(self, limit: usize) -> usize {
+        match self {
+            Scope::Agent => limit,
+            Scope::Chat(_) => limit.saturating_mul(SCOPE_OVERFETCH),
+        }
+    }
+
+    /// Keep what the scope allows, at most `limit`, in order.
+    fn keep(self, bank: &str, mut facts: Vec<StoredFact>, limit: usize) -> Vec<StoredFact> {
+        facts.retain(|f| self.allows(bank, &f.origin));
+        facts.truncate(limit);
+        facts
+    }
+}
+
+/// One agent's facts at a glance (see [`FactStore::banks`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BankSummary {
+    pub bank: String,
+    pub current: usize,
+    pub replaced: usize,
+    pub last_mentioned_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,6 +248,10 @@ pub struct StoredFact {
     /// The fact that replaced this one, when the user changed their mind or
     /// corrected it. A replaced fact is kept, for history, and not recalled.
     pub superseded_by: Option<String>,
+    /// The chat it was said in; empty for the whole agent.
+    pub origin: String,
+    /// Which attribute of whom it states, when known.
+    pub slot: Option<Slot>,
 }
 
 impl StoredFact {
@@ -236,6 +312,17 @@ fn statement_hash(text: &str) -> String {
         .join(" ")
         .to_lowercase();
     hex::encode(Sha256::digest(normalised.as_bytes()))
+}
+
+/// Identity of a statement inside a bank: the same words said in another chat
+/// are another fact, so each chat keeps its own copy.
+fn fact_hash(text: &str, origin: &str) -> String {
+    let h = statement_hash(text);
+    if origin.is_empty() {
+        h
+    } else {
+        format!("{h}@{origin}")
+    }
 }
 
 pub fn to_blob(v: &[f32]) -> Vec<u8> {
@@ -299,7 +386,7 @@ impl Ord for Scored {
     }
 }
 
-const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at, f.proof_count, f.superseded_by";
+const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at, f.proof_count, f.superseded_by, f.origin, f.slot_subject, f.slot_predicate";
 
 fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
@@ -315,7 +402,7 @@ impl FactStore {
     pub fn insert(&self, bank: &str, f: &NewFact) -> Result<Inserted> {
         self.db.with_conn_mut(|conn| {
             let tx = conn.transaction()?;
-            let hash = statement_hash(&f.text);
+            let hash = fact_hash(&f.text, &f.origin);
             let existing: Option<String> = tx
                 .query_row(
                     "SELECT id FROM mem_facts WHERE bank = ?1 AND content_hash = ?2",
@@ -335,8 +422,9 @@ impl FactStore {
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO mem_facts (id, bank, kind, text, occurred_start, occurred_end, \
-                 mentioned_at, created_at, content_hash, embedding, model, source) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 mentioned_at, created_at, content_hash, embedding, model, source, origin, \
+                 slot_subject, slot_predicate) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     id,
                     bank,
@@ -350,6 +438,9 @@ impl FactStore {
                     f.embedding.as_deref().map(to_blob),
                     f.model,
                     f.source,
+                    f.origin,
+                    f.slot.as_ref().map(|s| s.subject.as_str()),
+                    f.slot.as_ref().map(|s| s.predicate.as_str()),
                 ],
             )?;
             tx.execute(
@@ -374,6 +465,18 @@ impl FactStore {
             c.execute(
                 "UPDATE mem_facts SET mentioned_at = MAX(mentioned_at, ?1), proof_count = proof_count + 1 WHERE id = ?2",
                 params![mentioned_at, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Give an undated fact the date a repeat of it carried. A fact that already
+    /// has a date keeps it.
+    pub fn date_if_missing(&self, id: &str, start: i64, end: i64) -> Result<()> {
+        self.db.with_conn(|c| {
+            c.execute(
+                "UPDATE mem_facts SET occurred_start = ?1, occurred_end = ?2 WHERE id = ?3 AND occurred_start IS NULL",
+                params![start, end, id],
             )?;
             Ok(())
         })
@@ -414,7 +517,13 @@ impl FactStore {
 
     /// The newest facts of the bank, by when they were last said. Facts that
     /// were replaced are left out unless `with_history` asks for them.
-    pub fn recent(&self, bank: &str, limit: usize, with_history: bool) -> Result<Vec<StoredFact>> {
+    pub fn recent(
+        &self,
+        bank: &str,
+        limit: usize,
+        with_history: bool,
+        scope: Scope<'_>,
+    ) -> Result<Vec<StoredFact>> {
         self.db.with_conn(|c| {
             let sql = format!(
                 "SELECT {FACT_COLUMNS} FROM mem_facts f WHERE f.bank = ?1 \
@@ -423,9 +532,12 @@ impl FactStore {
             );
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
-                .query_map(params![bank, limit as i64, with_history], row_to_fact)?
+                .query_map(
+                    params![bank, scope.fetch(limit) as i64, with_history],
+                    row_to_fact,
+                )?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            hydrate_entities(c, rows)
+            hydrate_entities(c, scope.keep(bank, rows, limit))
         })
     }
 
@@ -436,6 +548,32 @@ impl FactStore {
                 params![bank],
                 |r| r.get::<_, i64>(0),
             )? as usize)
+        })
+    }
+
+    /// Every bank that has facts, the one spoken of most recently first, with
+    /// how many facts are current and how many were replaced.
+    pub fn banks(&self) -> Result<Vec<BankSummary>> {
+        self.db.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT bank, \
+                        SUM(CASE WHEN superseded_by IS NULL THEN 1 ELSE 0 END), \
+                        SUM(CASE WHEN superseded_by IS NULL THEN 0 ELSE 1 END), \
+                        MAX(mentioned_at) \
+                   FROM mem_facts GROUP BY bank \
+                  ORDER BY MAX(mentioned_at) DESC, bank",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(BankSummary {
+                        bank: r.get(0)?,
+                        current: r.get::<_, i64>(1)? as usize,
+                        replaced: r.get::<_, i64>(2)? as usize,
+                        last_mentioned_at: r.get(3)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok(rows)
         })
     }
 
@@ -525,6 +663,7 @@ impl FactStore {
         fts_match: &str,
         window: Option<(i64, i64)>,
         limit: usize,
+        scope: Scope<'_>,
     ) -> Result<Vec<StoredFact>> {
         self.db.with_conn(|c| {
             let (start, end) = window.unwrap_or((i64::MIN, i64::MAX));
@@ -539,11 +678,11 @@ impl FactStore {
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
                 .query_map(
-                    params![fts_match, bank, start, end, limit as i64],
+                    params![fts_match, bank, start, end, scope.fetch(limit) as i64],
                     row_to_fact,
                 )?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            hydrate_entities(c, rows)
+            hydrate_entities(c, scope.keep(bank, rows, limit))
         })
     }
 
@@ -556,13 +695,14 @@ impl FactStore {
         query: &[f32],
         min_sim: f32,
         limit: usize,
+        scope: Scope<'_>,
     ) -> Result<Vec<(StoredFact, f32)>> {
         if limit == 0 || query.is_empty() {
             return Ok(Vec::new());
         }
         self.db.with_conn(|c| {
             let mut stmt = c.prepare(
-                "SELECT id, embedding FROM mem_facts \
+                "SELECT id, embedding, origin FROM mem_facts \
                  WHERE bank = ?1 AND model = ?2 AND embedding IS NOT NULL AND superseded_by IS NULL",
             )?;
             let mut rows = stmt.query(params![bank, model])?;
@@ -570,6 +710,10 @@ impl FactStore {
             while let Some(row) = rows.next()? {
                 let id: String = row.get(0)?;
                 let blob: Vec<u8> = row.get(1)?;
+                let origin: String = row.get(2)?;
+                if !scope.allows(bank, &origin) {
+                    continue;
+                }
                 let Some(v) = from_blob(&blob) else { continue };
                 let sim = cosine(query, &v);
                 if sim < min_sim {
@@ -596,7 +740,10 @@ impl FactStore {
     }
 
     /// Facts sharing entities with `seeds`, most shared first, skipping hub
-    /// entities. Returns `(fact id, number of shared entities)`.
+    /// entities and the generic subjects every conversation shares ("user"):
+    /// two facts about the user are not thereby about the same thing, and
+    /// following that entity would link each fact to a dozen unrelated ones.
+    /// Returns `(fact id, number of shared entities)`.
     pub fn related_by_entity(
         &self,
         bank: &str,
@@ -608,6 +755,7 @@ impl FactStore {
         }
         self.db.with_conn(|c| {
             let ph = placeholders(seeds.len());
+            let generic = placeholders(GENERIC_SUBJECTS.len());
             let sql = format!(
                 "SELECT e2.fact_id, COUNT(DISTINCT e2.entity) AS shared \
                    FROM mem_fact_entities e1 \
@@ -616,12 +764,15 @@ impl FactStore {
                   WHERE e1.fact_id IN ({ph}) \
                     AND e1.entity NOT IN ( \
                         SELECT entity FROM mem_fact_entities GROUP BY entity HAVING COUNT(*) > {HUB_ENTITY_FACTS}) \
+                    AND e1.entity NOT IN ({generic}) \
                     AND e2.fact_id NOT IN ({ph}) \
                   GROUP BY e2.fact_id ORDER BY shared DESC, e2.fact_id LIMIT {limit}"
             );
             let mut stmt = c.prepare(&sql)?;
+            // Placeholders appear in the order: bank, seeds, generic, seeds.
             let args: Vec<&str> = std::iter::once(bank)
                 .chain(seeds.iter().map(String::as_str))
+                .chain(GENERIC_SUBJECTS.iter().copied())
                 .chain(seeds.iter().map(String::as_str))
                 .collect();
             let rows = stmt.query_map(params_from_iter(args), |r| {
@@ -637,6 +788,7 @@ impl FactStore {
         bank: &str,
         window: (i64, i64),
         limit: usize,
+        scope: Scope<'_>,
     ) -> Result<Vec<StoredFact>> {
         self.db.with_conn(|c| {
             let sql = format!(
@@ -648,15 +800,61 @@ impl FactStore {
             );
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
-                .query_map(params![bank, window.0, window.1, limit as i64], row_to_fact)?
+                .query_map(
+                    params![bank, window.0, window.1, scope.fetch(limit) as i64],
+                    row_to_fact,
+                )?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
-            hydrate_entities(c, rows)
+            hydrate_entities(c, scope.keep(bank, rows, limit))
+        })
+    }
+
+    /// The current facts of `bank` that state the same attribute of the same
+    /// subject, newest first, other than `exclude` and only those `scope` lets
+    /// the caller see. A new value for a single-valued attribute replaces these.
+    pub fn in_slot(
+        &self,
+        bank: &str,
+        slot: &Slot,
+        exclude: &str,
+        scope: Scope<'_>,
+    ) -> Result<Vec<StoredFact>> {
+        self.db.with_conn(|c| {
+            let sql = format!(
+                "SELECT {FACT_COLUMNS} FROM mem_facts f WHERE f.bank = ?1 \
+                   AND f.slot_subject = ?2 AND f.slot_predicate = ?3 \
+                   AND f.id != ?4 AND f.superseded_by IS NULL \
+                 ORDER BY f.mentioned_at DESC, f.created_at DESC, f.id"
+            );
+            let mut stmt = c.prepare(&sql)?;
+            let rows = stmt
+                .query_map(
+                    params![bank, slot.subject, slot.predicate, exclude],
+                    row_to_fact,
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            hydrate_entities(c, scope.keep(bank, rows, usize::MAX))
         })
     }
 
     /// Load facts by id, keeping the order of `ids`.
     pub fn get_many(&self, ids: &[String]) -> Result<Vec<StoredFact>> {
         self.db.with_conn(|c| load_facts(c, ids))
+    }
+
+    /// Load facts by id, keeping the order of `ids` and only those `scope`
+    /// allows: for ids that came from a query which could not filter them.
+    pub fn get_visible(
+        &self,
+        bank: &str,
+        ids: &[String],
+        scope: Scope<'_>,
+    ) -> Result<Vec<StoredFact>> {
+        Ok(self
+            .get_many(ids)?
+            .into_iter()
+            .filter(|f| scope.allows(bank, &f.origin))
+            .collect())
     }
 }
 
@@ -672,6 +870,14 @@ fn row_to_fact(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFact> {
         entities: Vec::new(),
         proof_count: r.get::<_, i64>(6)?.max(1) as u32,
         superseded_by: r.get(7)?,
+        origin: r.get(8)?,
+        slot: match (
+            r.get::<_, Option<String>>(9)?,
+            r.get::<_, Option<String>>(10)?,
+        ) {
+            (Some(subject), Some(predicate)) => Some(Slot { subject, predicate }),
+            _ => None,
+        },
     })
 }
 
@@ -737,6 +943,8 @@ mod tests {
             embedding: None,
             model: None,
             source: "test".into(),
+            origin: String::new(),
+            slot: None,
         }
     }
 
@@ -789,10 +997,29 @@ mod tests {
     }
 
     #[test]
+    fn an_undated_fact_takes_the_date_of_a_repeat_and_a_dated_one_keeps_its_own() {
+        let s = store();
+        let id = new_id(
+            s.insert("main", &fact("Sen fixed the login bug", &["Sen"]))
+                .unwrap(),
+        );
+        s.date_if_missing(&id, 100, 200).unwrap();
+        let got = s.get(&id).unwrap().unwrap();
+        assert_eq!(
+            (got.occurred_start, got.occurred_end),
+            (Some(100), Some(200))
+        );
+        s.date_if_missing(&id, 500, 600).unwrap();
+        assert_eq!(s.get(&id).unwrap().unwrap().occurred_start, Some(100));
+    }
+
+    #[test]
     fn banks_do_not_see_each_other() {
         let s = store();
         s.insert("a", &fact("Secret plan of agent a", &[])).unwrap();
-        let hit = s.search_keyword("b", "plan", None, 5).unwrap();
+        let hit = s
+            .search_keyword("b", "plan", None, 5, Scope::Agent)
+            .unwrap();
         assert!(hit.is_empty());
         assert_eq!(s.count("b").unwrap(), 0);
         // The same statement may exist in both banks.
@@ -812,13 +1039,13 @@ mod tests {
         }
         s.insert("other", &fact("not mine", &[])).unwrap();
         let got: Vec<String> = s
-            .recent("main", 10, false)
+            .recent("main", 10, false, Scope::Agent)
             .unwrap()
             .into_iter()
             .map(|f| f.text)
             .collect();
         assert_eq!(got, ["newest", "middle", "oldest"]);
-        assert_eq!(s.recent("main", 2, false).unwrap().len(), 2);
+        assert_eq!(s.recent("main", 2, false, Scope::Agent).unwrap().len(), 2);
     }
 
     #[test]
@@ -871,19 +1098,21 @@ mod tests {
         assert!(s.supersede("main", &old, &new, 100).unwrap());
 
         // Gone from every way of finding a fact …
-        let kw = s.search_keyword("main", "react", None, 10).unwrap();
+        let kw = s
+            .search_keyword("main", "react", None, 10, Scope::Agent)
+            .unwrap();
         assert_eq!(
             kw.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
             [new.as_str()]
         );
-        assert_eq!(s.recent("main", 10, false).unwrap().len(), 1);
+        assert_eq!(s.recent("main", 10, false, Scope::Agent).unwrap().len(), 1);
         assert!(s
-            .in_window("main", (0, 1_000_000), 10)
+            .in_window("main", (0, 1_000_000), 10, Scope::Agent)
             .unwrap()
             .iter()
             .all(|f| f.id != old));
         // … still there for history, and still addressable.
-        let all = s.recent("main", 10, true).unwrap();
+        let all = s.recent("main", 10, true, Scope::Agent).unwrap();
         assert_eq!(all.len(), 2);
         let kept = s.get(&old).unwrap().unwrap();
         assert_eq!(kept.superseded_by.as_deref(), Some(new.as_str()));
@@ -926,7 +1155,7 @@ mod tests {
         assert_eq!(related, [back.clone()]);
         assert!(s.linked("main", &[seed]).unwrap().is_empty());
         assert!(s
-            .search_vector("main", "m", &[1.0, 0.0], 0.0, 5)
+            .search_vector("main", "m", &[1.0, 0.0], 0.0, 5, Scope::Agent)
             .unwrap()
             .is_empty());
     }
@@ -970,10 +1199,17 @@ mod tests {
                 .unwrap(),
         );
         s.supersede("main", &old, &wrong, 1).unwrap();
-        assert_eq!(s.search_keyword("main", "alice", None, 5).unwrap().len(), 1);
+        assert_eq!(
+            s.search_keyword("main", "alice", None, 5, Scope::Agent)
+                .unwrap()
+                .len(),
+            1
+        );
 
         assert!(s.delete(&wrong).unwrap());
-        let back = s.search_keyword("main", "alice", None, 5).unwrap();
+        let back = s
+            .search_keyword("main", "alice", None, 5, Scope::Agent)
+            .unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].id, old);
         assert_eq!(back[0].superseded_by, None);
@@ -1004,6 +1240,302 @@ mod tests {
             )
             .unwrap();
         assert_eq!((proof, by), (1, None), "existing rows read as unrevised");
+        let origin: String = conn
+            .query_row("SELECT origin FROM mem_facts WHERE id = 'old1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(origin, "", "an old fact belongs to the whole agent");
+    }
+
+    #[test]
+    fn facts_are_related_by_a_shared_entity_but_never_by_the_generic_user() {
+        let s = store();
+        let on = |text: &str, entities: &[&str]| {
+            new_id(s.insert("main", &fact(text, entities)).unwrap())
+        };
+        let seed = on("The user is building Orion", &["user", "orion"]);
+        let same_project = on("Orion ships in November", &["orion"]);
+        let other = on("The user prefers dark mode", &["user"]);
+        let related = s
+            .related_by_entity("main", std::slice::from_ref(&seed), 10)
+            .unwrap();
+        let ids: Vec<&str> = related.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [same_project.as_str()],
+            "only Orion links; \"user\" does not"
+        );
+        assert!(!ids.contains(&other.as_str()));
+    }
+
+    #[test]
+    fn a_slot_is_stored_found_and_only_among_current_facts_the_scope_may_see() {
+        use super::super::slots;
+        let s = store();
+        let lives = slots::read("user", "lives in").unwrap();
+        let with_slot = |origin: &str, text: &str| NewFact {
+            slot: Some(lives.clone()),
+            ..said_in(origin, text)
+        };
+        let a = new_id(
+            s.insert("main", &with_slot("web:a", "Lan lives in Hue"))
+                .unwrap(),
+        );
+        let b = new_id(
+            s.insert("main", &with_slot("web:b", "Lan lives in Hanoi"))
+                .unwrap(),
+        );
+        let shared = new_id(
+            s.insert("main", &with_slot("", "Lan lives in Danang"))
+                .unwrap(),
+        );
+        let other_slot = new_id(
+            s.insert(
+                "main",
+                &NewFact {
+                    slot: slots::read("user", "works at"),
+                    ..said_in("web:a", "Lan works at FPT")
+                },
+            )
+            .unwrap(),
+        );
+
+        let ids = |facts: Vec<StoredFact>| {
+            let mut v: Vec<String> = facts.into_iter().map(|f| f.id).collect();
+            v.sort();
+            v
+        };
+        let mut want_a = vec![a.clone(), shared.clone()];
+        want_a.sort();
+        assert_eq!(
+            ids(s
+                .in_slot("main", &lives, "none", Scope::Chat("web:a"))
+                .unwrap()),
+            want_a
+        );
+        let mut all = vec![a.clone(), b.clone(), shared.clone()];
+        all.sort();
+        assert_eq!(
+            ids(s.in_slot("main", &lives, "none", Scope::Agent).unwrap()),
+            all
+        );
+        // The fact itself is excluded, a replaced one is gone, another attribute is another slot.
+        assert!(!ids(s.in_slot("main", &lives, &a, Scope::Agent).unwrap()).contains(&a));
+        s.supersede("main", &b, &a, 5).unwrap();
+        assert!(!ids(s.in_slot("main", &lives, "none", Scope::Agent).unwrap()).contains(&b));
+        assert!(
+            !ids(s.in_slot("main", &lives, "none", Scope::Agent).unwrap()).contains(&other_slot)
+        );
+        let stored = s.get(&a).unwrap().unwrap();
+        assert_eq!(stored.slot, Some(lives));
+    }
+
+    #[test]
+    fn a_table_without_the_slot_columns_gains_them_and_its_facts_have_no_slot() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mem_facts (
+               id TEXT PRIMARY KEY, bank TEXT NOT NULL,
+               kind TEXT NOT NULL CHECK (kind IN ('world', 'experience')),
+               text TEXT NOT NULL, occurred_start INTEGER, occurred_end INTEGER,
+               mentioned_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               content_hash TEXT NOT NULL, embedding BLOB, model TEXT,
+               source TEXT NOT NULL DEFAULT '', proof_count INTEGER NOT NULL DEFAULT 1,
+               superseded_by TEXT, superseded_at INTEGER, origin TEXT NOT NULL DEFAULT '');
+             INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash)
+               VALUES ('f1', 'main', 'world', 'a fact from before slots', 1, 1, 'h1');",
+        )
+        .unwrap();
+        apply_fact_schema(&conn).unwrap();
+        apply_fact_schema(&conn).unwrap();
+        let (subject, predicate): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT slot_subject, slot_predicate FROM mem_facts WHERE id = 'f1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((subject, predicate), (None, None));
+    }
+
+    #[test]
+    fn the_table_as_first_installed_gains_origin_and_keeps_its_facts() {
+        // Exactly the columns the table had in the first release (0.1.6 e92c23f).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE mem_facts (
+               id TEXT PRIMARY KEY, bank TEXT NOT NULL,
+               kind TEXT NOT NULL CHECK (kind IN ('world', 'experience')),
+               text TEXT NOT NULL, occurred_start INTEGER, occurred_end INTEGER,
+               mentioned_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
+               content_hash TEXT NOT NULL, embedding BLOB, model TEXT,
+               source TEXT NOT NULL DEFAULT '', proof_count INTEGER NOT NULL DEFAULT 1,
+               superseded_by TEXT, superseded_at INTEGER);
+             CREATE UNIQUE INDEX idx_mem_facts_hash ON mem_facts(bank, content_hash);
+             INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash, proof_count)
+               VALUES ('f1', 'main', 'world', 'a fact from the first release', 1, 1, 'h1', 3);",
+        )
+        .unwrap();
+        apply_fact_schema(&conn).unwrap();
+        apply_fact_schema(&conn).unwrap(); // and again: idempotent
+        let (origin, proof): (String, i64) = conn
+            .query_row(
+                "SELECT origin, proof_count FROM mem_facts WHERE id = 'f1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (origin.as_str(), proof),
+            ("", 3),
+            "kept, and belongs to the whole agent"
+        );
+        // A chat's facts still do not see it as another chat's.
+        assert!(Scope::Chat("web:a").allows("main", &origin));
+    }
+
+    fn said_in(origin: &str, text: &str) -> NewFact {
+        NewFact {
+            origin: origin.into(),
+            slot: None,
+            ..fact(text, &["lan", "orion"])
+        }
+    }
+
+    fn texts(v: &[StoredFact]) -> Vec<&str> {
+        let mut t: Vec<&str> = v.iter().map(|f| f.text.as_str()).collect();
+        t.sort_unstable();
+        t
+    }
+
+    /// One agent, two chats and a fact that belongs to the whole agent.
+    fn two_chats() -> (FactStore, [String; 3]) {
+        let s = store();
+        let a = new_id(
+            s.insert("main", &said_in("web:a", "Lan works at Orion in chat a"))
+                .unwrap(),
+        );
+        let b = new_id(
+            s.insert("main", &said_in("web:b", "Lan works at Orion in chat b"))
+                .unwrap(),
+        );
+        let shared = new_id(s.insert("main", &said_in("", "Orion is in Hanoi")).unwrap());
+        (s, [a, b, shared])
+    }
+
+    #[test]
+    fn a_chat_sees_its_own_facts_and_the_agents_never_another_chats() {
+        let (s, [a, b, shared]) = two_chats();
+        let a_scope = Scope::Chat("web:a");
+
+        let recent = s.recent("main", 10, false, a_scope).unwrap();
+        assert_eq!(
+            texts(&recent),
+            ["Lan works at Orion in chat a", "Orion is in Hanoi"]
+        );
+        let by_words = s
+            .search_keyword("main", "orion", None, 10, a_scope)
+            .unwrap();
+        assert_eq!(texts(&by_words), texts(&recent));
+        let in_window = s.in_window("main", (0, 10_000), 10, a_scope).unwrap();
+        assert_eq!(texts(&in_window), texts(&recent));
+        let by_id = s
+            .get_visible("main", &[a.clone(), b.clone(), shared.clone()], a_scope)
+            .unwrap();
+        assert_eq!(texts(&by_id), texts(&recent));
+
+        // The other chat sees the mirror image; a chat nobody knows sees only the agent's.
+        assert_eq!(
+            texts(&s.recent("main", 10, false, Scope::Chat("web:b")).unwrap()),
+            ["Lan works at Orion in chat b", "Orion is in Hanoi"]
+        );
+        assert_eq!(
+            texts(&s.recent("main", 10, false, Scope::Chat("")).unwrap()),
+            ["Orion is in Hanoi"]
+        );
+        // The owner's view and the unscoped mode see everything.
+        assert_eq!(s.recent("main", 10, false, Scope::Agent).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn another_chats_facts_do_not_crowd_out_this_chats_in_a_ranking() {
+        let s = store();
+        for i in 0..8 {
+            s.insert(
+                "main",
+                &said_in("web:b", &format!("Lan said thing {i} in chat b")),
+            )
+            .unwrap();
+        }
+        s.insert("main", &said_in("web:a", "Lan said one thing in chat a"))
+            .unwrap();
+        // Ten results would all be chat b's if the limit were applied before the scope.
+        let got = s
+            .search_keyword("main", "lan", None, 2, Scope::Chat("web:a"))
+            .unwrap();
+        assert_eq!(texts(&got), ["Lan said one thing in chat a"]);
+    }
+
+    #[test]
+    fn a_vector_search_skips_another_chats_facts() {
+        let s = store();
+        let mut near_b = said_in("web:b", "close but said in chat b");
+        near_b.embedding = Some(vec![1.0, 0.0]);
+        near_b.model = Some("m".into());
+        let mut near_a = said_in("web:a", "a little further, said in chat a");
+        near_a.embedding = Some(vec![0.8, 0.6]);
+        near_a.model = Some("m".into());
+        s.insert("main", &near_b).unwrap();
+        s.insert("main", &near_a).unwrap();
+        let got = s
+            .search_vector("main", "m", &[1.0, 0.0], 0.1, 5, Scope::Chat("web:a"))
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.text, "a little further, said in chat a");
+        assert_eq!(
+            s.search_vector("main", "m", &[1.0, 0.0], 0.1, 5, Scope::Agent)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn the_same_words_in_two_chats_are_two_facts_and_in_one_chat_one() {
+        let s = store();
+        let a = new_id(
+            s.insert("main", &said_in("web:a", "Lan likes tea"))
+                .unwrap(),
+        );
+        let b = new_id(
+            s.insert("main", &said_in("web:b", "Lan likes tea"))
+                .unwrap(),
+        );
+        assert_ne!(a, b, "each chat keeps its own copy");
+        assert!(matches!(
+            s.insert("main", &said_in("web:a", "Lan likes tea")).unwrap(),
+            Inserted::Existing(id) if id == a
+        ));
+        let stored = s.get(&a).unwrap().unwrap();
+        assert_eq!(stored.origin, "web:a");
+        assert_eq!(
+            stored.proof_count, 2,
+            "said twice in the chat it was said in"
+        );
+        assert_eq!(s.get(&b).unwrap().unwrap().proof_count, 1);
+    }
+
+    #[test]
+    fn a_session_shaped_origin_is_hidden_but_a_folder_or_plain_one_is_not() {
+        // Same rule as curated notes: only a JID-shaped origin of ANOTHER chat is hidden.
+        assert!(Scope::Chat("web:a").allows("main", ""));
+        assert!(Scope::Chat("web:a").allows("main", "main"));
+        assert!(Scope::Chat("web:a").allows("main", "legacy-import"));
+        assert!(Scope::Chat("web:a").allows("main", "web:a"));
+        assert!(!Scope::Chat("web:a").allows("main", "web:b"));
+        assert!(!Scope::Chat("").allows("main", "web:b"));
+        assert!(Scope::Agent.allows("main", "web:b"));
     }
 
     #[test]
@@ -1017,11 +1549,17 @@ mod tests {
         s.insert("main", &recent).unwrap();
 
         let all = s
-            .search_keyword("main", "alice OR deployed", None, 10)
+            .search_keyword("main", "alice OR deployed", None, 10, Scope::Agent)
             .unwrap();
         assert_eq!(all.len(), 2);
         let windowed = s
-            .search_keyword("main", "alice OR deployed", Some((900, 1_200)), 10)
+            .search_keyword(
+                "main",
+                "alice OR deployed",
+                Some((900, 1_200)),
+                10,
+                Scope::Agent,
+            )
             .unwrap();
         assert_eq!(windowed.len(), 1);
         assert!(windowed[0].text.contains("search"));
@@ -1033,8 +1571,16 @@ mod tests {
         let mut f = fact("User likes green tea", &[]);
         f.mentioned_at = 5_000;
         s.insert("main", &f).unwrap();
-        assert_eq!(s.in_window("main", (4_000, 6_000), 10).unwrap().len(), 1);
-        assert!(s.in_window("main", (0, 4_000), 10).unwrap().is_empty());
+        assert_eq!(
+            s.in_window("main", (4_000, 6_000), 10, Scope::Agent)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(s
+            .in_window("main", (0, 4_000), 10, Scope::Agent)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1054,19 +1600,19 @@ mod tests {
         }
 
         let got = s
-            .search_vector("main", "m1", &[0.9, 0.1, 0.0], 0.0, 5)
+            .search_vector("main", "m1", &[0.9, 0.1, 0.0], 0.0, 5, Scope::Agent)
             .unwrap();
         assert_eq!(got.len(), 2, "the m2 vector is not comparable");
         assert_eq!(got[0].0.text, "near fact");
         assert!(got[0].1 > got[1].1);
         // A floor drops the far one.
         let floor = s
-            .search_vector("main", "m1", &[0.9, 0.1, 0.0], 0.5, 5)
+            .search_vector("main", "m1", &[0.9, 0.1, 0.0], 0.5, 5, Scope::Agent)
             .unwrap();
         assert_eq!(floor.len(), 1);
         // The bound keeps only the best.
         let top1 = s
-            .search_vector("main", "m1", &[0.0, 1.0, 0.0], 0.0, 1)
+            .search_vector("main", "m1", &[0.0, 1.0, 0.0], 0.0, 1, Scope::Agent)
             .unwrap();
         assert_eq!(top1[0].0.text, "far fact");
     }
@@ -1154,7 +1700,7 @@ mod tests {
         assert!(s.delete(&a).unwrap());
         assert!(!s.delete(&a).unwrap());
         assert!(s
-            .search_keyword("main", "alice", None, 5)
+            .search_keyword("main", "alice", None, 5, Scope::Agent)
             .unwrap()
             .is_empty());
         assert!(s.linked("main", &[b]).unwrap().is_empty());

@@ -29,6 +29,9 @@ pub struct RecallQuery {
     /// The chat this turn belongs to; curated notes written in another chat
     /// are not shown here.
     pub chat_jid: String,
+    /// Facts: only this chat's and the agent-wide ones (`true`), or every fact
+    /// of the agent (`false`). See `facts::store::Scope`.
+    pub facts_by_chat: bool,
     /// How many results each arm should hand to fusion.
     pub limit: usize,
     /// Unix seconds "now": the recency boost measures age from it and a

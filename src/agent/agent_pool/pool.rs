@@ -29,10 +29,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    background_mcp_config, browser_mcp_config, dispatch_mcp_config, js_mcp_config,
+    background_mcp_config, browser_mcp_config, dispatch_mcp_config, docs_mcp_config, js_mcp_config,
     litho_mcp_config, memory_mcp_config, ocr_mcp_config, schedule_mcp_config, send_mcp_config,
-    docs_mcp_config, space_mcp_config, usage_mcp_config, wiki_mcp_config,
-    workspace_mcp_config, McpServerConfig,
+    space_mcp_config, usage_mcp_config, wiki_mcp_config, workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -994,8 +993,9 @@ impl AgentPool {
 
         // Init workspace state file (mirrors TS 569-572).
         let home = self.senclaw_home.lock().unwrap().clone();
-        let default_workspace =
-            crate::util::paths::senclaw_data_home().join("workspace").join(&binding.folder);
+        let default_workspace = crate::util::paths::senclaw_data_home()
+            .join("workspace")
+            .join(&binding.folder);
         let workspace_dir = if binding.group_type == "code" {
             allowed_work_dirs
                 .as_ref()
@@ -1047,10 +1047,8 @@ impl AgentPool {
                 &binding.folder,
                 &binding.name,
             );
-            self.core_api.set_agent_data_dir(
-                &binding.jid,
-                &agent_data.to_string_lossy(),
-            );
+            self.core_api
+                .set_agent_data_dir(&binding.jid, &agent_data.to_string_lossy());
         }
 
         let custom_memory_dir: Option<String> = None;
@@ -1076,8 +1074,9 @@ impl AgentPool {
             let litho_model = (!cfg.mcp.litho_model_efficient.is_empty())
                 .then_some(cfg.mcp.litho_model_efficient.as_str());
             let wiki_dir_s = cfg.paths.wiki_dir.to_string_lossy().to_string();
-            let browser_v2 = crate::browser_agent::settings::engine_at(&cfg.paths.global_config_path)
-                == crate::browser_agent::settings::Engine::V2;
+            let browser_v2 =
+                crate::browser_agent::settings::engine_at(&cfg.paths.global_config_path)
+                    == crate::browser_agent::settings::Engine::V2;
 
             if cfg.mcp.bundled {
                 // One subprocess hosting every built-in server, instead of the
@@ -1173,6 +1172,7 @@ impl AgentPool {
                     openai_key,
                     openai_base,
                     custom_memory_dir.as_deref(),
+                    &binding.jid,
                 ));
                 // Cognitive memory used to ship as the `senclaw-cognitive` MCP
                 // server here. It's now built into the in-process tool list
@@ -1193,7 +1193,12 @@ impl AgentPool {
                     openai_key,
                     litho_model,
                 ));
-                mcp_servers.push(browser_mcp_config(cfg.ws_port, cfg.ui_server.port, &binding.jid, browser_v2));
+                mcp_servers.push(browser_mcp_config(
+                    cfg.ws_port,
+                    cfg.ui_server.port,
+                    &binding.jid,
+                    browser_v2,
+                ));
                 mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
                 mcp_servers.push(crate::mcp::helper::datagen_mcp_config(
                     cfg.ui_server.port,
@@ -1214,7 +1219,6 @@ impl AgentPool {
             // agent's roster and lists them at `GET /api/mcp-servers`. Spawning
             // a copy per chat session would give one plugin N processes and two
             // places to look when a tool misbehaves.
-
 
             tracing::info!(
                 "[AgentPool] Preparing {} MCP server(s) for {}: {}",
@@ -1482,7 +1486,12 @@ impl AgentPool {
         let runtime = self.runtime_manager();
         let mut out = Vec::with_capacity(images.len());
         for img in images {
-            let ext = img.media_type.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("png");
+            let ext = img
+                .media_type
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("png");
             let filename = format!("image.{ext}");
             let text = match (runtime.as_ref(), STANDARD.decode(img.data.as_bytes())) {
                 (Some(rt), Ok(bytes)) => {
@@ -1644,7 +1653,13 @@ impl AgentPool {
     /// Shadow: route in the background and log it — the turn is never
     /// delayed and the legacy keyword matcher still decides. On: route before
     /// dispatch (bounded by `ROUTE_TIMEOUT`) and hand the engine the decision.
-    async fn route_skill(&self, jid: &str, prompt: &str, pre_trigger: bool, config_path: &std::path::Path) {
+    async fn route_skill(
+        &self,
+        jid: &str,
+        prompt: &str,
+        pre_trigger: bool,
+        config_path: &std::path::Path,
+    ) {
         use crate::decision::settings::FeatureMode;
         let settings = crate::gateway::group_manager::load_decision_settings(config_path);
         let mode = settings.skills.mode;
@@ -1666,10 +1681,16 @@ impl AgentPool {
         let db = self.db.lock().unwrap().clone();
         let (chat, text) = (jid.to_string(), prompt.to_string());
         let run = async move {
-            let report = crate::decision::skill_route::route(&runtime, &text, &cards, pre_trigger).await;
-            let label = if mode == FeatureMode::On { "on" } else { "shadow" };
+            let report =
+                crate::decision::skill_route::route(&runtime, &text, &cards, pre_trigger).await;
+            let label = if mode == FeatureMode::On {
+                "on"
+            } else {
+                "shadow"
+            };
             if let Some(db) = db {
-                if let Err(e) = db.insert_skill_route_log(&chat, &text, label, pre_trigger, &report) {
+                if let Err(e) = db.insert_skill_route_log(&chat, &text, label, pre_trigger, &report)
+                {
                     tracing::warn!("[skill-route] could not log the decision: {e:#}");
                 }
             }
@@ -1695,7 +1716,12 @@ impl AgentPool {
     /// `control_plane::ladder::should_ask`). Spawned off the turn's own task,
     /// same as `route_skill` in shadow mode, so a cold Laya load never delays
     /// a reply — this is pure observability, so there is nothing to await.
-    async fn run_control_plane_shadow_specs(&self, jid: &str, prompt: &str, config_path: &std::path::Path) {
+    async fn run_control_plane_shadow_specs(
+        &self,
+        jid: &str,
+        prompt: &str,
+        config_path: &std::path::Path,
+    ) {
         use crate::control_plane::{ladder, registry::SpecRegistry, trace};
         let head = prompt.trim();
         if head.is_empty() {
@@ -1712,9 +1738,16 @@ impl AgentPool {
         tokio::spawn(async move {
             let reg = SpecRegistry::load();
             let state = crate::decision::json::Json::String(text.chars().take(2_000).collect());
-            for spec_id in ["input.guard.override", "input.guard.scope", "input.guard.sensitive"] {
-                let Some(spec) = reg.get(spec_id) else { continue };
-                let Some(decision) = ladder::ask(&runtime, &settings, spec, state.clone()).await else {
+            for spec_id in [
+                "input.guard.override",
+                "input.guard.scope",
+                "input.guard.sensitive",
+            ] {
+                let Some(spec) = reg.get(spec_id) else {
+                    continue;
+                };
+                let Some(decision) = ladder::ask(&runtime, &settings, spec, state.clone()).await
+                else {
                     continue;
                 };
                 if settings.record_decision_inputs {
@@ -1797,14 +1830,15 @@ impl AgentPool {
         // later request) until compaction.
         let full_prompt = prompt.to_string();
         {
-            let (do_memory, max_results, max_tokens) = {
+            let (do_memory, max_results, max_tokens, facts_by_chat) = {
                 let cfg = self.config.lock().unwrap();
                 let c = cfg.as_ref();
                 (
-                    c.map(|c| c.memory.pre_retrieval).unwrap_or(false),
+                    c.map(|c| c.memory.pre_retrieval).unwrap_or(true),
                     c.map(|c| c.memory.search_max_results as usize).unwrap_or(5),
                     c.map(|c| c.memory.engine_max_tokens as usize)
                         .unwrap_or(crate::memory::engine::RecallConfig::default().max_tokens),
+                    c.map(|c| c.memory.engine_facts_by_chat).unwrap_or(true),
                 )
             };
             // One read of the settings file for both switches.
@@ -1828,6 +1862,7 @@ impl AgentPool {
                     text: prompt.to_string(),
                     folder: group.folder.clone(),
                     chat_jid: jid.to_string(),
+                    facts_by_chat,
                     limit: max_results,
                     now: chrono::Utc::now().timestamp(),
                 },
@@ -1871,7 +1906,7 @@ impl AgentPool {
                 .map(|c| c.memory.cognitive_reflection)
                 .unwrap_or(true);
             if reflect_enabled {
-                super::reflection::reflect_push(&group.folder, "User", prompt);
+                super::reflection::reflect_push(&group.folder, jid, "User", prompt);
             }
         }
 
@@ -2847,6 +2882,7 @@ impl AgentPool {
                     if reflect_enabled {
                         crate::agent::agent_pool::reflection::reflect_push(
                             &folder,
+                            &jid,
                             "Assistant",
                             &data.content,
                         );
@@ -3030,10 +3066,12 @@ impl AgentPool {
                         let cfg = pool.config.lock().unwrap().as_ref().cloned();
                         if let Some(cfg) = cfg {
                             let folder = folder.clone();
+                            let chat = jid.clone();
                             tokio::spawn(async move {
                                 crate::memory::engine::facts::retain_text(
                                     &cfg,
                                     &folder,
+                                    &chat,
                                     &summary,
                                     "compaction",
                                 )
@@ -3456,10 +3494,7 @@ pub(crate) fn diff_todo_transitions(
 /// instructions the agent must always see, so it is read whole and not
 /// searched. Missing file → empty; any other read error is logged and also
 /// yields empty, because memory never fails a turn.
-fn pinned_memory(
-    config: &Mutex<Option<Arc<Config>>>,
-    folder: &str,
-) -> String {
+fn pinned_memory(config: &Mutex<Option<Arc<Config>>>, folder: &str) -> String {
     let Some(dir) = config
         .lock()
         .unwrap()
@@ -3470,13 +3505,27 @@ fn pinned_memory(
     };
     let path = dir.join(folder).join("MEMORY.md");
     match std::fs::read_to_string(&path) {
-        Ok(content) => content.trim().to_string(),
+        Ok(content) => cap_pinned(content.trim()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => {
             tracing::warn!("[AgentPool] Failed to read {}: {e}", path.display());
             String::new()
         }
     }
+}
+
+/// How much of `MEMORY.md` rides along with every turn (about 2,000 tokens).
+/// The agent can read the whole file when it needs the rest; a file that grew
+/// without bound must not eat the context of every turn.
+pub(crate) const PINNED_MEMORY_MAX_CHARS: usize = 8_000;
+
+/// `text` cut to [`PINNED_MEMORY_MAX_CHARS`] characters, saying so when it was.
+fn cap_pinned(text: &str) -> String {
+    if text.chars().count() <= PINNED_MEMORY_MAX_CHARS {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(PINNED_MEMORY_MAX_CHARS).collect();
+    format!("{kept}\n… (MEMORY.md is longer than this; read the file for the rest)")
 }
 
 /// Filter for the auto-reflection path (P14).
@@ -3514,6 +3563,54 @@ pub(crate) fn should_reflect(text: &str, min_chars: usize, max_chars: usize) -> 
 // window in `agent_pool::reflection` (P14 v2) — turns are buffered per
 // group and cognified as one call on size/idle flush. `should_reflect`
 // above is still the window-level gate.
+
+#[cfg(test)]
+mod pinned_memory_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_memory_file_rides_along_whole() {
+        assert_eq!(
+            cap_pinned("- likes tea\n- lives in Huế"),
+            "- likes tea\n- lives in Huế"
+        );
+    }
+
+    #[test]
+    fn a_long_one_is_cut_on_a_character_and_says_so() {
+        // Multi-byte text: a cut at a byte count would split a character.
+        let long = "ế".repeat(PINNED_MEMORY_MAX_CHARS + 500);
+        let out = cap_pinned(&long);
+        assert!(out.starts_with(&"ế".repeat(PINNED_MEMORY_MAX_CHARS)));
+        assert!(out.ends_with("read the file for the rest)"));
+        assert_eq!(
+            out.chars().filter(|c| *c == 'ế').count(),
+            PINNED_MEMORY_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn the_file_is_read_per_agent_and_a_missing_one_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("main")).unwrap();
+        std::fs::write(
+            dir.path().join("main").join("MEMORY.md"),
+            "\n  standing rule  \n",
+        )
+        .unwrap();
+        let mut cfg = crate::config::Config::from_env();
+        cfg.paths.profiles_dir = dir.path().to_path_buf();
+        let config = Mutex::new(Some(Arc::new(cfg)));
+        assert_eq!(pinned_memory(&config, "main"), "standing rule");
+        assert_eq!(pinned_memory(&config, "other"), "");
+    }
+
+    #[test]
+    fn the_standing_notes_are_on_unless_switched_off() {
+        // A default install must give the agent its MEMORY.md.
+        assert!(crate::config::Config::from_env().memory.pre_retrieval);
+    }
+}
 
 #[cfg(test)]
 mod merge_reasoning_tests {

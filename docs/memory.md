@@ -299,7 +299,7 @@ sequenceDiagram
     Note over MM: Đánh dấu file log hôm nay<br/>để re-index trước search tiếp theo
 ```
 
-**Cấu hình pre-retrieval:** `SENCLAW_PRE_RETRIEVAL=true` (mặc định `false`)
+**Cấu hình pre-retrieval:** `SENCLAW_PRE_RETRIEVAL` (mặc định `true` từ 2026-10-17: `MEMORY.md` đi kèm mỗi lượt, cắt 8.000 ký tự; `false` để tắt)
 
 ### Embedding & Vector Search
 
@@ -675,7 +675,7 @@ sequenceDiagram
 | `SENCLAW_CHUNK_OVERLAP` | `80` | Overlap giữa các chunk |
 | `SENCLAW_SEARCH_MAX_RESULTS` | `5` | Số kết quả tối đa |
 | `SENCLAW_SEARCH_MIN_SCORE` | `0.5` | Ngưỡng score tối thiểu |
-| `SENCLAW_PRE_RETRIEVAL` | `false` | Bật pre-retrieval context injection |
+| `SENCLAW_PRE_RETRIEVAL` | `true` | Đưa `MEMORY.md` vào ngữ cảnh mỗi lượt |
 
 ### Cấu hình Wiki
 

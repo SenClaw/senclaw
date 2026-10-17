@@ -31,8 +31,8 @@ tại FPT." (triplet giữ *ai–gì–gì* và mất *vì sao / khi nào*). Cod
 |---|---|---|
 | Lưu trữ | [`store.rs`](../src/memory/engine/facts/store.rs) | `mem_facts`, `mem_facts_fts`, `mem_fact_entities`, `mem_links` — chỉ thêm (`CREATE … IF NOT EXISTS`), không migrate gì cũ. Vector = BLOB, quét chính xác như `memory_chunks`. Phạm vi `bank` = agent folder |
 | Quét secret | [`defense.rs`](../src/memory/engine/facts/defense.rs) | key/token/private key/thẻ (Luhn) → `[REDACTED:<loại>]`. Email, số điện thoại, tên **không** bị xoá |
-| Trích xuất | [`extract.rs`](../src/memory/engine/facts/extract.rs) | prompt lấy từ Hindsight (chọn lọc, ngày tuyệt đối, giải đại từ, `world` vs `experience`) + hướng dẫn tiếng Việt; JSON phẳng 4 trường cho model nhỏ; parser chịu được fence/prose/mảng trần |
-| Retain | [`retain.rs`](../src/memory/engine/facts/retain.rs) | mọi lỗi chỉ đếm và log (`RetainReport`), không bao giờ ném |
+| Trích xuất | [`extract.rs`](../src/memory/engine/facts/extract.rs) | prompt lấy từ Hindsight (chọn lọc, ngày tuyệt đối, giải đại từ, `world` vs `experience`) + hướng dẫn tiếng Việt; JSON phẳng 4 trường cho model nhỏ; parser chịu được fence/prose/mảng trần, đọc **giá trị JSON hoàn chỉnh đầu tiên** (thừa `}` ở cuối thì bỏ qua) và bù `]`/`}` model quên đóng (ở cuối, hoặc trước dấu đóng của vòng ngoài khi `]` của mảng bị rơi) — trừ khi câu trả lời dừng giữa một chuỗi (câu bị cắt nửa chừng không được lưu). Một phần tử hỏng trong mảng (khoá lặp `{"text{"text":…`) chỉ làm mất chính nó: mảng không đọc được thì từng phần tử được parse riêng, phần tử hỏng bị bỏ và ghi một cảnh báo `kept`/`dropped`; câu trả lời đó **không** tính vào `failed_chunks` (chỉ câu không đọc được phần tử nào, hoặc mảng không được đóng vì bị cắt, mới tính) |
+| Retain | [`retain.rs`](../src/memory/engine/facts/retain.rs), [`restated.rs`](../src/memory/engine/facts/restated.rs) | mọi lỗi chỉ đếm và log (`RetainReport`), không bao giờ ném; `restated.rs` nhận ra fact model chỉ nhắc lại (xem dưới) |
 | Nguồn | [`reflection.rs`](../src/agent/agent_pool/reflection.rs), handler `compact:exec` trong `pool.rs` | `retain_text(config, folder, text, source)` với `source` = `reflection` \| `compaction` |
 
 Model trích xuất lấy từ slot `active_cognitive_id` (rơi về model chat đang dùng). Mỗi cửa sổ = **một** lần gọi.
@@ -51,6 +51,50 @@ Fact bị thay không bị xoá: `superseded_by` trỏ tới fact mới, mọi a
 mới (trigger `mem_facts_restore`) thì fact cũ **sống lại** — sửa nhầm một lần đổi ý chỉ cần quên fact mới. Nhắc lại cùng một điều
 (trùng hash hoặc cosine ≥ 0.95) thì không thêm hàng mà tăng `proof_count`; boost nhân `1 + 0.1·(0.5 + ln n / 10 − 0.5)` (tối đa +5%) —
 bằng chứng chỉ đảo được thứ tự của các hạng sát nhau, không kéo một kết quả xa lên đầu.
+
+### Slot: thay bằng luật, không cần model chỉ số thứ tự
+
+Model nhỏ hiếm khi trỏ đúng "F1" trên đường chat thật (đo: 0/2 lượt đổi ý, trong khi trên cửa sổ dựng sẵn được 15/18). Vì vậy mỗi fact có thể
+mang thêm **slot** = `(subject, predicate)` — thuộc tính nào của ai ("user · lives_in", "user · favorite_frontend_framework"). Model trả
+`subject` và `predicate` tuỳ chọn trong cùng một lần gọi; [`slots.rs`](../src/memory/engine/facts/slots.rs) chuẩn hoá (mọi cách gọi người dùng →
+`user`; `Lives in`/`resides_in` → `lives_in`; `favourite x` → `favorite_x`).
+
+- **Chỉ predicate đơn trị mới thay thế**: danh sách hạt giống mang từ bảng `cog_predicate_meta` của đồ thị (`name`, `lives_in`, `works_at`,
+  `job_title`, `status`, `price`…) và các lựa chọn đặt tên `favorite_*` / `preferred_*` / `current_*` / `primary_*` / `main_*` / `default_*` (số nhiều như
+  `favorite_foods` coi là đa trị). `likes`, `knows`, `uses`… và predicate lạ coi là **đa trị**: giữ một fact cũ thì cứu được, ẩn nhầm một fact đúng thì không.
+- Fact mới thay mọi fact **hiện hành cùng slot** mà chat đó được thấy (cùng `bank`, cùng phạm vi chat — không bao giờ thay fact của chat khác), sau khi fact mới đã được lưu.
+- **Câu về thời điểm sớm hơn không thay**: "năm 2025 tôi làm ở FPT" nói sau "tôi đang làm ở VNG" là lịch sử, không phải đổi việc (so mốc thời gian của fact mới với fact cũ).
+- Prompt cho model thấy slot của từng `KNOWN FACTS` (`[F1] <user · lives_in> …`) và dặn dùng **đúng** predicate đó khi nêu giá trị mới; có ví dụ đổi ý và ví dụ chuyển nhà
+  không nêu `replaces`. `replaces` vẫn dùng, hai đường cùng chỉ một fact thì tính một lần. Log retain có `superseded_by_slot`.
+- Model không nêu slot thì không có gì thay đổi so với trước (không đoán slot từ câu chữ).
+
+### Model nhắc lại fact đã biết
+
+Prompt cấm nhắc lại `KNOWN FACTS`, nhưng model nhỏ vẫn làm, thường bằng câu chữ khác ("User" thay "Người dùng", thêm "đã"). Có embedding thì vector bắt được;
+cài đặt mặc định (không embedding) chỉ bắt được trùng nguyên văn, nên bản diễn đạt lại thành một fact mới. Trước khi lưu, [`restated.rs`](../src/memory/engine/facts/restated.rs)
+so fact mới với đúng các dòng `KNOWN FACTS` của chunk nó: nếu nó **không thêm gì**, dòng cũ chỉ được `touch` (tính vào `reinforced`) và fact mới bị bỏ. Phải đủ cả năm điều kiện:
+
+- fact mới không nêu `replaces` (nêu `replaces` là tuyên bố có đổi);
+- ≥ 3 từ và ≥ 80% từ của fact mới đã có trong fact cũ. Không dùng `overlap_coefficient`: nó chia cho vế *ngắn*, nên một fact dài chứa fact ngắn đã lưu được 1.0 dù thêm ý;
+- mọi số/ngày, từ phủ định (`không`, `not`…) và tên riêng (từ viết hoa không phải đầu câu sau) của fact mới đều có trong fact cũ, và fact mới giữ các từ phủ định của fact cũ. Lệch một số, một "không" hay một tên là khẳng định khác; bản nhắc lại bỏ bớt một tên hay một số thì chỉ nói ít hơn, còn bỏ mất một "không" thì nói ngược;
+- entity model liệt kê (trừ `user`/`assistant`) vẫn còn quá nửa số từ ở phía kia;
+- `when` của fact mới, nếu có, trùng fact cũ hoặc fact cũ chưa có ngày — khi đó fact cũ nhận ngày (`FactStore::date_if_missing`).
+
+"user", "người dùng", "assistant", "trợ lý" không tính là từ. Điều **không** bắt được: đổi một từ thường, không phải tên và không ai liệt kê làm entity
+("dark mode" → "light mode" trong câu dài); ngưỡng 80% chỉ là lề để phần lớn ca như vậy nằm dưới vạch. Model nhận ra có đổi thì phải nêu `replaces`.
+
+**Hai fact trong cùng một câu trả lời.** Model nhỏ hay nói một chuyện hai lần trong một câu trả lời: một dòng ngắn ("Người dùng đã sửa lỗi đăng nhập của ứng dụng thanh toán.") và một bản
+đầy đủ ("Hôm qua, … bằng cách xóa cookie cũ …, mất khoảng hai tiếng."). Mọi fact của câu trả lời chỉ được lưu sau khi parse xong, nên khi xét fact thứ hai thì fact thứ nhất chưa phải
+`StoredFact`; và nếu bản ngắn đứng trước thì nó đã bị lưu trước khi bản dài cho thấy nó không thêm gì. Vì vậy `restated::without_restated_siblings` so các fact **như model đã nói**, ngay sau khi
+parse và trước khi embed/lưu: bản ngắn bị bỏ dù đứng trước hay sau, bản đầy đủ giữ nguyên (chữ, ngày, entity). Cùng các điều kiện như trên (số, phủ định, tên, entity hai phía, `when`, `replaces`), cộng ba điều khác:
+
+- **chặt hơn**: *mọi* từ của fact bị bỏ phải có ở fact kia (không phải ≥ 80%). Không có câu chữ đã lưu nào để model diễn đạt lại, và đổi một từ thường ("buổi tối" → "buổi sáng") là điều không gì khác bắt được, nên ở đây nó không được phép làm mất một fact;
+- fact có `replaces` luôn ở lại và được xét trước (bản sao không `replaces` của nó mới là bản bị bỏ);
+- fact **có ngày** không bị bỏ vào fact không có ngày (không ai chuyển ngày sang cho nó); hai fact khác ngày là hai sự kiện. Ngày không bị đổi ở bất cứ đâu.
+
+Fact bị bỏ tính vào `RetainReport::folded`, **không** vào `reinforced`: `reinforced` nghĩa là một fact đã lưu vừa được nhắc lại (`touch`, `proof_count + 1`), còn một câu trả lời là một lần nhắc, nên hai
+bản trong cùng câu trả lời không phải bằng chứng thêm. `extracted = stored + reinforced + folded`. Fact còn lại vẫn đi tiếp qua kiểm tra với `KNOWN FACTS` như mọi fact khác (nên bản ngắn và bản dài cùng nhắc lại một fact
+đã lưu chỉ `touch` nó một lần, không phải hai). Chưa làm: so giữa các chunk của cùng một lần `retain` (mỗi chunk có một câu trả lời riêng).
 
 ## Đọc: một khối, không gọi model
 
@@ -73,15 +117,14 @@ trong [0.1, 1.0] × `1 + 0.2·(recency − 0.5)` × `1 + 0.1·(proof − 0.5)`. 
 bỏ qua. [`format.rs`](../src/memory/engine/format.rs): khối đánh số, mỗi mục ghi nguồn `(note)` / `(knowledge)` / `(fact)`; chuỗi
 `</memory_context>` trong dữ liệu bị vô hiệu. Một arm lỗi hoặc quá 3 s chỉ mất phần của nó.
 
-**`MEMORY.md` không phải arm.** Nó là ngữ cảnh ghim (chỉ dẫn thường trực); khối `<memory>` (env `memory.pre_retrieval`) đọc nguyên
-văn như trước, cùng đi vào ngữ cảnh của lượt.
+**`MEMORY.md` không phải arm.** Nó là ngữ cảnh ghim (chỉ dẫn thường trực), **bật mặc định** (`SENCLAW_PRE_RETRIEVAL=false` để tắt): mỗi lượt đi nguyên văn trong khối `<memory>` cùng ngữ cảnh của lượt, cắt ở 8.000 ký tự (kèm dòng báo "đọc file để xem phần còn lại") để một file phình to không ăn hết ngữ cảnh mỗi lượt.
 
 ## Memory, profile và context cập nhật thế nào
 
 | | Chứa gì | **Ghi** khi nào, bởi ai | **Đọc** khi nào | Sống bao lâu |
 |---|---|---|---|---|
 | **Kho fact** (memory tự động) | sự thật có ngày rút ra từ hội thoại | mỗi cửa sổ flush + mỗi lần compaction; model trích xuất; secret bị quét trước | **mỗi lượt**, qua 4 arm, trong ngân sách 600 từ | bền (SQLite); xoá bằng `DELETE /api/memory/facts/:id` |
-| **Note curated** + `MEMORY.md` | quyết định, ghi chú có chủ đích | agent gọi `memory_save` hoặc người sửa tay. **Không còn tự sinh từ compaction** | note: mỗi lượt nếu `memoryRecall`; `MEMORY.md`: nguyên văn nếu `memory.pre_retrieval` | bền (file) |
+| **Note curated** + `MEMORY.md` | quyết định, ghi chú có chủ đích | agent gọi `memory_save` hoặc người sửa tay. **Không còn tự sinh từ compaction** | note: mỗi lượt nếu `memoryRecall`; `MEMORY.md`: nguyên văn (mặc định bật, cắt 8.000 ký tự) | bền (file) |
 | **Đồ thị tri thức** | tài liệu upload, `cog_add`, SOUL của agent | upload / `cog_add` / ingest SOUL. **Không còn từ chat** | arm `cognitive` nếu `preCognitive` | bền, mờ dần theo decay |
 | **Profile** `USER.md` | người dùng là ai + chỉ dẫn thường trực (field, directive) | agent gọi `profile_update` khi người dùng nêu sự thật bền / sở thích; Settings UI. **Engine không tự ghi** | **một lần mỗi phiên** trong ngữ cảnh lượt đầu, lọc tier (chat nhóm chỉ thấy public) | bền (file); directive cũ bị `superseded` |
 | **Lịch sử hội thoại** | các lượt của phiên | thêm mỗi lượt; ở 75% cửa sổ thì LLM tóm tắt và thay lịch sử bằng tóm tắt | mọi lần gọi model | trong bộ nhớ của phiên; tin nhắn gốc cũng nằm trong DB |
@@ -109,12 +152,17 @@ chat nhóm chỉ-đọc, ghi tự động từ hội thoại nhiều người l�
 | Ngân sách | `SENCLAW_MEMORY_ENGINE_MAX_TOKENS` (mặc định 600, tối thiểu 50). **Đơn vị là từ** (`chunker::estimate_tokens`); token thật cao hơn (~1.3× tiếng Anh, ~2× tiếng Việt) |
 | Số kết quả mỗi arm | `SENCLAW_SEARCH_MAX_RESULTS` (mặc định 5) |
 | Kích thước / nhịp cửa sổ | `SENCLAW_COGNITIVE_REFLECT_{MIN,MAX}_CHARS`, `_COOLDOWN_MS`, `_WINDOW_IDLE_MS` (giữ nguyên tên cũ) |
+| Phạm vi fact | `SENCLAW_MEMORY_FACTS_SCOPE` = `chat` (mặc định: mỗi cuộc trò chuyện chỉ nhớ lại fact của chính nó và fact chung của agent) \| `agent` (mọi chat của một agent dùng chung một kho) |
+| `MEMORY.md` mỗi lượt | `SENCLAW_PRE_RETRIEVAL` (mặc định `true`; `false` để tắt) |
 | Xử lý secret | `SENCLAW_MEMORY_ENGINE_DEFENSE` = `redact` (mặc định) \| `block` (bỏ cả cửa sổ) \| `off`. Giá trị lạ → `redact` |
 
 ## Xem và xoá
 
 - `GET /api/memory/facts?bank=<folder>&q=<từ khoá>&limit=&history=` — mới nhất trước, hoặc khớp từ khoá; `limit` 1–200; `history=true` thêm cả fact đã bị thay (kèm `supersededBy`). Mỗi fact có `proofCount`.
+- `GET /api/memory/facts/banks` — các agent đang có fact: `{bank, current, replaced, lastMentionedAt}`, agent được nhắc gần nhất trước (để giao diện có danh sách chọn).
 - `DELETE /api/memory/facts/:id?bank=<folder>` — quên một fact. Sai `bank` thì 404, không xoá được fact của agent khác.
+- **Giao diện**: tab **Facts** trong trang Knowledge — web ([`FactsView.tsx`](../../web-app/src/components/cognitive/FactsView.tsx), `lib/memoryFactsApi.ts`) và desktop (`lib/features/cognitive/facts_panel.dart`): chọn agent, tìm từ khoá, bật "hiện fact đã bị thay", quên một fact (có hỏi lại). Ngày hiển thị theo độ chính xác đã lưu (`2026`, `2026-03`, `2026-03-09`; đọc theo UTC), `×n` là số lần được nhắc.
+- Log `[facts] retained from …` ghi `stored`, `reinforced`, `folded`, `replaces_claimed`, `superseded`, `failed_chunks`: `replaces_claimed=0` nghĩa là model không nêu fact nào bị thay, còn `claimed > superseded` nghĩa là retain từ chối (số lạ hoặc khác chủ đề).
 - Cho agent (server `senclaw-memory`, trong chat là `mcp__core__memory_*`): `memory_search_facts` (`query`, `limit`; không có `query` thì liệt kê mới nhất; câu hỏi có thời gian "hôm qua" cũng tra theo ngày) và `memory_forget_fact` (`id` đầy đủ, chỉ fact của chính agent). MCP chạy tiến trình riêng nên tra bằng từ khoá và ngày, không có vector.
 
 ## Chạy eval
@@ -125,21 +173,69 @@ MEMORY_EVAL_OUT=/tmp/mem cargo test --lib memory::engine::eval   # → /tmp/mem.
 ```
 
 [`evals/memory/cases.json`](../evals/memory/cases.json): 9 note (một note của chat khác), 8 chunk đồ thị, 11 câu hỏi VN/EN; và cho kho
-fact 7 cửa sổ hội thoại chạy qua **retain thật** (chỉ câu trả lời của model trích xuất là dựng sẵn) + 7 câu hỏi chỉ fact trả lời được,
+fact 15 cửa sổ hội thoại chạy qua **retain thật** (chỉ câu trả lời của model trích xuất là dựng sẵn) + 11 câu hỏi chỉ fact trả lời được,
 gồm một ca đổi ý (React → Vue: phải thấy Vue và **không** thấy "thích dùng React"; `replaces_matching` trong fixture đóng vai model đọc
-`KNOWN FACTS` và chỉ đúng dòng — đổi cụm đó thành cụm không khớp thì eval đỏ).
+`KNOWN FACTS` và chỉ đúng dòng — đổi cụm đó thành cụm không khớp thì eval đỏ) và bốn ca **slot** không nêu `replaces`: chuyển thành phố, đổi
+framework backend, hai giá trị của `likes` đều còn, và một câu "năm 2025…" không được thay chỗ làm hiện tại.
 Luồng cũ giữ lại **chỉ trong test** ([`legacy.rs`](../src/memory/engine/legacy.rs), `#[cfg(test)]`) làm mốc so sánh. Cổng: không rò rỉ;
-engine lặp ≤ luồng cũ; có vector thì trả lời ≥ luồng cũ, không vector thì **>**; fact 7/7 so với 0/7; arm graph và temporal mỗi cái trả
+engine lặp ≤ luồng cũ; có vector thì trả lời ≥ luồng cũ, không vector thì **>**; fact 11/11 so với 0/11; arm graph và temporal mỗi cái trả
 lời một câu mà keyword một mình không trả lời được; secret không tới model trích xuất. Số liệu:
 [`plans/reports/eval-261016-1535-memory-recall-baseline.md`](../plans/reports/eval-261016-1535-memory-recall-baseline.md).
+
+### Eval đổi ý qua đường chat thật
+
+`node scripts/evals/memory-changed-mind.mjs --runs 3` chạy trên một daemon cô lập (đầu file có cách dựng): mỗi lần một agent folder riêng, một lượt nói thích React, chờ fact
+được lưu, một lượt đổi ý sang Vue, rồi kiểm — không còn fact **hiện hành** nào nêu sở thích cũ, và fact cũ nằm trong lịch sử với `supersededBy`. Khác harness ở chỗ nó đi qua
+toàn bộ đường thật: lượt chat dài, cửa sổ reflection, lời assistant lọt vào cửa sổ, flush khi im. Từ chối cổng 18788/18789. `--old-turn` / `--new-turn` đổi kịch bản
+(kịch bản khó: một câu nêu tên, nơi làm và React). Số đo (model 2B, mẫu nhỏ):
+[`plans/reports/eval-261017-2145-slot-supersession-real-model.md`](../plans/reports/eval-261017-2145-slot-supersession-real-model.md).
+
+### Eval với model trích xuất thật (`#[ignore]`)
+
+`real_extractor_keyword_only` và `real_extractor_with_vectors` chạy 15 cửa sổ của `fact_windows` qua **model thật** (client production
+`OpenAiCompatLlm`, kể cả timeout 60 s) thay cho `ScriptedFacts`, rồi hỏi 11 `fact_queries` và chấm y như trên. Không bao giờ chạy mặc định
+và không đo gì khi chạy mặc định — đây là thước đo, không phải cổng: model đổi câu trả lời giữa các lần chạy, nên chạy vài lần.
+
+Điểm cuối được đọc từ env, **một lần trong test** (không đọc trong code thư viện): `SENCLAW_EVAL_LLM_BASE_URL` (endpoint kiểu OpenAI, có hoặc không
+có `/v1`), `SENCLAW_EVAL_LLM_MODEL`, `SENCLAW_EVAL_LLM_API_KEY` (tuỳ chọn). Test từ chối cổng 18788/18789 — đó là daemon thật. Dựng một
+runtime riêng trên cổng trống, cwd và `HOME`/`SENCLAW_HOME` đều là thư mục tạm (CLAUDE.md "Never develop against a live install"):
+
+```bash
+S=$(mktemp -d); mkdir -p $S/home $S/root $S/models
+cd $S/root && HOME=$S/home SENCLAW_HOME=$S/home/.senclaw SENCLAW_LOCAL_MODELS_DIR=$S/models \
+  ~/.senclaw/runtimes/sen-mlx/<phiên bản>/bin/sen-mlx serve --host 127.0.0.1 --port 38931 \
+  --model ~/.senclaw/local-models/<thư mục model> &
+curl -s http://127.0.0.1:38931/v1/models      # "id" → SENCLAW_EVAL_LLM_MODEL
+```
+
+```bash
+SENCLAW_EVAL_LLM_BASE_URL=http://127.0.0.1:38931/v1 SENCLAW_EVAL_LLM_MODEL=<id> \
+  cargo test --lib memory::engine::eval::real_extractor -- --ignored --nocapture --test-threads=1
+```
+
+Trên đĩa chật: dùng chung thư mục target của checkout chính, `cargo test --lib --no-run`, rồi chạy thẳng file test (không có `--` trước tên lọc):
+`<target>/debug/deps/senclaw-<hash> memory::engine::eval::real_extractor_keyword_only --ignored --nocapture`.
+
+In ra theo từng cửa sổ: các dòng `KNOWN FACTS` model được xem (`shown [Fn]`), từng fact nó trích (loại, `when`, entities, `replaces`) và bộ đếm của
+retain; câu trả lời hỏng thì in nguyên văn (`CALL FAILED` / `UNUSABLE REPLY`). Sau đó: số `replaces` model nêu / được chấp nhận
+(`RetainReport.superseded`; `superseded_by_slot` là phần thay bằng luật) / bị bỏ qua (nêu − chấp nhận; trong đó bao nhiêu số nằm ngoài danh sách đã xem), kho cuối cùng (`live` / `retired`),
+và với ca đổi ý thì fact cũ **theo câu chữ của model** (fact model trích từ cửa sổ cũ, cùng thực thể với fixture) đã `retired` hay còn sống. Còn sống thì câu hỏi
+bị chấm `LEAKED` dù câu chữ khác cụm trong fixture ("thích sử dụng React" ≠ "thích dùng React"). Không trích được fact cũ thì ca đó không thử gì về `replaces`.
+Mỗi câu hỏi in `answered` / `MISSED` / `LEAKED` kèm ngữ cảnh đã tiêm khi trượt. Một dòng `summary` gom lại. Chấm chuỗi như cũ, kèm thêm số câu đúng
+**khi bỏ dấu tiếng Việt** ("xóa" ≠ "xoá" là cách đặt dấu, không phải quên). Chỉ hai khẳng định: ít nhất một cuộc gọi tới được model, và secret không bao giờ nằm trong
+prompt gửi đi. Số đo trên một model 2B: [`plans/reports/eval-261017-0005-memory-real-extractor.md`](../plans/reports/eval-261017-0005-memory-real-extractor.md).
 
 ## Bẫy
 
 - **Spreading cần embedding provider.** Không có provider (cấu hình mặc định) thì `preCognitive` cũ tiêm **rỗng**; `CognitiveArm` rơi về hybrid/keyword.
-- **Chat không còn nuôi đồ thị.** Trang Knowledge chỉ còn dữ liệu upload / `cog_add` / SOUL; fact thì xem qua `/api/memory/facts` (chưa có giao diện).
+- **Chat không còn nuôi đồ thị.** Trang Knowledge chỉ còn dữ liệu upload / `cog_add` / SOUL; fact thì xem qua `/api/memory/facts` (giao diện: tab Facts, xem trên).
 - **Ngân sách đếm từ**, đừng so với context window như thể là token thật.
-- **Phạm vi riêng tư của fact = agent folder**, không theo chat (cửa sổ reflection không mang chat jid). Note curated thì có lọc theo chat.
-- **Chất lượng model trích xuất nhỏ trên tiếng Việt chưa đo** (eval dùng câu trả lời dựng sẵn), kể cả việc nó có chỉ đúng `replaces` hay không.
+- **Fact theo chat.** Mỗi fact mang `origin` (JID của chat đã nói ra) và một chat chỉ thấy fact của mình cộng fact chung của agent — luật của note curated (`memory_session_rank`): fact của chat khác không bao giờ hiện, kể cả qua arm graph hay `memory_search_facts`. Cửa sổ reflection nay theo từng chat, cùng câu ở hai chat là hai fact (mỗi chat giữ bản của mình), và model trích xuất chỉ được cho xem — và chỉ có thể "thay" — fact mà chat đó thấy. Giao diện Facts và `GET /api/memory/facts` là góc nhìn của chủ máy: thấy fact của mọi chat, mỗi fact có `origin`. Fact đã có trước thay đổi này không có `origin` và vẫn hiện ở mọi chat. Đặt `SENCLAW_MEMORY_FACTS_SCOPE=agent` để dùng chung như trước.
+- **Chunk ghi chú chưa có vector** (lập chỉ mục lúc chưa có model embedding) được bù vector ở lần sync sau khi model chạy được, tối đa 640 chunk mỗi lần sync; trước đây sync theo hash file nên không bao giờ quay lại chúng.
+- **Eval mặc định không đo model trích xuất** (câu trả lời dựng sẵn). Đo thật mới có trên một model 2B (`gemma-4-e2b`, 28 lần chạy): chỉ đúng `replaces` mọi lần có nêu (15/15, rồi 9/9),
+  nhưng đôi lúc sai năm, và còn hai điểm yếu của model nhỏ. (1) Câu trả lời hỏng JSON ~3%: thiếu/thừa/lệch dấu đóng đã được `extract.rs` chữa; kiểu khoá bị lặp
+  (`{"text{"text":"…"`, ~1,4%) chỉ mất đúng phần tử hỏng (các fact còn lại của cửa sổ vẫn được lưu), nhưng fact đó mất hẳn. (2) Model hay đọc lại `KNOWN FACTS`: `restated.rs` chặn bản diễn đạt lại, không chặn được hai fact trong *cùng* một câu trả lời
+  ("Người dùng đã sửa lỗi…" ngắn và bản dài có "Hôm qua"). Chưa đo trên `gemma-4-e4b` đang cấu hình.
 - **Số trong `replaces` là số của đúng chunk đó.** `[F1]` của chunk này không phải `[F1]` của chunk khác; code đọc theo danh sách của chunk.
 - **Route gộp từ module khác phải có mặt trong `ROUTER_SOURCES`** ([`openapi.rs`](../src/gateway/ui_server/openapi.rs)), nếu không test spec không thấy route và `docs/openapi-daemon.yaml` lệch.
 - Ngày của note lấy từ `createdAt` (nửa đêm UTC); thiếu hoặc sai định dạng thì trung tính.

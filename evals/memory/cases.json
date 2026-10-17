@@ -238,6 +238,46 @@
       "facts": [
         { "text": "Người dùng đã chuyển sang Vue và không còn dùng React nữa.", "kind": "world", "when": null, "entities": ["user", "Vue", "React"], "replaces_matching": "thích dùng React" }
       ]
+    },
+    {
+      "match": "sống ở Quy Nhơn",
+      "text": "User: tôi sống ở Quy Nhơn",
+      "facts": [{"text": "Người dùng sống ở Quy Nhơn.", "kind": "world", "when": null, "entities": ["user", "Quy Nhơn"], "subject": "Người dùng", "predicate": "lives in"}]
+    },
+    {
+      "match": "chuyển vào Vũng Tàu",
+      "text": "User: tôi chuyển vào Vũng Tàu rồi, không ở Quy Nhơn nữa",
+      "facts": [{"text": "Người dùng đã chuyển vào Vũng Tàu sống.", "kind": "world", "when": null, "entities": ["user", "Vũng Tàu", "Quy Nhơn"], "subject": "user", "predicate": "lives_in"}]
+    },
+    {
+      "match": "backend thì tôi thích Express",
+      "text": "User: backend thì tôi thích Express",
+      "facts": [{"text": "Người dùng thích dùng Express cho backend.", "kind": "world", "when": null, "entities": ["user", "Express"], "subject": "tôi", "predicate": "favourite backend framework"}]
+    },
+    {
+      "match": "backend giờ tôi dùng Fastify",
+      "text": "User: backend giờ tôi dùng Fastify, bỏ Express rồi",
+      "facts": [{"text": "Người dùng giờ dùng Fastify thay cho Express ở backend.", "kind": "world", "when": null, "entities": ["user", "Fastify", "Express"], "subject": "user", "predicate": "favorite_backend_framework"}]
+    },
+    {
+      "match": "thích uống kombucha",
+      "text": "User: tôi thích uống kombucha",
+      "facts": [{"text": "Người dùng thích uống kombucha.", "kind": "world", "when": null, "entities": ["user", "kombucha"], "subject": "user", "predicate": "likes"}]
+    },
+    {
+      "match": "cũng thích uống matcha",
+      "text": "User: tôi cũng thích uống matcha",
+      "facts": [{"text": "Người dùng cũng thích uống matcha.", "kind": "world", "when": null, "entities": ["user", "matcha"], "subject": "user", "predicate": "likes"}]
+    },
+    {
+      "match": "đang làm ở VNG",
+      "text": "User: tôi đang làm ở VNG",
+      "facts": [{"text": "Người dùng đang làm việc ở VNG.", "kind": "world", "when": null, "entities": ["user", "VNG"], "subject": "user", "predicate": "works at"}]
+    },
+    {
+      "match": "năm 2025 tôi làm ở Haravan",
+      "text": "User: năm 2025 tôi làm ở Haravan",
+      "facts": [{"text": "Năm 2025 người dùng làm việc ở Haravan.", "kind": "world", "when": "2025", "entities": ["user", "Haravan"], "subject": "user", "predicate": "works_at"}]
     }
   ],
   "fact_queries": [
@@ -285,6 +325,32 @@
       "must_include": ["Vue"],
       "must_exclude": ["thích dùng React"],
       "why": "the user changed their mind; the old preference is kept for history and must not be recalled beside the new one"
+    },
+    {
+      "id": "slot-moved-city",
+      "text": "Người dùng sống ở thành phố nào?",
+      "must_include": ["Vũng Tàu"],
+      "must_exclude": ["sống ở Quy Nhơn"],
+      "why": "a new value for a single-valued attribute replaces the old one with no replaces named"
+    },
+    {
+      "id": "slot-moved-backend",
+      "text": "Người dùng dùng framework backend nào?",
+      "must_include": ["Fastify"],
+      "must_exclude": ["thích dùng Express"],
+      "why": "a favourite is one value at a time; the old choice must not be recalled beside the new"
+    },
+    {
+      "id": "slot-many-values",
+      "text": "Người dùng thích uống gì?",
+      "must_include": ["kombucha", "matcha"],
+      "why": "likes can have many values: a second one must not hide the first"
+    },
+    {
+      "id": "slot-history-is-not-a-change",
+      "text": "Người dùng đang làm việc ở đâu?",
+      "must_include": ["VNG"],
+      "why": "a statement about 2025 is history and must not hide where the user works now"
     }
   ]
 }

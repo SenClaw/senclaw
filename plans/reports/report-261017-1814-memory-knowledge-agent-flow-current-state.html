@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SenClaw — Knowledge, Memory và luồng Agent: thực trạng</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#16202b; --muted:#5b6876; --line:#dfe4ea;
+  --accent:#2457d6; --accent-soft:#e7eefc; --ok:#17803d; --ok-soft:#e3f5ea;
+  --warn:#9a5b00; --warn-soft:#fdf1dc; --bad:#b3261e; --bad-soft:#fbe7e5;
+  --new:#6b3fd1; --new-soft:#efe9fb; --code:#eef1f5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+    --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+    --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+    --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+  --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+  --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+  --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px 64px}
+header{padding:40px 0 20px}
+header .kicker{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:30px;line-height:1.2;margin:6px 0 10px}
+header p{margin:0;color:var(--muted);max-width:780px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -16px;padding:8px 16px;overflow-x:auto;white-space:nowrap}
+nav a{display:inline-block;margin-right:14px;color:var(--muted);text-decoration:none;font-size:13px;padding:4px 0}
+nav a:hover{color:var(--accent)}
+section{margin-top:44px}
+h2{font-size:21px;margin:0 0 4px}
+h2 + .lead{color:var(--muted);margin:0 0 18px}
+h3{font-size:16px;margin:22px 0 8px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.chip{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;margin-right:4px;vertical-align:middle}
+.c-ok{background:var(--ok-soft);color:var(--ok)}
+.c-warn{background:var(--warn-soft);color:var(--warn)}
+.c-bad{background:var(--bad-soft);color:var(--bad)}
+.c-new{background:var(--new-soft);color:var(--new)}
+.c-info{background:var(--accent-soft);color:var(--accent)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+code{background:var(--code);padding:1px 5px;border-radius:5px;word-break:break-word}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:color-mix(in srgb,var(--panel) 80%,var(--line))}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tldr{border-left:4px solid var(--accent);background:var(--accent-soft)}
+.tldr ul{margin:8px 0 0;padding-left:20px}
+.tldr li{margin:5px 0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.kpi b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
+.kpi span{font-size:12px;color:var(--muted)}
+.flow{display:flex;flex-direction:column;gap:0}
+.step{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:22px}
+.step:not(:last-child)::after{content:"";position:absolute;left:28px;bottom:-22px;height:22px;border-left:2px solid var(--line)}
+.step:not(:last-child)::before{content:"";position:absolute;left:23px;bottom:-24px;border:6px solid transparent;border-top:8px solid var(--line);border-bottom:0}
+.step h4{margin:0 0 2px;font-size:14px}
+.step p{margin:0;font-size:13px;color:var(--muted)}
+.step.new{border-color:var(--new);background:linear-gradient(0deg,var(--new-soft),var(--new-soft)) }
+.step.store{border-style:dashed}
+.legend{font-size:12.5px;color:var(--muted);margin:10px 0 0}
+.note{font-size:13px;color:var(--muted)}
+.callout{border-radius:10px;padding:12px 14px;margin:12px 0;font-size:14px}
+.callout.warn{background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent)}
+.callout.bad{background:var(--bad-soft);border:1px solid color-mix(in srgb,var(--bad) 35%,transparent)}
+.callout.ok{background:var(--ok-soft);border:1px solid color-mix(in srgb,var(--ok) 35%,transparent)}
+.callout b:first-child{display:block;margin-bottom:2px}
+ol.num{padding-left:20px}
+ol.num li{margin:6px 0}
+footer{margin-top:56px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+.theme{float:right;font-size:12px;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;padding:4px 10px;cursor:pointer}
+@media (max-width:560px){h1{font-size:24px}.kpi b{font-size:21px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <button class="theme" id="theme" type="button" aria-label="Đổi giao diện sáng/tối">Sáng / Tối</button>
+  <div class="kicker">SenClaw · báo cáo thực trạng · 2026-10-17</div>
+  <h1>Knowledge, Memory và luồng Agent đang chạy thế nào</h1>
+  <p>Đối chiếu mã nguồn (nhánh <code>feat/memory-engine</code>, daemon <code>0.1.6 e92c23f</code>) với dữ liệu thật trên máy này (chỉ đọc, chỉ đếm — không đọc nội dung hội thoại). Phần nào đo được thì ghi số, phần nào suy ra thì ghi rõ.</p>
+</header>
+
+<nav aria-label="Mục lục">
+  <a href="#tom-tat">Tóm tắt</a>
+  <a href="#kho">Các kho</a>
+  <a href="#knowledge">Knowledge</a>
+  <a href="#flow">Luồng agent</a>
+  <a href="#cap-nhat">Cập nhật khi nào</a>
+  <a href="#quan-ly">Quản lý</a>
+  <a href="#cau-hinh">Cấu hình thật</a>
+  <a href="#van-de">Vấn đề</a>
+  <a href="#test">Kế hoạch test</a>
+</nav>
+
+<section id="tom-tat">
+  <h2>Tóm tắt</h2>
+  <p class="lead">Một câu: agent có <b>sáu nơi chứa trí nhớ</b>, nhưng chỉ ba nơi được tự động đưa vào mỗi lượt chat; kho <b>fact</b> mới (cài hôm nay) là nơi duy nhất được ghi tự động từ hội thoại.</p>
+  <div class="card tldr">
+    <b>Điểm chính</b>
+    <ul>
+      <li><b>Knowledge</b> (trang Knowledge) là <b>đồ thị tri thức</b> — <code>senclaw_cognitive.db</code>: 2.672 nút, 1.503 cạnh, 58 vùng (scope). Nó chủ yếu chứa <b>persona (SOUL.md)</b> của các agent và tài liệu / <code>cog_add</code>; từ hôm nay <b>chat không còn nuôi nó nữa</b>.</li>
+      <li><b>Memory</b> nằm rải ở: file <code>~/senclaw/profiles/&lt;agent&gt;/memory/*.md</code> + <code>MEMORY.md</code> (ghi chú có chủ đích), đồ thị ở trên, <b>kho fact</b> <code>mem_*</code> trong <code>senclaw.db</code> (mới, hiện <b>0 fact</b>), <code>SOUL.md</code> (persona), <code>~/.senclaw/USER.md</code> (profile người dùng), và Wiki (git).</li>
+      <li><b>Mỗi lượt chat</b>: không gọi model để nhớ — chạy các "arm" tìm kiếm song song → gộp RRF → cắt theo ngân sách 600 từ → một khối <code>&lt;memory_context&gt;</code> gắn vào lượt đó, <b>không lưu vào lịch sử</b>.</li>
+      <li><b>Ghi</b>: hội thoại được gom thành cửa sổ (2.000 ký tự hoặc im 2 phút), một lần gọi model/đoạn để rút fact; tóm tắt khi compaction cũng được rút fact. Fact đổi ý thay fact cũ.</li>
+      <li><b>Hai điểm yếu đo được trên máy này</b>: (1) 1.563 chunk ghi chú <b>0 vector</b> → tìm ghi chú chỉ bằng từ khoá; (2) cả ba "slot" model (chat / nhanh / trích xuất) đều trỏ cùng <code>gemma-4-e4b</code> trên máy LAN <code>192.168.0.93</code> — máy đó tắt là kho fact đứng yên.</li>
+    </ul>
+  </div>
+  <div class="kpis">
+    <div class="kpi"><b>2.672</b><span>nút trong đồ thị (2.119 chunk · 520 entity · 33 loại)</span></div>
+    <div class="kpi"><b>1.503</b><span>cạnh</span></div>
+    <div class="kpi"><b>1.563</b><span>chunk ghi chú đã lập chỉ mục · <b>0</b> có vector</span></div>
+    <div class="kpi"><b>23 / 34</b><span>agent có ghi chú curated</span></div>
+    <div class="kpi"><b>0</b><span>fact trong kho mới (vừa cài)</span></div>
+    <div class="kpi"><b>84</b><span>nhóm / agent binding</span></div>
+  </div>
+</section>
+
+<section id="kho">
+  <h2>Bản đồ các kho</h2>
+  <p class="lead">Ai chứa gì, nằm ở đâu, ai ghi, ai đọc, nhìn thấy ở đâu.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Kho</th><th>Chứa gì</th><th>Nằm ở đâu</th><th>Quy mô thật</th><th>Ghi bởi</th><th>Vào lượt chat</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>Fact</b> <span class="chip c-new">mới</span></td>
+        <td>Câu tự đủ nghĩa, có ngày và thực thể ("Emily chuyển đến Huế tháng 3/2026")</td>
+        <td><code>~/.senclaw/senclaw.db</code> — <code>mem_facts</code>, <code>mem_facts_fts</code>, <code>mem_fact_entities</code>, <code>mem_links</code></td>
+        <td class="num">0 fact (mới cài)</td>
+        <td>Reflection (cửa sổ hội thoại) và compaction → model trích xuất</td>
+        <td><b>Có</b> — 4 arm: semantic · keyword · graph · temporal. Không công tắc.</td>
+      </tr>
+      <tr>
+        <td><b>Đồ thị tri thức</b><br><span class="note">("Knowledge")</span></td>
+        <td>Nút chunk / entity / entity_type, cạnh có trọng số, salience, decay</td>
+        <td><code>~/.senclaw/senclaw_cognitive.db</code> — <code>cog_nodes</code>, <code>cog_edges</code>, <code>cog_node_sets</code>…</td>
+        <td class="num">2.672 nút · 1.503 cạnh · 58 scope · 2.296 nút có vector</td>
+        <td>Upload tài liệu, <code>cog_add</code>, ingest <code>SOUL.md</code>. <b>Không còn từ chat</b></td>
+        <td><b>Có</b> — arm <code>cognitive</code>, vì <code>preCognitive = true</code> trên máy này</td>
+      </tr>
+      <tr>
+        <td><b>Ghi chú curated</b></td>
+        <td>Quyết định, runbook, ghi chú có chủ đích (kèm frontmatter, <code>origin_session_id</code>)</td>
+        <td><code>~/senclaw/profiles/&lt;agent&gt;/memory/*.md</code>; chỉ mục tìm kiếm trong <code>senclaw.db</code> (<code>memory_files</code>, <code>memory_chunks</code>)</td>
+        <td class="num">326 file · 1.563 chunk · 0 vector · 23/34 agent có ghi chú (lớn nhất: <code>main</code> 77)</td>
+        <td>Agent gọi <code>memory_save</code>, hoặc người sửa tay</td>
+        <td><b>Có</b> — arm <code>curated</code> (<code>memoryRecall = true</code>); ghi chú của chat khác bị lọc</td>
+      </tr>
+      <tr>
+        <td><b>MEMORY.md</b></td>
+        <td>Chỉ mục + ghi nhớ thường trực của một agent</td>
+        <td><code>~/senclaw/profiles/&lt;agent&gt;/MEMORY.md</code></td>
+        <td class="num">24/34 agent có file</td>
+        <td>Agent (theo hướng dẫn trong system prompt) hoặc người</td>
+        <td><span class="chip c-warn">mặc định KHÔNG</span> — chỉ ghim khi <code>SENCLAW_PRE_RETRIEVAL=true</code>; daemon thật không đặt biến này</td>
+      </tr>
+      <tr>
+        <td><b>SOUL.md</b></td>
+        <td>Persona / danh tính của agent</td>
+        <td><code>~/senclaw/profiles/&lt;agent&gt;/SOUL.md</code></td>
+        <td class="num">ingest vào đồ thị (scope <code>persona:&lt;agent&gt;</code>)</td>
+        <td>Tool <code>PersonaUpdate</code>, người sửa tay</td>
+        <td><b>Có</b> — nhét vào system prompt mỗi phiên (<code>zen_core/engine.rs</code>)</td>
+      </tr>
+      <tr>
+        <td><b>Profile người dùng</b></td>
+        <td>Người dùng là ai, cách xưng hô, directive thường trực; có tier public / private</td>
+        <td><code>~/.senclaw/USER.md</code> (+ <code>TOOLS.md</code>, <code>AGENTS.md</code>)</td>
+        <td class="num">USER.md 411 byte</td>
+        <td>Tool <code>profile_update</code>, Settings. <b>Engine fact không tự ghi</b> (cố ý)</td>
+        <td><b>Có</b> — block trong system prompt, lọc tier (chat nhóm chỉ thấy public)</td>
+      </tr>
+      <tr>
+        <td><b>Wiki</b></td>
+        <td>Kiến thức dài hạn có cấu trúc, git-backed</td>
+        <td><code>~/senclaw/wiki</code></td>
+        <td class="num">—</td>
+        <td>Tool <code>wiki_write</code>, UI Wiki</td>
+        <td>Không tự động — agent phải gọi <code>wiki_search</code> / <code>wiki_read</code></td>
+      </tr>
+    </tbody>
+  </table></div>
+  <p class="legend">Số liệu: truy vấn chỉ-đọc vào <code>~/.senclaw/*.db</code> và liệt kê thư mục <code>~/senclaw/profiles</code> ngày 2026-10-17 17:5x, sau khi cài bản mới.</p>
+</section>
+
+<section id="knowledge">
+  <h2>Knowledge đang dùng để làm gì</h2>
+  <p class="lead">Trang Knowledge là giao diện của <b>đồ thị tri thức</b>, không phải của toàn bộ trí nhớ.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3 style="margin-top:0">Nó đang chứa gì</h3>
+      <ul>
+        <li><b>Persona</b>: các scope <code>persona:&lt;agent&gt;</code> (product-director, copywriter, reflector, browser-agent, test…) — mỗi section của <code>SOUL.md</code> (identity, intro, core, work) là một vùng.</li>
+        <li><b>Bộ nhớ mặc định theo agent</b>: tag <code>default_memory</code> (36 vùng) cho <code>group:main</code>, <code>ai-office:*</code>, <code>ai-sale:*</code>, <code>moltbook</code>… — tri thức tích luỹ ở các phiên bản trước (từ hội thoại hoặc <code>cog_add</code> — chưa phân biệt được nguồn).</li>
+        <li><b>Tài liệu / <code>cog_add</code></b> do người hoặc agent đưa vào.</li>
+        <li>Tỷ lệ: 2.119 chunk (văn bản gốc) · 520 entity · 33 loại entity; 2.296/2.672 nút có vector.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Nó được dùng thế nào</h3>
+      <ul>
+        <li><b>Mỗi lượt chat</b>: arm <code>cognitive</code> đọc nó (bật vì <code>preCognitive = true</code>): spreading activation, rơi về tìm từ khoá khi không có embedding.</li>
+        <li><b>Theo yêu cầu</b>: tool <code>cog_search</code> / <code>cog_recall</code> (recall củng cố cạnh đã đi qua — Hebbian) và <code>cog_add</code> / <code>cog_forget</code>.</li>
+        <li><b>Nền</b>: decay tick làm mờ cạnh không dùng, LTP nâng cạnh hay dùng, dọn dẹp / maintenance (<code>/api/cognitive/maintenance</code>).</li>
+        <li><b>Xem</b>: trang Knowledge — Stats, Search (6 chế độ: GraphCompletion, Hybrid, FTS, Chunks, Triplet, Spreading), Graph, Decay log.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn"><b>Thay đổi hôm nay</b>Trước đây mỗi cửa sổ hội thoại được rút <i>triplet</i> vào đồ thị. Bản mới (<code>e92c23f</code>) chỉ rút <b>fact</b> vào kho riêng; đồ thị chỉ còn nhận upload, <code>cog_add</code> và ingest SOUL. Dữ liệu cũ trong đồ thị vẫn được đọc, nhưng sẽ không lớn thêm từ chat.</div>
+  <div class="callout warn"><b>Tìm theo nghĩa gần như tắt trên máy này</b>Cấu hình embedding là <code>local / all-MiniLM-L6-v2</code>, nhưng <code>~/.senclaw</code> không có runtime llama.cpp lẫn model MiniLM, và 0/1.563 chunk ghi chú có vector. Spreading activation gieo hạt <i>chỉ bằng vector</i> nên trả rỗng; arm đồ thị tự rơi về keyword. (Suy ra từ thư mục + số liệu, chưa gọi thử embedder.)</div>
+</section>
+
+<section id="flow">
+  <h2>Luồng agent: từ tin nhắn đến trí nhớ</h2>
+  <p class="lead">Hai đường độc lập: <b>đọc</b> chạy trong từng lượt chat và không gọi model; <b>ghi</b> chạy nền sau lượt.</p>
+  <div class="grid g2">
+    <div>
+      <h3 style="margin-top:0">Đường đọc — mỗi lượt <span class="chip c-info">đồng bộ, 0 lần gọi model để nhớ</span></h3>
+      <div class="flow">
+        <div class="step"><h4>1 · Tin nhắn vào</h4><p>Telegram / Feishu / WeChat / Web / Desktop → router → hàng đợi theo nhóm (FIFO).</p></div>
+        <div class="step"><h4>2 · Chuẩn bị đầu vào</h4><p><code>prepare_turn_input</code>: đọc tài liệu đính kèm; ảnh → model vision, hoặc OCR nếu model chỉ có chữ.</p></div>
+        <div class="step"><h4>3 · Tiền xử lý</h4><p>Cài mặc định người dùng, định tuyến skill (pre-skill router), control plane (shadow), chọn model theo nhóm.</p></div>
+        <div class="step new"><h4>4 · Recall — <code>engine::pre_retrieval</code> <span class="chip c-new">mới</span></h4><p>Các arm chạy song song, timeout 3 giây: <code>curated</code> · <code>cognitive</code> · <code>facts_semantic</code> · <code>facts_keyword</code> · <code>facts_graph</code> · <code>facts_temporal</code>. Một arm lỗi chỉ mất phần của nó.</p></div>
+        <div class="step new"><h4>5 · Hợp nhất <span class="chip c-new">mới</span></h4><p>RRF (k = 60) trên danh tính <code>(arm, key)</code> → gộp bản gần trùng (≥ 0.85) → boost recency ±10% và bằng chứng ±5% → cắt ngân sách 600 từ → một khối <code>&lt;memory_context&gt;</code>.</p></div>
+        <div class="step new"><h4>6 · Ngữ cảnh của lượt <span class="chip c-new">mới</span></h4><p><code>set_turn_context(jid, …)</code> → gắn vào tin nhắn người dùng cuối của <i>mỗi lần gọi model trong lượt</i>, trên bản sao. <b>Không lưu vào lịch sử</b>, lượt rỗng thì xoá (<code>None</code>).</p></div>
+        <div class="step"><h4>7 · Vòng lặp engine (ZenEngine)</h4><p>System prompt = nền + <code>SOUL.md</code> + block <code>USER.md</code> (theo tier) + <code>TOOLS.md</code> + <code>AGENTS.md</code>. Model gọi tool (MCP gộp trong <code>senclaw-core</code>), lặp tới khi trả lời.</p></div>
+        <div class="step"><h4>8 · Trả lời</h4><p>Gửi về kênh; lượt này vào cửa sổ reflection.</p></div>
+      </div>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Đường ghi — nền <span class="chip c-info">không chặn chat</span></h3>
+      <div class="flow">
+        <div class="step"><h4>A · Gom cửa sổ</h4><p><code>agent_pool/reflection.rs</code>: lượt user + assistant vào cửa sổ theo <i>agent folder</i> ("User: …" / "Assistant: …"). Bỏ nếu quá ngắn (&lt; 20 ký tự), quá dài, hoặc chỉ là một câu hỏi.</p></div>
+        <div class="step"><h4>B · Flush</h4><p>Đủ <b>2.000 ký tự</b> hoặc <b>im 120 giây</b> (cooldown 2 giây giữa hai lần flush cùng cửa sổ; đến sớm thì hoãn, không bỏ).</p></div>
+        <div class="step new"><h4>C · Quét secret <span class="chip c-new">mới</span></h4><p><code>defense::scrub</code>: key, token, private key, số thẻ (Luhn) → <code>[REDACTED:…]</code> <i>trước</i> khi model thấy. Email / SĐT / tên giữ nguyên.</p></div>
+        <div class="step new"><h4>D · Trích xuất <span class="chip c-new">mới</span></h4><p>Một lần gọi model/chunk (slot <code>active_cognitive</code> → <code>active</code> → <code>quick</code>). Prompt kèm tối đa 8 <code>KNOWN FACTS</code>; model có thể trả <code>replaces</code> khi người dùng đổi ý.</p></div>
+        <div class="step new"><h4>E · Retain <span class="chip c-new">mới</span></h4><p>Parse chịu lỗi (cứu JSON thiếu ngoặc, bỏ phần tử hỏng) → embed (nếu có) → bỏ trùng (hash / cosine ≥ 0.95 / nói lại) → kiểm <code>replaces</code> (đúng số, cùng chủ đề) → lưu → tạo liên kết semantic / temporal.</p></div>
+        <div class="step store"><h4>F · Kho fact</h4><p><code>mem_facts</code> trong <code>senclaw.db</code>. Fact bị thay thì ẩn (<code>superseded_by</code>), không xoá; xoá fact mới thì fact cũ sống lại.</p></div>
+        <div class="step"><h4>G · Compaction</h4><p>Ở 75% cửa sổ ngữ cảnh: model tóm tắt và thay lịch sử bằng bản tóm tắt; bản tóm tắt <i>cũng</i> được retain thành fact (không còn chưng cất thành note).</p></div>
+      </div>
+    </div>
+  </div>
+  <p class="legend">Ô viền tím = thay đổi của bản cài hôm nay. Mã: <code>agent_pool/pool.rs</code> (bước 4–6), <code>agent_pool/reflection.rs</code> (A–B), <code>memory/engine/</code> (4–6, C–F).</p>
+</section>
+
+<section id="cap-nhat">
+  <h2>Cái gì cập nhật khi nào</h2>
+  <p class="lead">Ma trận "sự kiện → kho nào đổi".</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Sự kiện</th><th>Fact</th><th>Đồ thị</th><th>Ghi chú / MEMORY.md</th><th>SOUL.md</th><th>USER.md</th><th>Lịch sử phiên</th></tr></thead>
+    <tbody>
+      <tr><td>Người dùng chat bình thường</td><td>nền: khi flush cửa sổ</td><td>—</td><td>—</td><td>—</td><td>—</td><td>thêm lượt</td></tr>
+      <tr><td>Người dùng nói "từ giờ luôn …"</td><td>có thể (cũng là fact)</td><td>—</td><td>—</td><td><code>PersonaUpdate</code></td><td>agent gọi <code>profile_update</code> nếu là chỉ dẫn về người dùng</td><td>thêm lượt</td></tr>
+      <tr><td>Người dùng đổi ý ("giờ tôi dùng Vue")</td><td><b>fact mới thay fact cũ</b></td><td>—</td><td>—</td><td>—</td><td>—</td><td>thêm lượt</td></tr>
+      <tr><td>Agent quyết định lưu một quyết định</td><td>—</td><td>—</td><td><code>memory_save</code></td><td>—</td><td>—</td><td>tool result</td></tr>
+      <tr><td>Upload tài liệu / <code>cog_add</code></td><td>—</td><td><b>thêm nút, cạnh</b></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td>Context đầy 75%</td><td>retain tóm tắt</td><td>—</td><td>—</td><td>—</td><td>—</td><td><b>thay bằng tóm tắt</b></td></tr>
+      <tr><td>Sửa <code>SOUL.md</code></td><td>—</td><td>re-ingest persona</td><td>—</td><td>file đổi</td><td>—</td><td>—</td></tr>
+      <tr><td>Sửa Settings → profile</td><td>—</td><td>—</td><td>—</td><td>—</td><td>file đổi (tier giữ nguyên)</td><td>—</td></tr>
+      <tr><td>Mỗi tick nền (decay)</td><td>—</td><td>làm mờ / nâng cạnh</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout ok"><b>Ví dụ</b>"Tôi tên là Sen, từ giờ luôn trả lời tiếng Việt." → agent gọi <code>profile_update</code> (USER.md đổi ngay, phiên sau nhận qua system prompt) + <code>PersonaUpdate</code> cho hành vi; cửa sổ flush rút fact "Người dùng tên là Sen". Hai nơi trùng một phần là <i>chủ ý</i>: profile nhỏ, luôn có mặt, có tier; fact nhiều, có ngày, chỉ hiện khi liên quan.</div>
+</section>
+
+<section id="quan-ly">
+  <h2>Quản lý thế nào</h2>
+  <p class="lead">Giao diện, API và công cụ của agent cho từng kho.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Kho</th><th>Giao diện (web / desktop)</th><th>REST (daemon 18788)</th><th>Tool của agent</th></tr></thead>
+    <tbody>
+      <tr><td><b>Fact</b></td><td><span class="chip c-bad">chưa có UI</span></td><td><code>GET /api/memory/facts?bank=&amp;q=&amp;limit=&amp;history=</code><br><code>DELETE /api/memory/facts/:id?bank=</code></td><td><code>memory_search_facts</code>, <code>memory_forget_fact</code></td></tr>
+      <tr><td><b>Đồ thị</b></td><td>Trang <b>Knowledge</b>: Stats, Search, Graph, Decay log, upload</td><td><code>/api/cognitive/*</code> (stats, nodes, search, recall, add, upload, subgraph, full-graph, maintenance, cleanup…)</td><td><code>cog_add</code>, <code>cog_cognify</code>, <code>cog_search</code>, <code>cog_recall</code>, <code>cog_forget</code></td></tr>
+      <tr><td><b>Ghi chú</b></td><td>Cài đặt agent; sửa file trực tiếp</td><td>qua MCP memory server</td><td><code>memory_save</code>, <code>memory_get</code>, <code>memory_delete</code>, <code>memory_search</code>, <code>memory_recall</code></td></tr>
+      <tr><td><b>Profile</b></td><td>Settings → Profile (xem trước đầy đủ / chỉ public)</td><td><code>/api/user-profile…</code></td><td><code>profile_get</code>, <code>profile_update</code></td></tr>
+      <tr><td><b>SOUL.md</b></td><td>chưa thấy giao diện riêng — sửa file hoặc nhờ agent</td><td>—</td><td><code>PersonaUpdate</code></td></tr>
+      <tr><td><b>Wiki</b></td><td>Trang Wiki</td><td><code>/api/wiki/*</code></td><td><code>wiki_read</code>, <code>wiki_write</code>, <code>wiki_search</code>, <code>wiki_tree</code>…</td></tr>
+      <tr><td><b>Công tắc đọc</b></td><td>Settings → Agent behavior</td><td><code>/api/agent-behavior</code> — <code>memoryRecall</code> (ghi chú), <code>preCognitive</code> (đồ thị)</td><td>—</td></tr>
+      <tr><td><b>Tự trích xuất</b></td><td>Settings → Knowledge "Auto-reflect"</td><td><code>/api/cognitive-config</code></td><td>env <code>SENCLAW_COGNITIVE_REFLECTION</code></td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Trong chat, tool built-in đến model dưới dạng <code>mcp__core__&lt;tool&gt;</code> (một tiến trình <code>senclaw core-server</code> gộp mọi server). Kho fact không có công tắc đọc — luôn bật.</p>
+</section>
+
+<section id="cau-hinh">
+  <h2>Cấu hình thật trên máy này</h2>
+  <p class="lead">Đọc từ <code>~/.senclaw/config.json</code> và tiến trình daemon đang chạy (không in khoá API).</p>
+  <div class="grid g3">
+    <div class="card"><b>Model</b><p class="note" style="margin:6px 0 0">Slot <i>active</i>, <i>quick</i> và <i>cognitive</i> đều là <code>google/gemma-4-e4b</code> tại <code>http://192.168.0.93:1234/v1</code> (LM Studio trong LAN). 7 cấu hình LLM được lưu.</p></div>
+    <div class="card"><b>Embedding</b><p class="note" style="margin:6px 0 0"><code>provider: local</code>, <code>all-MiniLM-L6-v2</code>. Chưa thấy runtime / model để chạy; 0/1.563 chunk ghi chú có vector.</p></div>
+    <div class="card"><b>Công tắc</b><p class="note" style="margin:6px 0 0"><code>memoryRecall = true</code> · <code>preCognitive = true</code> · <code>cognitiveConfig.enabled = true</code> · <code>autoReflection = true</code>. Biến <code>SENCLAW_PRE_RETRIEVAL</code> không đặt → MEMORY.md không được ghim.</p></div>
+  </div>
+  <h3>Giá trị mặc định đang áp dụng</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Tham số</th><th>Giá trị</th><th>Biến môi trường</th></tr></thead>
+    <tbody>
+      <tr><td>Ngân sách khối recall</td><td class="num">600 từ (đếm từ, không phải token)</td><td><code>SENCLAW_MEMORY_ENGINE_MAX_TOKENS</code></td></tr>
+      <tr><td>Số kết quả mỗi arm</td><td class="num">5</td><td><code>SENCLAW_SEARCH_MAX_RESULTS</code></td></tr>
+      <tr><td>Cửa sổ reflection</td><td class="num">20 – 2.000 ký tự · idle 120 s · cooldown 2 s</td><td><code>SENCLAW_COGNITIVE_REFLECT_*</code></td></tr>
+      <tr><td>Xử lý secret</td><td class="num">redact</td><td><code>SENCLAW_MEMORY_ENGINE_DEFENSE</code></td></tr>
+      <tr><td>Timeout mỗi arm</td><td class="num">3 giây</td><td>—</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="van-de">
+  <h2>Vấn đề và rủi ro hiện có</h2>
+  <p class="lead">Xếp theo mức ảnh hưởng đến việc "agent nhớ được không".</p>
+  <div class="callout bad"><b>1 · Trích xuất phụ thuộc một máy LAN</b>Cả ba slot model trỏ <code>192.168.0.93:1234</code>. Khi máy đó không trả lời (đã gặp lúc đo), mỗi lần flush thất bại và được đếm trong <code>RetainReport</code> — chat không hỏng, nhưng <b>kho fact không lớn thêm</b>. Mỗi chunk tốn ~10 giây trên model 2B; cửa sổ nhiều chunk thì nhân lên.</div>
+  <div class="callout warn"><b>2 · Tìm kiếm theo nghĩa chưa chạy</b>Ghi chú: 0/1.563 chunk có vector → chỉ FTS. Không embedding thì bản diễn đạt lại của một fact chỉ bị bỏ khi trùng nguyên văn hoặc qua bộ lọc "nói lại" (chống trùng không phụ thuộc embedding đã thêm, nhưng thận trọng nên vẫn có thể lọt vài bản trùng).</div>
+  <div class="callout warn"><b>3 · MEMORY.md không tự vào ngữ cảnh</b>Mặc định <code>SENCLAW_PRE_RETRIEVAL=false</code>. 24 agent có MEMORY.md nhưng nội dung chỉ đến model nếu agent tự đọc file. Đây là hành vi có từ trước, không phải do engine mới.</div>
+  <div class="callout warn"><b>4 · Fact theo agent folder, không theo chat</b>Cửa sổ reflection không mang chat jid, nên một fact từ chat A có thể được recall ở chat B của cùng agent. Ghi chú curated thì có lọc theo chat. 70/84 nhóm dùng chung folder <code>main</code> nên ảnh hưởng lớn nhất ở đó: fact từ chat này có thể hiện ra ở 69 chat kia.</div>
+  <div class="callout warn"><b>5 · Chất lượng trích xuất tiếng Việt của model nhỏ</b>Đo trên gemma-4-e2b 4-bit: 5–6/7 truy vấn (6–7/7 nếu bỏ dấu), đổi ý được model nêu 15/18 lần, ~3% câu trả lời hỏng JSON (đã vá cách đọc). Sai năm 2/8 lần ("tháng 3 năm nay" → 2024-03). <b>Chưa đo trên e4b thật.</b></div>
+  <div class="callout warn"><b>6 · Chưa có giao diện cho fact</b>Xem / xoá chỉ qua REST hoặc nhờ agent (<code>memory_search_facts</code>). Cần UI ở web-app và desktop (hai repo anh em).</div>
+  <div class="callout ok"><b>Đã xử lý</b>Recall không còn dán vào tin nhắn người dùng (lịch sử không phình); secret bị quét trước khi tới model; xoá được fact; đổi ý thay được fact cũ; JSON hỏng không làm mất cả cửa sổ; REST và router có test HTTP; toàn bộ 3.130 test lib + integration qua (3 test lifecycle chỉ hỏng vì thiếu binary phụ trong thư mục target chung, chạy lại đúng chỗ thì qua).</div>
+</section>
+
+<section id="test">
+  <h2>Kế hoạch thử nghiệm memory mới</h2>
+  <p class="lead">Chạy trên daemon cô lập (HOME và cổng riêng), không đụng daemon thật ở 18788/18789.</p>
+  <ol class="num">
+    <li>Bật model cục bộ (sen-mlx, gemma-4-e2b) làm slot chat + trích xuất cho daemon thử nghiệm.</li>
+    <li><b>Ghi</b>: gửi một đoạn hội thoại có sự thật, ngày tương đối và một secret giả; chờ flush; kiểm <code>GET /api/memory/facts</code> — fact có mặt, secret không có.</li>
+    <li><b>Đọc</b>: hỏi lại bằng cách diễn đạt khác và theo thời gian ("hôm qua", "tháng 3"); kiểm câu trả lời dùng đúng fact.</li>
+    <li><b>Đổi ý</b>: nói điều ngược lại; kiểm fact cũ bị ẩn (<code>history=true</code> vẫn thấy), câu hỏi trả về bản mới.</li>
+    <li><b>Quên</b>: <code>DELETE</code> fact mới → fact cũ sống lại.</li>
+    <li>Ghi nhận độ trễ ghi, số lần gọi model, và những gì lệch kỳ vọng.</li>
+  </ol>
+  <p class="note">Kết quả sẽ được ghi tiếp vào báo cáo riêng sau khi chạy.</p>
+</section>
+
+<footer>
+  Nguồn: <code>src/agent/agent_pool/pool.rs</code>, <code>reflection.rs</code>, <code>src/memory/engine/</code>, <code>src/zen_core/engine.rs</code>, <code>src/user_profile/</code>, <code>src/gateway/ui_server/core.rs</code>, <code>web-app/src/pages/CognitivePage.tsx</code>; dữ liệu thật đọc chỉ-đọc ngày 2026-10-17. Báo cáo đo model: <code>plans/reports/eval-261017-0005-memory-real-extractor.md</code>.
+</footer>
+</div>
+<script>
+(function(){
+  var b=document.getElementById('theme'), r=document.documentElement;
+  try{var s=localStorage.getItem('theme'); if(s) r.setAttribute('data-theme',s);}catch(e){}
+  b.addEventListener('click',function(){
+    var dark=r.getAttribute('data-theme')==='dark' || (!r.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
+    var next=dark?'light':'dark'; r.setAttribute('data-theme',next);
+    try{localStorage.setItem('theme',next);}catch(e){}
+  });
+})();
+</script>
+</body>
+</html>

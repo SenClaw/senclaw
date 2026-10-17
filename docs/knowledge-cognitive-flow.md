@@ -12,6 +12,8 @@
 
 Trên UI (web + desktop), lớp cognitive hiển thị dưới tên **"Knowledge"** (trước đây là "Memory"). Ba năng lực mà UI expose khớp với ba luồng nạp bên dưới: tổng hợp thông tin người dùng từ hội thoại (auto-reflection), mở rộng bằng tài liệu ngoài (upload), và nghiên cứu tổng hợp trả lời chi tiết (Recall).
 
+> **Đề xuất (2026-10-17):** hợp nhất lớp này vào kho Facts — xem [nghiên cứu và luồng update](../plans/reports/research-261017-2030-unify-knowledge-into-facts.html). Chưa triển khai; tài liệu này vẫn mô tả hành vi hiện tại.
+
 > **Thay đổi (2026-10-16):** hội thoại **không còn** đi vào đồ thị này — luồng auto-reflection (mục 2) giờ trích xuất *fact* vào kho fact ([memory-engine.md](memory-engine.md)). Đồ thị vẫn nhận tài liệu upload, `cog_add` và SOUL. Mục 2 mô tả hành vi cũ.
 
 ## Mục lục

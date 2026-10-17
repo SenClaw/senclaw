@@ -212,7 +212,10 @@ pub fn space_mcp_config(
 /// into the daemon's `/api/sen-link/*`, like the Space App tools above.
 pub fn link_mcp_config(ui_port: u16) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-link", "link-server");
-    cfg.env.insert("SENCLAW_LINK_API_URL".into(), format!("http://127.0.0.1:{ui_port}"));
+    cfg.env.insert(
+        "SENCLAW_LINK_API_URL".into(),
+        format!("http://127.0.0.1:{ui_port}"),
+    );
     with_daemon_token(&mut cfg);
     cfg
 }
@@ -239,9 +242,13 @@ pub fn memory_mcp_config(
     openai_api_key: Option<&str>,
     openai_base_url: Option<&str>,
     custom_memory_dir: Option<&str>,
+    chat_jid: &str,
 ) -> McpServerConfig {
     let mut cfg = McpServerConfig::new("senclaw-memory", "memory-server");
     cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
+    // Which chat is asking: the fact tools show only what this chat may see.
+    cfg.env
+        .insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
     cfg.env.insert("SENCLAW_FOLDER".into(), folder.to_owned());
     cfg.env
         .insert("SENCLAW_PROFILES_DIR".into(), profiles_dir.to_owned());
@@ -372,9 +379,16 @@ pub fn datagen_mcp_config(
         "SENCLAW_DATAGEN_API_URL".into(),
         format!("http://127.0.0.1:{ui_port}"),
     );
-    cfg.env.insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
-    cfg.env.insert("SENCLAW_WORKSPACE_STATE_FILE".into(), workspace_state_file.to_owned());
-    cfg.env.insert("SENCLAW_DEFAULT_WORKSPACE".into(), default_workspace.to_owned());
+    cfg.env
+        .insert("SENCLAW_CHAT_JID".into(), chat_jid.to_owned());
+    cfg.env.insert(
+        "SENCLAW_WORKSPACE_STATE_FILE".into(),
+        workspace_state_file.to_owned(),
+    );
+    cfg.env.insert(
+        "SENCLAW_DEFAULT_WORKSPACE".into(),
+        default_workspace.to_owned(),
+    );
     with_daemon_token(&mut cfg);
     cfg
 }
@@ -593,6 +607,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
             p.openai_api_key,
             p.openai_base_url,
             p.custom_memory_dir,
+            p.chat_jid,
         ),
         wiki_mcp_config(p.wiki_dir),
         space_mcp_config(p.db_path, p.group_folder, p.chat_jid, p.ui_port),
@@ -605,7 +620,12 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         browser_mcp_config(p.ws_port, p.ui_port, p.agent_id, p.browser_v2),
         ocr_mcp_config(p.ui_port),
         patterns_mcp_config(p.ui_port),
-        datagen_mcp_config(p.ui_port, p.chat_jid, p.workspace_state_file, p.default_workspace),
+        datagen_mcp_config(
+            p.ui_port,
+            p.chat_jid,
+            p.workspace_state_file,
+            p.default_workspace,
+        ),
         js_mcp_config(p.js_timeout_ms, p.js_memory_mb),
         sandbox_mcp_config(),
         user_profile_mcp_config(p.user_profile_path, p.chat_jid),
@@ -614,15 +634,13 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
     for part in parts {
         cfg.env.extend(part.env);
     }
-    cfg.env
-        .insert(CORE_SERVERS_ENV.into(), p.servers.join(","));
+    cfg.env.insert(CORE_SERVERS_ENV.into(), p.servers.join(","));
     cfg
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     fn sample_params<'a>(allowed: &'a [String]) -> CoreMcpParams<'a> {
         CoreMcpParams {

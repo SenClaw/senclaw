@@ -62,6 +62,11 @@ struct FileRecord {
 
 // ===== MemoryManager =====
 
+/// Chunks embedded per request when catching up (see `backfill_embeddings`).
+const BACKFILL_BATCH: usize = 32;
+/// Requests per sync: at most 640 chunks, then the next sync continues.
+const BACKFILL_BATCHES_PER_SYNC: usize = 20;
+
 pub struct MemoryManager {
     db: Arc<Db>,
     profiles_dir: PathBuf,
@@ -299,6 +304,90 @@ impl MemoryManager {
             synced += 1;
         }
         tracing::info!("[MemoryManager] sync_folder({folder}): done, {synced} files synced");
+        self.backfill_embeddings(folder).await;
+    }
+
+    /// Give a vector to chunks that were indexed without one.
+    ///
+    /// The sync above is incremental by file hash, so a file that did not change
+    /// is never indexed again — and a chunk written while no embedding model
+    /// worked (none configured yet, the model not downloaded, the runtime down)
+    /// would stay vectorless for good, leaving hybrid search to keyword matching
+    /// even once a model is working. This catches them up, a bounded number per
+    /// sync so a large backlog does not hold the daemon up; the next sync
+    /// continues. A failing provider stops it for now, without losing anything.
+    async fn backfill_embeddings(&self, folder: &str) {
+        let Some(provider) = self.embedding_provider.as_deref() else {
+            return;
+        };
+        let model = provider.model().to_string();
+        let mut done = 0usize;
+        for _ in 0..BACKFILL_BATCHES_PER_SYNC {
+            let pending: Vec<(String, String)> = self
+                .db
+                .with_conn(|conn| {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, text FROM memory_chunks \
+                         WHERE folder = ?1 AND embedding IS NULL LIMIT ?2",
+                    )?;
+                    let rows = stmt
+                        .query_map(rusqlite::params![folder, BACKFILL_BATCH as i64], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                        })?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    Ok(rows)
+                })
+                .unwrap_or_default();
+            if pending.is_empty() {
+                break;
+            }
+            let texts: Vec<String> = pending.iter().map(|(_, t)| t.clone()).collect();
+            let vectors = match provider.embed(&texts).await {
+                Ok(v) if v.len() == pending.len() => v,
+                Ok(v) => {
+                    tracing::warn!(
+                        "[MemoryManager] embedding backfill for {folder}: {} vectors for {} chunks; stopping",
+                        v.len(),
+                        pending.len()
+                    );
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("[MemoryManager] embedding backfill for {folder} stopped: {e}");
+                    break;
+                }
+            };
+            let written = self
+                .db
+                .with_conn_mut(|conn| {
+                    let tx = conn.transaction()?;
+                    let mut n = 0usize;
+                    for ((id, _), vec) in pending.iter().zip(&vectors) {
+                        if vec.is_empty() {
+                            continue;
+                        }
+                        let blob: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
+                        n += tx.execute(
+                            "UPDATE memory_chunks SET embedding = ?1, model = ?2 WHERE id = ?3",
+                            rusqlite::params![blob, model, id],
+                        )?;
+                        let _ = tx.execute(
+                            "INSERT INTO memory_chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                            rusqlite::params![id, blob],
+                        );
+                    }
+                    tx.commit()?;
+                    Ok(n)
+                })
+                .unwrap_or(0);
+            done += written;
+            if written == 0 {
+                break; // nothing took: do not ask again for the same chunks
+            }
+        }
+        if done > 0 {
+            tracing::info!("[MemoryManager] embedding backfill for {folder}: {done} chunks given a vector");
+        }
     }
 
     async fn sync_file(
@@ -678,6 +767,75 @@ mod tests {
 
     fn test_db() -> Arc<Db> {
         Arc::new(Db::open_in_memory(&Config::from_env()).unwrap())
+    }
+
+    /// A model that answers a fixed vector for every text, or fails.
+    struct FakeEmbedder {
+        fail: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FakeEmbedder {
+        fn name(&self) -> &str {
+            "fake"
+        }
+        fn model(&self) -> &str {
+            "fake-model"
+        }
+        fn dimensions(&self) -> u32 {
+            3
+        }
+        async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+            if self.fail {
+                anyhow::bail!("runtime down");
+            }
+            Ok(texts.iter().map(|_| vec![0.1, 0.2, 0.3]).collect())
+        }
+    }
+
+    fn vectors(db: &Db) -> (i64, i64) {
+        db.with_conn(|c| {
+            Ok((
+                c.query_row("SELECT COUNT(*) FROM memory_chunks WHERE embedding IS NOT NULL", [], |r| r.get(0))?,
+                c.query_row("SELECT COUNT(*) FROM memory_chunks", [], |r| r.get(0))?,
+            ))
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn chunks_indexed_without_a_model_get_a_vector_once_one_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = Config::from_env();
+        cfg.paths.profiles_dir = tmp.path().to_path_buf();
+        let notes = tmp.path().join("main").join("memory");
+        fs::create_dir_all(&notes).unwrap();
+        fs::write(notes.join("a.md"), "# Tea\nLan likes green tea in the evening.\n").unwrap();
+        fs::write(notes.join("b.md"), "# Hue\nSen lives in Hue.\n").unwrap();
+
+        let db = test_db();
+        let mut mgr = MemoryManager::new(Arc::clone(&db), &cfg);
+        mgr.embedding_provider = None; // no embedding model yet
+        mgr.sync_folder("main").await;
+        let (with, total) = vectors(&db);
+        assert!(total >= 2 && with == 0, "indexed without vectors: {with}/{total}");
+
+        // A model that is down changes nothing and loses nothing.
+        mgr.embedding_provider = Some(Box::new(FakeEmbedder { fail: true }));
+        mgr.backfill_embeddings("main").await;
+        assert_eq!(vectors(&db), (0, total));
+
+        // Once it works, the next sync catches the chunks up — though no file changed.
+        mgr.embedding_provider = Some(Box::new(FakeEmbedder { fail: false }));
+        mgr.sync_folder("main").await;
+        assert_eq!(vectors(&db), (total, total));
+        let model: String = db
+            .with_conn(|c| Ok(c.query_row("SELECT model FROM memory_chunks LIMIT 1", [], |r| r.get(0))?))
+            .unwrap();
+        assert_eq!(model, "fake-model");
+        // And a second pass finds nothing left to do.
+        mgr.backfill_embeddings("main").await;
+        assert_eq!(vectors(&db), (total, total));
     }
 
     #[test]
