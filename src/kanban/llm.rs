@@ -89,19 +89,42 @@ struct CardsRoot {
     cards: Vec<GenCard>,
 }
 
-/// Ask the LLM to design a whole board (columns + cards) for `goal`.
-pub async fn generate_board(
-    goal: &str,
-    instruction: Option<&str>,
-) -> Result<GeneratedBoard, String> {
-    let mut prompt = format!("Project goal: {goal}\n");
+/// How much of a project's context a prompt carries.
+const PROJECT_CONTEXT_MAX_CHARS: usize = 2_000;
+
+/// The project's context for a prompt: the person's own description of the
+/// work, cut to [`PROJECT_CONTEXT_MAX_CHARS`]. Empty when there is none, which
+/// leaves the prompt exactly as it was.
+fn project_section(context: Option<&str>) -> String {
+    match context.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(c) => format!(
+            "About the project this board belongs to (written by the user):\n{}\n\n",
+            truncate(c, PROJECT_CONTEXT_MAX_CHARS)
+        ),
+        None => String::new(),
+    }
+}
+
+/// The user prompt for a goal: the project (if any), the goal, any extra
+/// instruction. Shared by the board and the cards-only generators.
+fn goal_prompt(goal: &str, instruction: Option<&str>, project_context: Option<&str>) -> String {
+    let mut prompt = format!("{}Project goal: {goal}\n", project_section(project_context));
     if let Some(i) = instruction {
         if !i.trim().is_empty() {
             prompt.push_str(&format!("Extra instruction: {i}\n"));
         }
     }
     prompt.push_str("\nReturn the JSON now.");
+    prompt
+}
 
+/// Ask the LLM to design a whole board (columns + cards) for `goal`.
+pub async fn generate_board(
+    goal: &str,
+    instruction: Option<&str>,
+    project_context: Option<&str>,
+) -> Result<GeneratedBoard, String> {
+    let prompt = goal_prompt(goal, instruction, project_context);
     let (text, model) = bridge_llm(BOARD_SYSTEM, &prompt, 3000).await?;
     let root: BoardRoot = parse_json(&text).ok_or_else(|| {
         format!(
@@ -138,14 +161,9 @@ optional short array of tags. Aim for 8-16 cards. Write in the same language as 
 pub async fn generate_cards(
     goal: &str,
     instruction: Option<&str>,
+    project_context: Option<&str>,
 ) -> Result<GeneratedCards, String> {
-    let mut prompt = format!("Project goal: {goal}\n");
-    if let Some(i) = instruction {
-        if !i.trim().is_empty() {
-            prompt.push_str(&format!("Extra instruction: {i}\n"));
-        }
-    }
-    prompt.push_str("\nReturn the JSON now.");
+    let prompt = goal_prompt(goal, instruction, project_context);
     let (text, model) = bridge_llm(CARDS_SYSTEM, &prompt, 2600).await?;
     let root: CardsRoot = parse_json(&text).ok_or_else(|| {
         format!(
@@ -162,14 +180,18 @@ pub async fn generate_cards(
     })
 }
 
-/// Ask the LLM to break `card_title` into subtask cards.
-pub async fn breakdown_card(
+/// The user prompt for breaking a card down.
+fn breakdown_prompt(
     card_title: &str,
     card_desc: &str,
     board_outline: Option<&str>,
     instruction: Option<&str>,
-) -> Result<GeneratedCards, String> {
-    let mut prompt = format!("Task card: {card_title}\n");
+    project_context: Option<&str>,
+) -> String {
+    let mut prompt = format!(
+        "{}Task card: {card_title}\n",
+        project_section(project_context)
+    );
     if !card_desc.trim().is_empty() {
         prompt.push_str(&format!("Description: {card_desc}\n"));
     }
@@ -184,6 +206,24 @@ pub async fn breakdown_card(
         }
     }
     prompt.push_str("\nReturn the JSON now.");
+    prompt
+}
+
+/// Ask the LLM to break `card_title` into subtask cards.
+pub async fn breakdown_card(
+    card_title: &str,
+    card_desc: &str,
+    board_outline: Option<&str>,
+    instruction: Option<&str>,
+    project_context: Option<&str>,
+) -> Result<GeneratedCards, String> {
+    let prompt = breakdown_prompt(
+        card_title,
+        card_desc,
+        board_outline,
+        instruction,
+        project_context,
+    );
 
     let (text, model) = bridge_llm(BREAKDOWN_SYSTEM, &prompt, 1600).await?;
     let root: CardsRoot = parse_json(&text).ok_or_else(|| {
@@ -367,4 +407,50 @@ pub async fn bridge_llm(
         .llm_request(system, user, max_tokens)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompts_without_a_project_are_what_they_were() {
+        assert_eq!(
+            goal_prompt("Ship v2", Some("keep it small"), None),
+            "Project goal: Ship v2\nExtra instruction: keep it small\n\nReturn the JSON now."
+        );
+        assert_eq!(
+            goal_prompt("Ship v2", None, Some("  \n ")),
+            "Project goal: Ship v2\n\nReturn the JSON now."
+        );
+        assert_eq!(
+            breakdown_prompt("Write docs", "", None, None, None),
+            "Task card: Write docs\n\nReturn the JSON now."
+        );
+    }
+
+    #[test]
+    fn the_project_context_leads_each_prompt_and_is_cut_at_two_thousand_characters() {
+        let long = format!("<project name=\"Sen\">{}</project>", "ấ".repeat(5_000));
+        for prompt in [
+            goal_prompt("Ship v2", None, Some(&long)),
+            breakdown_prompt("Write docs", "", None, None, Some(&long)),
+        ] {
+            assert!(prompt.starts_with(
+                "About the project this board belongs to (written by the user):\n<project name=\"Sen\">"
+            ));
+            let carried = prompt.matches('ấ').count();
+            assert!(
+                carried < PROJECT_CONTEXT_MAX_CHARS,
+                "{carried} characters of context"
+            );
+            assert!(carried > PROJECT_CONTEXT_MAX_CHARS - 100);
+            assert!(
+                !prompt.contains("</project>"),
+                "the cut drops the end of the block"
+            );
+        }
+        let short = goal_prompt("Ship v2", None, Some("<project>tiny</project>"));
+        assert!(short.contains("<project>tiny</project>\n\nProject goal: Ship v2"));
+    }
 }

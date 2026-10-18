@@ -13,9 +13,11 @@
 //! - [`store`]: SQL for the `projects` table (methods on [`crate::db::Db`]).
 //! - [`root`]: which folders may be a root, and why not.
 //! - [`context`]: `CONTEXT.md` on disk and the `<project>` prompt block.
+//! - [`directory`]: how the board store looks a project up.
 //! - [`session`]: what a session needs from its project (state file, env).
 
 pub mod context;
+pub mod directory;
 pub mod root;
 pub mod session;
 pub mod store;
@@ -25,6 +27,7 @@ pub use context::{
     read_context, render_block, write_context, ContextFile, ContextWriteError, CONTEXT_FILE,
     CONTEXT_MAX_CHARS,
 };
+pub use directory::DbProjectDirectory;
 pub use root::{check_root, recheck_root, RootCheck, RootProblem, RootRules};
 pub use session::{
     check_joinable, check_member_shape, decide_membership, project_bank, project_for_binding,

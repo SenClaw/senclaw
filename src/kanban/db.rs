@@ -112,6 +112,9 @@ const MIGRATIONS: &[&str] = &[
     // Per-board working directory — dispatched workers run here (outputs land
     // in this folder) instead of a throwaway scratch dir.
     "ALTER TABLE boards  ADD COLUMN workspace_dir TEXT",
+    // The project a board belongs to. The id names a row in the daemon's own
+    // database, so there is no foreign key: the daemon keeps the two in step.
+    "ALTER TABLE boards  ADD COLUMN project_id TEXT",
 ];
 
 /// The Hermes-style default workflow: (title, role, color).
@@ -133,6 +136,8 @@ pub struct BoardMeta {
     /// Where dispatched workers run for this board (outputs land here).
     /// None = throwaway scratch dir per task.
     pub workspace_dir: Option<String>,
+    /// The project this board belongs to, if any (see `kanban::projects`).
+    pub project_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub column_count: i64,
@@ -304,15 +309,25 @@ impl Db {
     // ---- boards ----
 
     pub fn list_boards(&self) -> Result<Vec<BoardMeta>> {
+        self.boards_where("", &[])
+    }
+
+    /// The boards that belong to `project_id`, newest first.
+    pub fn boards_of_project(&self, project_id: &str) -> Result<Vec<BoardMeta>> {
+        self.boards_where("WHERE b.project_id = ?1", &[&project_id])
+    }
+
+    fn boards_where(&self, filter: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<BoardMeta>> {
         self.with(|c| {
-            let mut stmt = c.prepare(
+            let mut stmt = c.prepare(&format!(
                 "SELECT b.id, b.title, b.description, b.workspace_dir, b.created_at, b.updated_at,
                         (SELECT COUNT(*) FROM columns k WHERE k.board_id = b.id),
-                        (SELECT COUNT(*) FROM cards d WHERE d.board_id = b.id)
-                 FROM boards b ORDER BY b.updated_at DESC",
-            )?;
+                        (SELECT COUNT(*) FROM cards d WHERE d.board_id = b.id),
+                        b.project_id
+                 FROM boards b {filter} ORDER BY b.updated_at DESC"
+            ))?;
             let rows = stmt
-                .query_map([], |r| {
+                .query_map(args, |r| {
                     Ok(BoardMeta {
                         id: r.get(0)?,
                         title: r.get(1)?,
@@ -322,6 +337,7 @@ impl Db {
                         updated_at: r.get(5)?,
                         column_count: r.get(6)?,
                         card_count: r.get(7)?,
+                        project_id: r.get(8)?,
                     })
                 })?
                 .filter_map(|r| r.ok())
@@ -341,10 +357,25 @@ impl Db {
         workspace_dir: Option<&str>,
         now: i64,
     ) -> Result<i64> {
+        self.create_board_in(title, description, with_defaults, workspace_dir, None, now)
+    }
+
+    /// [`Db::create_board`] for a board that belongs to `project_id`. The caller
+    /// has checked that the project exists and that `workspace_dir` lies in its
+    /// root; this store knows nothing about projects beyond their id.
+    pub fn create_board_in(
+        &self,
+        title: &str,
+        description: &str,
+        with_defaults: bool,
+        workspace_dir: Option<&str>,
+        project_id: Option<&str>,
+        now: i64,
+    ) -> Result<i64> {
         self.with(|c| {
             c.execute(
-                "INSERT INTO boards(title, description, workspace_dir, created_at, updated_at) VALUES(?1,?2,?3,?4,?4)",
-                params![title, description, workspace_dir, now],
+                "INSERT INTO boards(title, description, workspace_dir, project_id, created_at, updated_at) VALUES(?1,?2,?3,?4,?5,?5)",
+                params![title, description, workspace_dir, project_id, now],
             )?;
             let board_id = c.last_insert_rowid();
             if with_defaults {
@@ -356,6 +387,24 @@ impl Db {
                 }
             }
             Ok(board_id)
+        })
+    }
+
+    /// A project is gone: its boards stop belonging to it but keep running where
+    /// they ran. A board with a folder of its own keeps it (it lay inside the
+    /// root); the others are pinned to `root`. Returns how many boards changed.
+    pub fn release_project(&self, project_id: &str, root: &str, now: i64) -> Result<usize> {
+        self.with(|c| {
+            let n = c.execute(
+                "UPDATE boards
+                 SET workspace_dir = CASE WHEN workspace_dir IS NULL OR trim(workspace_dir) = ''
+                                          THEN ?2 ELSE workspace_dir END,
+                     project_id = NULL,
+                     updated_at = ?3
+                 WHERE project_id = ?1",
+                params![project_id, root, now],
+            )?;
+            Ok(n)
         })
     }
 
@@ -395,30 +444,10 @@ impl Db {
     }
 
     pub fn board_meta(&self, board_id: i64) -> Result<Option<BoardMeta>> {
-        self.with(|c| {
-            let row = c
-                .query_row(
-                    "SELECT id, title, description, workspace_dir, created_at, updated_at,
-                            (SELECT COUNT(*) FROM columns k WHERE k.board_id = boards.id),
-                            (SELECT COUNT(*) FROM cards d WHERE d.board_id = boards.id)
-                     FROM boards WHERE id=?1",
-                    params![board_id],
-                    |r| {
-                        Ok(BoardMeta {
-                            id: r.get(0)?,
-                            title: r.get(1)?,
-                            description: r.get(2)?,
-                            workspace_dir: r.get(3)?,
-                            created_at: r.get(4)?,
-                            updated_at: r.get(5)?,
-                            column_count: r.get(6)?,
-                            card_count: r.get(7)?,
-                        })
-                    },
-                )
-                .optional()?;
-            Ok(row)
-        })
+        Ok(self
+            .boards_where("WHERE b.id = ?1", &[&board_id])?
+            .into_iter()
+            .next())
     }
 
     // ---- columns ----
@@ -1344,6 +1373,7 @@ impl Db {
                     description: card.description.clone(),
                     priority: card.priority.clone(),
                     workspace_dir: board.workspace_dir.clone(),
+                    project_id: board.project_id.clone(),
                     labels: card
                         .labels
                         .as_deref()
@@ -1524,6 +1554,9 @@ pub struct ClaimedCard {
     pub priority: Option<String>,
     /// The board's working directory (worker runs there; None = scratch).
     pub workspace_dir: Option<String>,
+    /// The project the board belongs to; its root is the directory when the
+    /// board names none.
+    pub project_id: Option<String>,
     /// Card labels; `worktree` asks for an isolated git worktree.
     pub labels: Vec<String>,
 }
@@ -1545,4 +1578,117 @@ pub fn default_data_dir(app: &str) -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| crate::util::paths::senclaw_home());
     base.join("space-apps").join(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open() -> (tempfile::TempDir, Db) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("kanban.db")).unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn a_database_from_before_projects_gains_the_column_and_keeps_its_boards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kanban.db");
+        {
+            // The shape every older install has: the first schema, no migrations run.
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(SCHEMA).unwrap();
+            c.execute(
+                "INSERT INTO boards(title, description, workspace_dir, created_at, updated_at)
+                 VALUES('Old', '', '/work/old', 1, 1)",
+                [],
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            // The second open finds the column already there and must not mind.
+            let db = Db::open(&path).unwrap();
+            let boards = db.list_boards().unwrap();
+            assert_eq!(boards.len(), 1);
+            assert_eq!(boards[0].title, "Old");
+            assert_eq!(boards[0].workspace_dir.as_deref(), Some("/work/old"));
+            assert_eq!(boards[0].project_id, None);
+        }
+        let db = Db::open(&path).unwrap();
+        let id = db
+            .create_board_in("New", "", true, None, Some("prj_0a1b2c3d"), 2)
+            .unwrap();
+        assert_eq!(
+            db.board_meta(id).unwrap().unwrap().project_id.as_deref(),
+            Some("prj_0a1b2c3d")
+        );
+    }
+
+    #[test]
+    fn a_project_lists_only_its_own_boards() {
+        let (_dir, db) = open();
+        let a = db
+            .create_board_in("A", "", true, None, Some("prj_0a1b2c3d"), 1)
+            .unwrap();
+        let _other = db
+            .create_board_in("B", "", true, None, Some("prj_ffffffff"), 2)
+            .unwrap();
+        let _plain = db.create_board("C", "", true, None, 3).unwrap();
+        let mine = db.boards_of_project("prj_0a1b2c3d").unwrap();
+        assert_eq!(mine.iter().map(|b| b.id).collect::<Vec<_>>(), vec![a]);
+        assert!(db.boards_of_project("prj_00000000").unwrap().is_empty());
+        assert_eq!(db.list_boards().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn releasing_a_project_keeps_its_boards_running_where_they_ran() {
+        let (_dir, db) = open();
+        let bare = db
+            .create_board_in("Bare", "", true, None, Some("prj_0a1b2c3d"), 1)
+            .unwrap();
+        let blank = db
+            .create_board_in("Blank", "", true, Some("  "), Some("prj_0a1b2c3d"), 1)
+            .unwrap();
+        let own = db
+            .create_board_in(
+                "Own",
+                "",
+                true,
+                Some("/work/sen/api"),
+                Some("prj_0a1b2c3d"),
+                1,
+            )
+            .unwrap();
+        let other = db
+            .create_board_in("Other", "", true, None, Some("prj_ffffffff"), 1)
+            .unwrap();
+
+        assert_eq!(
+            db.release_project("prj_0a1b2c3d", "/work/sen", 50).unwrap(),
+            3
+        );
+
+        for (id, dir) in [
+            (bare, "/work/sen"),
+            (blank, "/work/sen"),
+            (own, "/work/sen/api"),
+        ] {
+            let m = db.board_meta(id).unwrap().unwrap();
+            assert_eq!(
+                (m.project_id, m.workspace_dir.as_deref()),
+                (None, Some(dir))
+            );
+            assert_eq!(
+                m.updated_at, 50,
+                "clients watching the board see the change"
+            );
+        }
+        let untouched = db.board_meta(other).unwrap().unwrap();
+        assert_eq!(untouched.project_id.as_deref(), Some("prj_ffffffff"));
+        assert_eq!(untouched.workspace_dir, None);
+        assert_eq!(
+            db.release_project("prj_0a1b2c3d", "/work/sen", 60).unwrap(),
+            0
+        );
+    }
 }

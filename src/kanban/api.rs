@@ -12,11 +12,72 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::kanban::db::{default_data_dir, Db};
 use crate::kanban::llm::{self, ChatBody};
+use crate::kanban::projects::{self, ProjectInfo, SharedDirectory};
 
 pub struct AppState {
     pub db: Arc<Db>,
     /// Broadcasts the raw JSON-RPC responses to any connected MCP SSE clients.
     pub mcp_tx: tokio::sync::broadcast::Sender<String>,
+    /// Where projects are looked up. `None` in a process that has no access to
+    /// them (the stdio `kanban-server`): its boards then have no project to
+    /// resolve and behave as they always did.
+    pub projects: Option<SharedDirectory>,
+}
+
+impl AppState {
+    fn directory(&self) -> Option<&dyn projects::ProjectDirectory> {
+        self.projects.as_deref()
+    }
+
+    /// The `<project>` block of the project a board belongs to, for the prompts
+    /// of the generate and breakdown endpoints.
+    pub(crate) fn context_of_board(&self, board_id: i64) -> Option<String> {
+        let id = self.db.board_meta(board_id).ok()??.project_id?;
+        self.context_of_project(&id)
+    }
+
+    pub(crate) fn context_of_project(&self, project_id: &str) -> Option<String> {
+        self.directory()?.project(project_id)?.context_block
+    }
+
+    /// A project a new board may join: it exists and takes new boards.
+    fn joinable_project(&self, id: &str) -> Result<ProjectInfo, ApiError> {
+        let dir = self.directory().ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "projects are not available here".into(),
+            )
+        })?;
+        let p = dir
+            .project(id)
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("unknown project: {id}")))?;
+        if p.archived {
+            return Err(bad(format!("project {id} is archived")));
+        }
+        Ok(p)
+    }
+
+    /// What a new board asks for, checked: the project it joins and the folder
+    /// it names. A folder of its own must lie inside the project's root.
+    fn new_board_placement(
+        &self,
+        project_id: Option<&str>,
+        workspace_dir: Option<&str>,
+    ) -> Result<Option<String>, ApiError> {
+        let Some(id) = project_id.map(str::trim).filter(|p| !p.is_empty()) else {
+            return Ok(None);
+        };
+        let project = self.joinable_project(id)?;
+        if let Some(dir) = workspace_dir {
+            if !projects::path_within(&project.root, dir) {
+                return Err(bad(format!(
+                    "workspace_dir must be an absolute path inside the project root {}",
+                    project.root
+                )));
+            }
+        }
+        Ok(Some(project.id))
+    }
 }
 
 pub struct ApiError(pub StatusCode, pub String);
@@ -40,10 +101,19 @@ pub fn now() -> i64 {
 }
 
 pub fn make_state() -> Arc<AppState> {
+    make_state_with(None)
+}
+
+/// [`make_state`] with the directory the daemon looks projects up in.
+pub fn make_state_with(projects: Option<SharedDirectory>) -> Arc<AppState> {
     let db_path = default_data_dir("kanban").join("kanban.db");
     let db = Arc::new(Db::open(&db_path).expect("open kanban db"));
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
-    Arc::new(AppState { db, mcp_tx })
+    Arc::new(AppState {
+        db,
+        mcp_tx,
+        projects,
+    })
 }
 
 pub fn api_router(state: Arc<AppState>) -> Router {
@@ -97,7 +167,11 @@ async fn status() -> Json<Value> {
 // ---- boards ----
 
 async fn list_boards(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(s.db.list_boards().map_err(bad)?)))
+    let boards = s.db.list_boards().map_err(bad)?;
+    Ok(Json(Value::Array(projects::board_views(
+        &boards,
+        s.directory(),
+    ))))
 }
 
 #[derive(Deserialize)]
@@ -111,6 +185,10 @@ struct CreateBoardBody {
     /// Working directory for this board's dispatched workers (outputs land here).
     #[serde(default)]
     workspace_dir: Option<String>,
+    /// The project the board belongs to. Its workers then run in the project's
+    /// root (or in `workspace_dir`, which must lie inside it).
+    #[serde(default)]
+    project_id: Option<String>,
     /// Column template to seed from (builtin `standard`/`advanced`/`simple` or a
     /// custom template id). Overrides `with_defaults`.
     #[serde(default)]
@@ -134,18 +212,33 @@ async fn create_board(
         .as_deref()
         .map(str::trim)
         .filter(|w| !w.is_empty());
+    let project = s.new_board_placement(b.project_id.as_deref(), ws)?;
     let id = match b.template_id.as_deref().filter(|t| !t.trim().is_empty()) {
         Some(tid) => {
             let tpl =
                 s.db.get_template(tid)
                     .map_err(bad)?
                     .ok_or_else(|| bad(format!("unknown template: {tid}")))?;
-            s.db.create_board_from_template(title, b.description.trim(), ws, &tpl, now())
-                .map_err(bad)?
+            s.db.create_board_from_template_in(
+                title,
+                b.description.trim(),
+                ws,
+                project.as_deref(),
+                &tpl,
+                now(),
+            )
+            .map_err(bad)?
         }
         None => {
-            s.db.create_board(title, b.description.trim(), b.with_defaults, ws, now())
-                .map_err(bad)?
+            s.db.create_board_in(
+                title,
+                b.description.trim(),
+                b.with_defaults,
+                ws,
+                project.as_deref(),
+                now(),
+            )
+            .map_err(bad)?
         }
     };
     Ok(Json(json!({ "id": id })))
@@ -213,7 +306,9 @@ async fn get_board(
             .map_err(bad)?
             .ok_or_else(|| bad("board not found"))?;
     let columns = s.db.board_full(q.id).map_err(bad)?;
-    Ok(Json(json!({ "meta": meta, "columns": columns })))
+    Ok(Json(
+        json!({ "meta": projects::board_view(&meta, s.directory()), "columns": columns }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -649,6 +744,10 @@ struct GenerateBody {
     /// Working directory for the new board's workers.
     #[serde(default)]
     workspace_dir: Option<String>,
+    /// The project a new board belongs to (ignored when `board_id` names an
+    /// existing board, which keeps the project it has).
+    #[serde(default)]
+    project_id: Option<String>,
     /// Column template: None or "ai" = AI generates the columns too; otherwise a
     /// template id — columns come from the template and AI generates only the
     /// task cards (placed in the template's Todo column).
@@ -675,6 +774,15 @@ async fn generate_board(
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| b.goal.trim())
         .to_string();
+    // The project the board will belong to, and so whose context the model reads.
+    let (project, context) = match b.board_id {
+        Some(id) => (None, s.context_of_board(id)),
+        None => {
+            let project = s.new_board_placement(b.project_id.as_deref(), ws)?;
+            let context = project.as_deref().and_then(|p| s.context_of_project(p));
+            (project, context)
+        }
+    };
 
     let template = match b.template_id.as_deref().map(str::trim) {
         Some("") | Some("ai") | None => None,
@@ -688,14 +796,22 @@ async fn generate_board(
     match template {
         // Template columns + AI-generated cards into the template's Todo column.
         Some(tpl) => {
-            let gen = llm::generate_cards(b.goal.trim(), b.instruction.as_deref())
-                .await
-                .map_err(gateway)?;
+            let gen =
+                llm::generate_cards(b.goal.trim(), b.instruction.as_deref(), context.as_deref())
+                    .await
+                    .map_err(gateway)?;
             let board_id = match b.board_id {
                 Some(id) => id,
                 None => {
-                    s.db.create_board_from_template(&title_owned, b.goal.trim(), ws, &tpl, now())
-                        .map_err(bad)?
+                    s.db.create_board_from_template_in(
+                        &title_owned,
+                        b.goal.trim(),
+                        ws,
+                        project.as_deref(),
+                        &tpl,
+                        now(),
+                    )
+                    .map_err(bad)?
                 }
             };
             let todo =
@@ -710,14 +826,22 @@ async fn generate_board(
         }
         // Fully AI-generated (columns + cards).
         None => {
-            let gen = llm::generate_board(b.goal.trim(), b.instruction.as_deref())
-                .await
-                .map_err(gateway)?;
+            let gen =
+                llm::generate_board(b.goal.trim(), b.instruction.as_deref(), context.as_deref())
+                    .await
+                    .map_err(gateway)?;
             let board_id = match b.board_id {
                 Some(id) => id,
                 None => {
-                    s.db.create_board(&title_owned, b.goal.trim(), false, ws, now())
-                        .map_err(bad)?
+                    s.db.create_board_in(
+                        &title_owned,
+                        b.goal.trim(),
+                        false,
+                        ws,
+                        project.as_deref(),
+                        now(),
+                    )
+                    .map_err(bad)?
                 }
             };
             let (cols, cards) =
@@ -743,11 +867,13 @@ async fn breakdown_card(
 ) -> Result<Json<Value>, ApiError> {
     let (title, description, column_id, board_id) = s.db.card_detail(b.card_id).map_err(bad)?;
     let outline = s.db.board_outline(board_id).ok();
+    let context = s.context_of_board(board_id);
     let gen = llm::breakdown_card(
         &title,
         &description,
         outline.as_deref(),
         b.instruction.as_deref(),
+        context.as_deref(),
     )
     .await
     .map_err(gateway)?;
@@ -946,4 +1072,195 @@ where
     Ok(Some(v.map(|arr| {
         serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into())
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kanban::projects::{sample_project, StaticDirectory};
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    const P: &str = "prj_0a1b2c3d";
+    /// A root that need not exist: containment compares paths, not files.
+    const ROOT: &str = "/work/sen";
+
+    struct Rig {
+        state: Arc<AppState>,
+        _dir: tempfile::TempDir,
+    }
+
+    fn rig(projects: Option<Vec<ProjectInfo>>) -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Db::open(&dir.path().join("kanban.db")).unwrap());
+        let (mcp_tx, _) = tokio::sync::broadcast::channel(4);
+        Rig {
+            state: Arc::new(AppState {
+                db,
+                mcp_tx,
+                projects: projects.map(|p| Arc::new(StaticDirectory(p)) as SharedDirectory),
+            }),
+            _dir: dir,
+        }
+    }
+
+    /// A rig with one usable project.
+    fn rig_with_project() -> Rig {
+        rig(Some(vec![sample_project(P, "Sen", ROOT)]))
+    }
+
+    async fn call(r: &Rig, method: Method, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        let app = api_router(Arc::clone(&r.state));
+        let mut req = Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(b) => {
+                req = req.header("content-type", "application/json");
+                Body::from(b.to_string())
+            }
+            None => Body::empty(),
+        };
+        let resp = app.oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    async fn create(r: &Rig, body: Value) -> (StatusCode, Value) {
+        call(r, Method::POST, "/boards", Some(body)).await
+    }
+
+    #[tokio::test]
+    async fn a_board_made_in_a_project_reports_the_project_and_where_its_workers_run() {
+        let r = rig_with_project();
+        let (status, made) = create(&r, json!({ "title": "Roadmap", "project_id": P })).await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let id = made["id"].as_i64().unwrap();
+
+        let (_, list) = call(&r, Method::GET, "/boards", None).await;
+        assert_eq!(list[0]["project_id"], P);
+        assert_eq!(list[0]["workspace_dir"], Value::Null);
+        assert_eq!(list[0]["effective_workspace_dir"], ROOT);
+
+        let (_, one) = call(&r, Method::GET, &format!("/board?id={id}"), None).await;
+        assert_eq!(one["meta"]["project_id"], P);
+        assert_eq!(one["meta"]["effective_workspace_dir"], ROOT);
+    }
+
+    #[tokio::test]
+    async fn a_board_may_name_a_folder_inside_the_root_and_nowhere_else() {
+        let r = rig_with_project();
+        let inside = format!("{ROOT}/packages/api");
+        let (status, made) = create(
+            &r,
+            json!({ "title": "Api", "project_id": P, "workspace_dir": inside }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let (_, list) = call(&r, Method::GET, "/boards", None).await;
+        assert_eq!(list[0]["effective_workspace_dir"], inside.as_str());
+
+        for outside in ["/somewhere/else", "relative/dir", &format!("{ROOT}/../up")] {
+            let (status, body) = create(
+                &r,
+                json!({ "title": "X", "project_id": P, "workspace_dir": outside }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{outside}: {body}");
+            assert!(body["error"]
+                .as_str()
+                .unwrap()
+                .contains("inside the project root"));
+        }
+        assert_eq!(
+            r.state.db.list_boards().unwrap().len(),
+            1,
+            "nothing else was made"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_board_cannot_join_a_project_that_is_unknown_archived_or_out_of_reach() {
+        let r = rig_with_project();
+        let (status, _) = create(&r, json!({ "title": "X", "project_id": "prj_ffffffff" })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let mut archived = sample_project(P, "Sen", ROOT);
+        archived.archived = true;
+        let r2 = rig(Some(vec![archived]));
+        let (status, body) = create(&r2, json!({ "title": "X", "project_id": P })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+        // The stdio process has no directory: it cannot place a board in a project.
+        let bare = rig(None);
+        let (status, _) = create(&bare, json!({ "title": "X", "project_id": P })).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(bare.state.db.list_boards().unwrap().is_empty());
+        assert!(r.state.db.list_boards().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_board_without_a_project_lists_as_it_did_plus_a_null_project_and_its_own_folder() {
+        let r = rig_with_project();
+        create(
+            &r,
+            json!({ "title": "Plain", "workspace_dir": "/work/own" }),
+        )
+        .await;
+        create(&r, json!({ "title": "Scratch" })).await;
+        // An empty project id is no project.
+        create(&r, json!({ "title": "Empty", "project_id": "  " })).await;
+        let (_, list) = call(&r, Method::GET, "/boards", None).await;
+        let list = list.as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        for b in list {
+            assert_eq!(b["project_id"], Value::Null);
+            let own = b["workspace_dir"].clone();
+            assert_eq!(b["effective_workspace_dir"], own, "{b}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_template_board_in_a_project_is_linked_too() {
+        let r = rig_with_project();
+        let (status, made) = create(
+            &r,
+            json!({ "title": "T", "project_id": P, "template_id": "standard" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{made}");
+        let id = made["id"].as_i64().unwrap();
+        assert_eq!(
+            r.state
+                .db
+                .board_meta(id)
+                .unwrap()
+                .unwrap()
+                .project_id
+                .as_deref(),
+            Some(P)
+        );
+    }
+
+    #[test]
+    fn the_context_for_generate_and_breakdown_follows_the_boards_project() {
+        let r = rig_with_project();
+        let linked = r
+            .state
+            .db
+            .create_board_in("A", "", true, None, Some(P), 1)
+            .unwrap();
+        let plain = r.state.db.create_board("B", "", true, None, 1).unwrap();
+        let ctx = r.state.context_of_board(linked).unwrap();
+        assert!(ctx.contains("PROJECT-CONTEXT-MARKER for Sen"));
+        assert_eq!(r.state.context_of_board(plain), None);
+        assert_eq!(r.state.context_of_board(9_999), None);
+        assert_eq!(r.state.context_of_project("prj_ffffffff"), None);
+        assert_eq!(rig(None).state.context_of_project(P), None);
+    }
 }
