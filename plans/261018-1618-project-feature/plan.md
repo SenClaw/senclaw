@@ -1,6 +1,6 @@
 # Plan: Project cho session chat và Kanban
 
-Status: **P0, P1, P2, P3a, P3b xong và đã gộp vào `feat/project`** (HEAD `e8b5264` = `59caf13` + `e00e5f7` + `ee6a1c5` + merge `1079aea` + P3b; `cargo test --lib` 3255 xanh; chưa push); còn P4 (client web + desktop) và E2E hai client của P5 (phần daemon của P5 xong 2026-10-19: tài liệu + đo trên gemma-4-e2b, **chưa đo trên e4b thật** vì máy LM Studio 192.168.0.93 không trả lời; mặc định #3 đổi sang TẮT) · Nhánh: `feat/project` (worktree `.worktrees/senclaw-project`, cắt từ `main` @ ede1e16)
+Status: **Xong toàn bộ trừ các việc đã ghi là chưa đo** (2026-10-19): daemon `feat/project` (code `9318e0a`, `cargo test --lib` 3256 xanh), web-app `feat/project` `cd1fb24`, desktop `feat/project` `47f1fd9`; chưa push. Chưa đo: model e4b thật (đo trên e2b; card xong lưu fact đã TẮT mặc định), cửa sổ app macOS thật (quyền bị từ chối), hai cửa sổ cùng mở · Nhánh: `feat/project` (daemon `.worktrees/senclaw-project`, web `.worktrees/web-app-project`, desktop `.worktrees/desktop-project`)
 Thiết kế: [design.md](design.md) · Hiện trạng: [explore-261018-1618-project-feature-current-state.md](../reports/explore-261018-1618-project-feature-current-state.md)
 
 ## Outcome
@@ -47,8 +47,8 @@ Mặc định cho #5–#9, #12 (cowork/schedule ngoài v1; root lồng nhau đư
 | P2 | Fact project | M | P1 | **done**, commit `e00e5f7` trên `feat/project-facts` (chưa push), worktree `.worktrees/senclaw-project-facts`; tiêu chí 4 (phần chat) đạt, **extractor thật chưa đo** → [test-261018-2310-project-p2.md](../reports/test-261018-2310-project-p2.md) |
 | P3a | Kanban: board↔project, thư mục, context vào guidance, AI board | M | P1 (song song P2) | **done** (chưa commit) trên `feat/project-kanban` @ `59caf13`, worktree `.worktrees/senclaw-project-kanban`; tiêu chí 5 đạt → [test-261018-2243-project-p3a.md](../reports/test-261018-2243-project-p3a.md) |
 | P3b | Kanban: worker recall fact project + retain khi card xong | S | P2, P3a | **done**, commit `e8b5264` → [test-261019-0035-project-p3b.md](../reports/test-261019-0035-project-p3b.md) |
-| P4 | Client web + desktop | L | API P1 đứng | **web xong** (chưa commit) trên `feat/project`, worktree `.worktrees/web-app-project` (nền `f12b16b`) → [test-261019-0127-project-p4-web.md](../reports/test-261019-0127-project-p4-web.md); **desktop xong** (chưa commit) trên `feat/project`, worktree `.worktrees/desktop-project` (nền `3c70b29`), **chưa lái được cửa sổ app thật** → [test-261019-0145-project-p4-desktop.md](../reports/test-261019-0145-project-p4-desktop.md) |
-| P5 | E2E, đo, tài liệu | M | P1–P4 | **daemon: tài liệu xong; đo trên gemma-4-e2b xong (e4b thật chưa); #3 đổi sang TẮT**; E2E client còn chờ P4 → [test-261019-0112-project-p5-measure.md](../reports/test-261019-0112-project-p5-measure.md) |
+| P4 | Client web + desktop | L | API P1 đứng | **done**: web `cd1fb24` → [test-261019-0127-project-p4-web.md](../reports/test-261019-0127-project-p4-web.md); desktop `47f1fd9` → [test-261019-0145-project-p4-desktop.md](../reports/test-261019-0145-project-p4-desktop.md) |
+| P5 | E2E, đo, tài liệu | M | P1–P4 | **done** trừ e4b thật: tài liệu `docs/projects.md`; đo trên gemma-4-e2b ⇒ #3 TẮT mặc định, #2 giữ → [test-261019-0112-project-p5-measure.md](../reports/test-261019-0112-project-p5-measure.md); smoke tích hợp daemon + web dist trên binary cuối đạt |
 
 ### P0 — Spike (xong)
 Kết quả: (a) F1 đúng, (b) DAG chạy sai thư mục kể cả parent xếp hàng, (c) `custom_rules` không vào prompt, (d) `destroy_agent_full` chạy được nhưng chỉ có lúc tắt daemon và rò MCP con → bỏ "đổi project giữa chừng" khỏi v1 (D7), (e) cascade xoá bank đủ với FK bật nhưng O(n²) → xoá theo lô. Chi tiết và harness chạy lại: báo cáo trên. Mô tả ban đầu giữ dưới đây để đối chiếu.
