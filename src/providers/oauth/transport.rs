@@ -51,8 +51,10 @@ pub fn user_agent() -> String {
 // terms-of-service warning. They are named and grouped here rather than inlined
 // so the behaviour is visible in one place and easy to change.
 
-/// IDE build the Antigravity client reports. Google gates newer models on it.
-pub const ANTIGRAVITY_IDE_VERSION: &str = "1.23.2";
+/// IDE build the Antigravity client reports. Google gates newer models on it,
+/// so a stale value hides them (9router tracks the same number; 2.22.0 as of
+/// its v0.5.104).
+pub const ANTIGRAVITY_IDE_VERSION: &str = "2.22.0";
 
 /// `User-Agent` the Code Assist completion endpoint expects.
 pub fn antigravity_user_agent() -> String {

@@ -98,48 +98,7 @@ pub async fn query_antigravity(
     profile: &ModelProfile,
 ) -> Result<Message> {
     let project_id = resolve_project_id(client, profile).await?;
-    let session_id = stable_id(&format!(
-        "session:{}:{}",
-        profile.oauth_account_id.as_deref().unwrap_or("anon"),
-        profile.model_name
-    ));
-
-    let mut request = Map::new();
-    request.insert("contents".into(), Value::Array(gemini_contents(messages)));
-    if !system_prompt.is_empty() {
-        request.insert(
-            "systemInstruction".into(),
-            serde_json::json!({ "parts": [{ "text": system_prompt }] }),
-        );
-    }
-    request.insert(
-        "generationConfig".into(),
-        serde_json::json!({
-            "maxOutputTokens": profile.max_tokens.min(MAX_OUTPUT_TOKENS),
-        }),
-    );
-    if !tools.is_empty() {
-        request.insert(
-            "tools".into(),
-            serde_json::json!([{ "functionDeclarations": gemini_tools(tools) }]),
-        );
-        // VALIDATED makes Gemini check calls against the declarations rather
-        // than emitting free-form ones we then fail to route.
-        request.insert(
-            "toolConfig".into(),
-            serde_json::json!({ "functionCallingConfig": { "mode": "VALIDATED" } }),
-        );
-    }
-    request.insert("sessionId".into(), Value::String(session_id.clone()));
-
-    let body = serde_json::json!({
-        "project": project_id,
-        "model": profile.model_name,
-        "userAgent": "antigravity",
-        "requestType": "agent",
-        "requestId": build_request_id(&session_id, &profile.model_name, messages.len()),
-        "request": Value::Object(request),
-    });
+    let body = request_body(&project_id, messages, system_prompt, tools, profile);
 
     let url = format!(
         "{}/v1internal:streamGenerateContent?alt=sse",
@@ -179,6 +138,64 @@ pub async fn query_antigravity(
     }
 
     parse_stream(response, cancel).await
+}
+
+/// The Code Assist envelope for one turn. Pure, so its shape can be tested.
+///
+/// There is deliberately **no `requestType`**. Google's own Antigravity client
+/// leaves it out on the chat path, and sending `"agent"` there makes the backend
+/// put the request in a separate bucket and answer a detail-free 429
+/// `RESOURCE_EXHAUSTED` even with quota to spare (9router found and fixed the
+/// same thing in v0.5.85). Other buckets (`image_gen`, `search`) do name theirs;
+/// this adapter never sends those.
+fn request_body(
+    project_id: &str,
+    messages: &[Message],
+    system_prompt: &str,
+    tools: &[Arc<dyn Tool>],
+    profile: &ModelProfile,
+) -> Value {
+    let session_id = stable_id(&format!(
+        "session:{}:{}",
+        profile.oauth_account_id.as_deref().unwrap_or("anon"),
+        profile.model_name
+    ));
+
+    let mut request = Map::new();
+    request.insert("contents".into(), Value::Array(gemini_contents(messages)));
+    if !system_prompt.is_empty() {
+        request.insert(
+            "systemInstruction".into(),
+            serde_json::json!({ "parts": [{ "text": system_prompt }] }),
+        );
+    }
+    request.insert(
+        "generationConfig".into(),
+        serde_json::json!({
+            "maxOutputTokens": profile.max_tokens.min(MAX_OUTPUT_TOKENS),
+        }),
+    );
+    if !tools.is_empty() {
+        request.insert(
+            "tools".into(),
+            serde_json::json!([{ "functionDeclarations": gemini_tools(tools) }]),
+        );
+        // VALIDATED makes Gemini check calls against the declarations rather
+        // than emitting free-form ones we then fail to route.
+        request.insert(
+            "toolConfig".into(),
+            serde_json::json!({ "functionCallingConfig": { "mode": "VALIDATED" } }),
+        );
+    }
+    request.insert("sessionId".into(), Value::String(session_id.clone()));
+
+    serde_json::json!({
+        "project": project_id,
+        "model": profile.model_name,
+        "userAgent": "antigravity",
+        "requestId": build_request_id(&session_id, &profile.model_name, messages.len()),
+        "request": Value::Object(request),
+    })
 }
 
 /// How many times to poll `onboardUser` before giving up.
@@ -966,6 +983,37 @@ mod tests {
 
     fn text(t: &str) -> ContentBlock {
         ContentBlock::Text { text: t.into() }
+    }
+
+    /// Sending `requestType: "agent"` on the chat path makes Code Assist bucket
+    /// the call and answer a detail-free 429 even with quota left; Google's own
+    /// client leaves the field out.
+    #[test]
+    fn a_chat_request_names_no_request_type() {
+        let profile = ModelProfile {
+            model_name: "gemini-3.8-flash".into(),
+            max_tokens: 4096,
+            ..Default::default()
+        };
+        let body = request_body(
+            "proj-1",
+            &[msg("user", vec![text("hi")])],
+            "be brief",
+            &[],
+            &profile,
+        );
+        assert!(body.get("requestType").is_none(), "{body}");
+        assert!(body["request"].get("requestType").is_none(), "{body}");
+        // The rest of the envelope is untouched.
+        assert_eq!(body["project"], "proj-1");
+        assert_eq!(body["model"], "gemini-3.8-flash");
+        assert_eq!(body["userAgent"], "antigravity");
+        assert!(body["requestId"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(body["request"]["contents"][0]["parts"][0]["text"], "hi");
+        assert_eq!(
+            body["request"]["systemInstruction"]["parts"][0]["text"],
+            "be brief"
+        );
     }
 
     #[test]

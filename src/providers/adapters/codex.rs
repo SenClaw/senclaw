@@ -174,17 +174,92 @@ fn message_item(role: &str, content: Vec<Value>) -> Value {
 /// Tool declarations in Responses shape — flat, unlike chat/completions where
 /// they nest under `function`.
 pub(crate) fn responses_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
-    tools
+    let mut removed = 0usize;
+    let declared = tools
         .iter()
         .map(|t| {
+            let mut parameters = crate::zen_core::query_llm::object_parameters(t.input_schema());
+            strip_unsupported_patterns(&mut parameters, &mut removed);
             serde_json::json!({
                 "type": "function",
                 "name": t.name(),
                 "description": t.description(),
-                "parameters": crate::zen_core::query_llm::object_parameters(t.input_schema()),
+                "parameters": parameters,
             })
         })
-        .collect()
+        .collect();
+    if removed > 0 {
+        debug!("[codex] stripped {removed} tool schema pattern(s) the backend cannot parse");
+    }
+    declared
+}
+
+/// Does a JSON-Schema `pattern` use a Unicode property escape (`\p{..}`, `\P{..}`)?
+///
+/// Only an odd run of backslashes in front of the `p` is a real escape; with an
+/// even run the last backslash is itself escaped and the `p` is a literal.
+pub(crate) fn has_unicode_property_escape(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] == b'\\' {
+            i += 1;
+        }
+        let odd = (i - start) % 2 == 1;
+        if odd && i + 1 < bytes.len() && matches!(bytes[i], b'p' | b'P') && bytes[i + 1] == b'{' {
+            return true;
+        }
+    }
+    false
+}
+
+/// Drop the `pattern` constraints the Codex backend rejects, leaving the rest of
+/// the schema alone.
+///
+/// The endpoint validates every tool's `parameters` with a regex engine that has
+/// no Unicode property escapes, so a perfectly valid `^[^\p{Cc}]{1,200}$`
+/// answers `400 … is not a 'regex'` for every account, deterministically (9router
+/// #3922). This is **not** a general sanitizer: other providers accept those
+/// patterns, which is why it runs only on this adapter's own request path, and
+/// only on a `pattern` that actually contains a property escape.
+///
+/// `properties` is special-cased because its keys are property *names* — one may
+/// be called `pattern` — and must never be read as schema keywords.
+pub(crate) fn strip_unsupported_patterns(node: &mut Value, removed: &mut usize) {
+    match node {
+        Value::Array(items) => {
+            for item in items {
+                strip_unsupported_patterns(item, removed);
+            }
+        }
+        Value::Object(map) => {
+            if map
+                .get("pattern")
+                .and_then(Value::as_str)
+                .is_some_and(has_unicode_property_escape)
+            {
+                map.remove("pattern");
+                *removed += 1;
+            }
+            for (key, value) in map.iter_mut() {
+                if key == "properties" {
+                    if let Value::Object(props) = value {
+                        for schema in props.values_mut() {
+                            strip_unsupported_patterns(schema, removed);
+                        }
+                        continue;
+                    }
+                }
+                strip_unsupported_patterns(value, removed);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Accumulated state while reading the event stream.
@@ -398,6 +473,71 @@ mod tests {
 
     fn text(t: &str) -> ContentBlock {
         ContentBlock::Text { text: t.into() }
+    }
+
+    #[test]
+    fn a_unicode_property_escape_in_a_pattern_is_detected() {
+        for p in [
+            r"^\p{Cc}$",
+            r"[^\p{Cc}\p{Cf}]{1,200}",
+            r"\P{L}+",
+            r"a\\\p{Cc}",
+        ] {
+            assert!(has_unicode_property_escape(p), "{p}");
+        }
+        // An even run of backslashes escapes the backslash itself: a literal `p`.
+        for p in [r"^\\p{Cc}$", r"^[a-z]+$", r"\d{3}", r"\p", r"p{3}", ""] {
+            assert!(!has_unicode_property_escape(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn only_the_unsupported_pattern_is_removed_from_a_tool_schema() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "pattern": r"^[^\p{Cc}]{1,200}$", "minLength": 1 },
+                "code": { "type": "string", "pattern": "^[A-Z]{3}$" },
+                // A property *named* pattern is a name, never a keyword.
+                "pattern": { "type": "string", "pattern": r"\p{L}" },
+                "either": { "anyOf": [
+                    { "type": "string", "pattern": r"\P{N}" },
+                    { "type": "null" }
+                ]}
+            },
+            "required": ["name"]
+        });
+        let mut removed = 0;
+        strip_unsupported_patterns(&mut schema, &mut removed);
+
+        assert_eq!(removed, 3);
+        let props = &schema["properties"];
+        assert!(props["name"].get("pattern").is_none());
+        assert_eq!(props["name"]["minLength"], 1, "other keywords survive");
+        assert_eq!(
+            props["code"]["pattern"], "^[A-Z]{3}$",
+            "a valid pattern stays"
+        );
+        assert!(
+            props["pattern"].is_object(),
+            "the property named `pattern` stays"
+        );
+        assert!(props["pattern"].get("pattern").is_none());
+        assert!(props["either"]["anyOf"][0].get("pattern").is_none());
+        assert_eq!(schema["required"][0], "name");
+    }
+
+    #[test]
+    fn a_schema_with_nothing_unsupported_is_left_as_it_was() {
+        let original = serde_json::json!({
+            "type": "object",
+            "properties": { "id": { "type": "string", "pattern": "^[a-f0-9]{8}$" } }
+        });
+        let mut schema = original.clone();
+        let mut removed = 0;
+        strip_unsupported_patterns(&mut schema, &mut removed);
+        assert_eq!(removed, 0);
+        assert_eq!(schema, original);
     }
 
     #[test]

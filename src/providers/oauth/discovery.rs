@@ -36,7 +36,7 @@ const CODE_ASSIST_MODELS_URL: &str =
 
 /// The Codex backend gates each entry on `minimal_client_version`; too low a
 /// value returns 200 with the newest models quietly missing.
-const CODEX_CLIENT_VERSION: &str = "0.144.6";
+const CODEX_CLIENT_VERSION: &str = "0.159.0";
 
 const COPILOT_MODELS_URL: &str = "https://api.githubcopilot.com/models";
 const ANTHROPIC_MODELS_URL: &str = "https://api.anthropic.com/v1/models";

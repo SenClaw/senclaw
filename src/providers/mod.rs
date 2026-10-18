@@ -6,7 +6,8 @@
 //! the endpoints live in one reviewed place rather than in a dropdown in the
 //! frontend.
 //!
-//! Ported from 9router's `free` / `freeTier` provider registry. Entries whose
+//! Ported from 9router's `free` / `freeTier` provider registry (first from
+//! v0.5.45, refreshed against v0.5.104 on 2026-10-19). Entries whose
 //! upstream needs a bespoke wire format (Kiro, Gemini CLI, Vertex) are
 //! deliberately absent: they would need an adapter, not a preset, and a
 //! preset that silently fails is worse than no preset. Media-only providers
@@ -87,6 +88,9 @@ static CATALOG: &[FreeProviderDef] = &[
             ("gemini-2.5-flash", "Gemini 2.5 Flash"),
             ("gemini-2.5-pro", "Gemini 2.5 Pro"),
             ("gemini-2.0-flash", "Gemini 2.0 Flash"),
+            ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+            ("gemini-3.7-flash", "Gemini 3.7 Flash"),
+            ("gemini-4-argon", "Gemini 4 Argon"),
         ],
         default_max_tokens: 8192,
         default_context_length: 1_000_000,
@@ -235,9 +239,29 @@ static CATALOG: &[FreeProviderDef] = &[
         brand_mark: "AF",
         url_placeholder: None,
         models: &[
-            ("anthropic/claude-3.7-sonnet", "Claude 3.7 Sonnet (Free)"),
-            ("moonshot/kimi-k2.6", "Kimi K2.6 (Free)"),
-            ("google/gemini-2.5-flash", "Gemini 2.5 Flash (Free)"),
+            ("gpt-oss-120b", "GPT-OSS 120B (Free)"),
+            ("gpt-oss-20b", "GPT-OSS 20B (Free)"),
+            ("kimi-k2.7-code", "Kimi K2.7 Code (Free)"),
+        ],
+        default_max_tokens: 4096,
+        default_context_length: 128_000,
+    },
+    FreeProviderDef {
+        id: "agnes",
+        display_name: "Agnes AI",
+        base_url: "https://apihub.agnes-ai.com/v1",
+        adapt: "openai",
+        auth: FreeAuth::ApiKey,
+        signup_url: Some("https://platform.agnes-ai.com"),
+        note: "OpenAI-compatible gateway with free API credits on sign-up. The list below is a starting set; the account's own models are listed once a key is saved.",
+        brand_color: "#7C3AED",
+        brand_mark: "AG",
+        url_placeholder: None,
+        models: &[
+            ("agnes-2.5-flash", "Agnes 2.5 Flash"),
+            ("agnes-2.5-pro", "Agnes 2.5 Pro"),
+            ("agnes-2.5-pro-beta", "Agnes 2.5 Pro Beta"),
+            ("agnes-3.0-flash", "Agnes 3.0 Flash"),
         ],
         default_max_tokens: 4096,
         default_context_length: 128_000,
@@ -463,6 +487,29 @@ mod tests {
         for banned in ["kiro", "gemini-cli", "vertex", "devin-cli"] {
             assert!(get(banned).is_none(), "{banned} needs an adapter");
         }
+    }
+
+    /// The 2026-10-19 refresh against 9router v0.5.104: one new free-tier
+    /// gateway, and model lists that had moved on.
+    #[test]
+    fn the_catalog_carries_the_refreshed_entries() {
+        let agnes = get("agnes").expect("agnes is a free-tier preset upstream");
+        assert_eq!(agnes.auth, FreeAuth::ApiKey);
+        assert_eq!(agnes.base_url, "https://apihub.agnes-ai.com/v1");
+
+        let airforce = get("api-airforce").unwrap();
+        let ids: Vec<_> = airforce.models.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&"gpt-oss-120b"), "{ids:?}");
+        assert!(
+            !ids.iter().any(|id| id.starts_with("anthropic/")),
+            "the retired relay models are gone: {ids:?}"
+        );
+
+        let studio = get("google-ai-studio").unwrap();
+        assert!(studio
+            .models
+            .iter()
+            .any(|(id, _)| *id == "gemini-3.8-flash"));
     }
 
     #[test]

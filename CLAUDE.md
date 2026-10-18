@@ -528,6 +528,22 @@ Model in [`src/apps/llm_provider.rs`](src/apps/llm_provider.rs) and
 `register_llm`. Design record:
 [docs/space-app-llm-provider-sdk.md](docs/space-app-llm-provider-sdk.md).
 
+## Provider presets and OAuth sign-ins (`src/providers/`)
+
+Ported from 9router and re-synced against it from time to time: the free-tier preset catalog (`providers/mod.rs`), the OAuth
+sign-ins and live model discovery (`providers/oauth/`), and the Antigravity and Codex adapters. Which upstream version we are
+at, what was left out and why, and the diff commands to repeat it: [docs/providers-9router-sync.md](docs/providers-9router-sync.md).
+
+- **SenClaw names itself to every provider** (`senclaw/<version>`, `originator: senclaw`); the one exception is the Antigravity
+  IDE `User-Agent`, because Code Assist is unusable without it. Do not port upstream's Claude Code / Grok CLI / Codex CLI
+  spoofing or its prompt-branding rewrites.
+- **`ANTIGRAVITY_IDE_VERSION` and the Codex `client_version` gate models.** A stale value hides new models without an error
+  (Codex answers 200 with the newest entries missing); bump them when a sync shows upstream moved.
+- **The Antigravity chat request has no `requestType`.** `"agent"` there earns a detail-free 429 with quota left
+  (`request_body`, pinned by a test).
+- **A Codex tool schema must not carry `\p{..}` patterns** — the backend rejects the whole request. The strip runs only on
+  Codex's own path, never as a global schema sanitizer.
+
 ## Gemma 4 on the native MLX path
 
 Moved to the `sen-mlx` runtime with the rest of native MLX inference
