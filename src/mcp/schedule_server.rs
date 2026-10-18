@@ -41,8 +41,10 @@ struct ScheduleWatchParams {
     resume_prompt: String,
     /// Full `mcp__<server>__<tool>` name to re-call each check, e.g.
     /// `mcp__ai-office-mcp__office_get_task`. Omit when the job cannot be
-    /// checked with one tool call — you are then woken every interval to check
-    /// it yourself, which costs a full turn each time.
+    /// checked with one tool call — you are then woken every interval (at least
+    /// 60 s apart, at most 10 times) by an automatic message to check it
+    /// yourself, which costs a full turn each time, and you must end the watch
+    /// with `schedule_watch_stop` once the job is finished or you cannot tell.
     #[serde(default)]
     tool: Option<String>,
     /// Arguments for `tool`, as a JSON object — include every one the tool
@@ -167,8 +169,12 @@ telling the user to ask you again later — after you hand work to something slo
 end your turn. SenClaw re-calls `tool` every `interval_secs` with no LLM involved, so \
 waiting is nearly free, and the moment the condition holds it wakes you here with \
 `resume_prompt` so you can deliver the result or carry on. It always reports back, \
-including when it gives up at `timeout_secs`. Omit `tool` only when the job cannot be \
-checked with a single tool call."
+including when it gives up at `timeout_secs`. Never arm one for something you can answer \
+in this turn — a web search, a price, a score, a lookup: there is nothing to wait for, \
+and it only wakes you again with nothing new to say. Omit `tool` only when the job \
+cannot be checked with a single tool call; every wake is then a full turn of yours (at \
+least 60 s apart, at most 10), and the watch ends only when you call schedule_watch_stop \
+in a woken turn or it gives up — telling the user you are done does not end it."
     )]
     async fn schedule_watch(
         &self,
@@ -190,7 +196,7 @@ checked with a single tool call."
     }
 
     #[rmcp::tool(
-        description = "Stop a watch this chat armed — when the user says to stop waiting, or the thing being waited on is no longer relevant. Pass watchId to stop one, or omit it to stop all of this chat's watches. A stopped watch never wakes the chat, so say so plainly instead of leaving the user expecting a report."
+        description = "Stop a watch this chat armed — when the user says to stop waiting, when the thing being waited on is no longer relevant, or when an automatic watch check finds the job finished or impossible to determine (that is how a watch without a probe ends; saying you are done does not). Pass watchId to stop one, or omit it to stop all of this chat's watches. A stopped watch never wakes the chat, so say so plainly instead of leaving the user expecting a report."
     )]
     fn schedule_watch_stop(
         &self,
@@ -406,7 +412,7 @@ impl ScheduleServer {
         chat_jid: &str,
         p: ScheduleWatchParams,
     ) -> ToolResult {
-        use crate::scheduler::watch::{DoneOp, DoneWhen, WatchConfig};
+        use crate::scheduler::watch::{DoneOp, DoneWhen, WatchBounds, WatchConfig};
 
         if p.resume_prompt.trim().is_empty() {
             return ToolResult::err(
@@ -422,12 +428,13 @@ impl ScheduleServer {
         };
         let op = p.done_op.as_deref().map(DoneOp::parse).unwrap_or(DoneOp::Exists);
         let path = p.done_path.clone().unwrap_or_default();
-        let interval_secs = p.interval_secs.unwrap_or(60).clamp(15, 3600);
-        let timeout_secs = p.timeout_secs.unwrap_or(3600).clamp(interval_secs, 86_400);
+        let agent_turn = p.tool.as_deref().map(str::trim).unwrap_or("").is_empty();
+        let WatchBounds {
+            interval_secs,
+            timeout_secs,
+            max_checks,
+        } = WatchBounds::clamp(agent_turn, p.interval_secs, p.timeout_secs);
         let deadline = Utc::now() + chrono::Duration::seconds(timeout_secs);
-        // The check ceiling is a second, independent brake: if the poll loop
-        // ever runs hot, the deadline alone would not bound the tool calls.
-        let max_checks = (timeout_secs / interval_secs).clamp(1, 500);
 
         let cfg = WatchConfig {
             tool: p.tool.clone(),
@@ -482,9 +489,21 @@ impl ScheduleServer {
                 "givesUpAt": cfg.deadline_at,
                 "maxChecks": max_checks,
                 "mode": if cfg.is_agent_fallback() { "agent-turn" } else { "probe" },
-                "note": "Watch armed. End your turn now — you will be woken here with the result. \
+                "note": if cfg.is_agent_fallback() {
+                    format!(
+                        "Agent-turn watch armed. It has no probe, so every {interval_secs}s (at most {max_checks} \
+times) you are woken here by an automatic message starting \"[Automatic check\"; each wake is a full turn. \
+End your turn now and tell the user what you are watching and that they can stop it. In a woken turn, when the \
+job has finished or you cannot tell, call schedule_watch_stop with this watchId — saying you are done does not \
+end the watch. If you armed this for something you could answer right now (a search, a price, a score), call \
+schedule_watch_stop now and answer instead."
+                    )
+                } else {
+                    "Watch armed. End your turn now — you will be woken here with the result. \
 The user sees it above the composer with a Stop button, and you can stop it with schedule_watch_stop; \
-tell them what you are watching and that they can stop it.",
+tell them what you are watching and that they can stop it."
+                        .to_string()
+                },
             })
             .to_string(),
         )
@@ -827,6 +846,74 @@ mod tests {
         text["done_op"] = serde_json::json!("contains");
         text["done_value"] = serde_json::json!("done");
         assert!(!arm(text).is_error, "contains on the whole answer stays allowed");
+    }
+
+    #[test]
+    fn a_watch_without_a_probe_is_capped_and_told_how_to_end_itself() {
+        // 2026-10-17: a lookup ("giá vàng hôm nay") was armed as a watch with no
+        // tool, 60 s, the default hour. It woke the chat 32 times and the agent
+        // answered every wake "I am done" without ever stopping it.
+        let cfg = test_config();
+        let db = Db::open_in_memory(&cfg).unwrap();
+        let srv = ScheduleServer::new();
+        let armed = srv.schedule_watch(
+            &db,
+            "main",
+            "web:main:x",
+            serde_json::from_value(serde_json::json!({
+                "resume_prompt": "Tôi đã tìm kiếm giá vàng. {{result}}",
+                "interval_secs": 15,
+                "timeout_secs": 86400,
+                "label": "Giá vàng hôm nay"
+            }))
+            .unwrap(),
+        );
+        assert!(!armed.is_error, "{}", armed.content);
+        let v: serde_json::Value = serde_json::from_str(&armed.content).unwrap();
+        assert_eq!(v["mode"], "agent-turn");
+        assert_eq!(v["intervalSecs"], 60, "a wake is a turn: the 15 s probe floor does not apply");
+        assert_eq!(v["maxChecks"], 10);
+        let note = v["note"].as_str().unwrap();
+        assert!(note.contains("schedule_watch_stop"), "{note}");
+        assert!(note.contains("does not end the watch"), "{note}");
+        assert!(note.contains("answer instead"), "the arming turn is told it can back out: {note}");
+
+        let stored: String = db
+            .with_conn(|c| c.query_row("SELECT watch_json FROM scheduled_tasks WHERE context_mode='watch'", [], |r| r.get(0)).map_err(Into::into))
+            .unwrap();
+        let w: serde_json::Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(w["max_checks"], 10, "the cap is stored, so the strip shows n/10");
+        let gives_up = chrono::DateTime::parse_from_rfc3339(v["givesUpAt"].as_str().unwrap()).unwrap();
+        let in_secs = (gives_up.with_timezone(&Utc) - Utc::now()).num_seconds();
+        assert!(in_secs <= 60 * 11, "gives up in {in_secs}s, not the 86400 that was asked for");
+    }
+
+    #[test]
+    fn a_probe_watch_keeps_its_result_note_and_its_fifteen_second_floor() {
+        let cfg = test_config();
+        let db = Db::open_in_memory(&cfg).unwrap();
+        let srv = ScheduleServer::new();
+        let armed = srv.schedule_watch(
+            &db,
+            "main",
+            "web:main:x",
+            serde_json::from_value(serde_json::json!({
+                "resume_prompt": "done: {{result}}",
+                "tool": "mcp__ai-office-mcp__office_get_task",
+                "args": {"id": 27},
+                "done_path": "task.status",
+                "done_op": "equals",
+                "done_value": "done",
+                "interval_secs": 2
+            }))
+            .unwrap(),
+        );
+        assert!(!armed.is_error, "{}", armed.content);
+        let v: serde_json::Value = serde_json::from_str(&armed.content).unwrap();
+        assert_eq!(v["mode"], "probe");
+        assert_eq!(v["intervalSecs"], 15);
+        assert_eq!(v["maxChecks"], 240);
+        assert!(v["note"].as_str().unwrap().contains("woken here with the result"));
     }
 
     #[test]

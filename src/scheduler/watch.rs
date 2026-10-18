@@ -50,6 +50,59 @@ pub const MAX_ERROR_STREAK: i64 = 5;
 /// five minutes, and ignoring them entirely hides it until the deadline.
 pub const MAX_TOOL_ERROR_STREAK: i64 = 2;
 
+/// Most wakes an agent-turn watch (no `tool`) may spend. A probe costs a tool
+/// call; this costs a whole agent turn each time (6–11 s on a local model), so
+/// the 500 checks a probe watch may make would be 500 turns. Measured
+/// 2026-10-17: a model armed one on "giá vàng hôm nay" at 60 s, and each wake
+/// produced another "I have finished" summary — 32 turns in 32 minutes before
+/// the user pressed Stop. A job that really needs longer asks for a coarser
+/// interval, not more wakes.
+pub const AGENT_TURN_MAX_CHECKS: i64 = 10;
+
+/// Shortest interval for an agent-turn watch. The 15 s floor is for a probe;
+/// at that rate a woken turn has not finished before the next one is due.
+pub const AGENT_TURN_MIN_INTERVAL_SECS: i64 = 60;
+
+/// The interval, deadline and check ceiling a watch is armed with, after the
+/// model's request has been clamped. Clamped, not rejected: a model that asks
+/// for a 2-second poll should get a sane watch, not an error to recover from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchBounds {
+    pub interval_secs: i64,
+    pub timeout_secs: i64,
+    pub max_checks: i64,
+}
+
+impl WatchBounds {
+    /// `agent_turn` is a watch with no probe tool: every check wakes the agent.
+    pub fn clamp(agent_turn: bool, interval_secs: Option<i64>, timeout_secs: Option<i64>) -> Self {
+        let floor = if agent_turn {
+            AGENT_TURN_MIN_INTERVAL_SECS
+        } else {
+            15
+        };
+        let interval_secs = interval_secs.unwrap_or(60).clamp(floor, 3600);
+        let timeout_secs = timeout_secs.unwrap_or(3600).clamp(interval_secs, 86_400);
+        // The check ceiling is a second, independent brake: if the poll loop
+        // ever runs hot, the deadline alone would not bound the tool calls.
+        let ceiling = if agent_turn {
+            AGENT_TURN_MAX_CHECKS
+        } else {
+            500
+        };
+        let max_checks = (timeout_secs / interval_secs).clamp(1, ceiling);
+        // The ceiling trips on the tick after the last wake, so a watch capped
+        // below its timeout gives up there — say so rather than promising the
+        // hour that was asked for.
+        let timeout_secs = timeout_secs.min(interval_secs * (max_checks + 1));
+        Self {
+            interval_secs,
+            timeout_secs,
+            max_checks,
+        }
+    }
+}
+
 /// The comparison applied to the probe result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -184,11 +237,23 @@ impl WatchConfig {
         self.tool.as_deref().map(str::trim).unwrap_or("").is_empty()
     }
 
+    /// The check ceiling that applies. An agent-turn watch is capped at
+    /// [`AGENT_TURN_MAX_CHECKS`] whatever its row says, so a row armed before
+    /// the cap existed (60 wakes at 60 s) stops too, with the chat told.
+    pub fn effective_max_checks(&self) -> i64 {
+        if self.is_agent_fallback() {
+            self.max_checks.min(AGENT_TURN_MAX_CHECKS)
+        } else {
+            self.max_checks
+        }
+    }
+
     /// Has the watch run out of road? Checked *before* probing, so an expired
     /// watch costs no tool call.
     pub fn exhausted(&self, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
-        if self.checks >= self.max_checks {
-            return Some(format!("reached the {} check ceiling", self.max_checks));
+        let ceiling = self.effective_max_checks();
+        if self.checks >= ceiling {
+            return Some(format!("reached the {ceiling} check ceiling"));
         }
         match chrono::DateTime::parse_from_rfc3339(&self.deadline_at) {
             Ok(deadline) => {
@@ -263,6 +328,50 @@ impl WatchConfig {
         }
     }
 
+    /// The message that wakes the chat on an agent-turn tick (no `tool`).
+    ///
+    /// The row's `resume_prompt` is written by the model that armed the watch,
+    /// in the voice of "the job finished" — sent alone, every wake read as a
+    /// fresh user request, so the agent answered it again each time. That is
+    /// what happened on 2026-10-17: a lookup nobody needed to wait for was
+    /// armed as a watch, the wake said "report the result for Benji
+    /// `{{result}}`" (placeholder unfilled — there is no probe), and the agent
+    /// wrote 32 near-identical "I have finished, no more searching" summaries.
+    /// None of them called `schedule_watch_stop`, because nothing in the wake
+    /// said it existed or that it was the way out.
+    ///
+    /// So the wake says what it is (automatic, not the user), which check it
+    /// is, how many remain, and that ending the watch is the agent's job:
+    /// finished or undeterminable means stop it now, not announce it.
+    pub fn render_wake(&self, watch_id: &str) -> String {
+        let label = self
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .unwrap_or("the job you were waiting on");
+        let ceiling = self.effective_max_checks();
+        let left = (ceiling - self.checks).max(0);
+        let body = self.resume_prompt.replace(
+            "{{result}}",
+            "(this watch has no probe tool: look at the job yourself)",
+        );
+        format!(
+            "[Automatic check {n} of {ceiling} from the watch you armed on \"{label}\" (watch id {watch_id}). \
+             This message is not from the user.]\n\n\
+             {body}\n\n\
+             Check the job by whatever means it needs, then do exactly one of these:\n\
+             - It has finished, or nothing you can do will tell you more: give the user the result, or say plainly \
+             that you cannot tell, AND call schedule_watch_stop with watch_id \"{watch_id}\" in this same turn. \
+             Saying you are done does not end the watch; you are woken again until you stop it \
+             ({left} more check(s) before it gives up).\n\
+             - It is still running: say so in one line and do not repeat anything you already told the user.\n\
+             If no job is actually running (the user only asked a question you can answer now), stop the watch. \
+             Reply in the language the user writes in.",
+            n = self.checks,
+        )
+    }
+
     /// The prompt dispatched when the watch gives up. Never empty — the user
     /// must hear about a watch that ended without an answer.
     pub fn render_timeout(&self, reason: &str) -> String {
@@ -272,6 +381,16 @@ impl WatchConfig {
             .unwrap_or("the job you were waiting on");
         match &self.timeout_prompt {
             Some(p) if !p.trim().is_empty() => p.replace("{{reason}}", reason),
+            // An agent-turn watch has been waking the agent all along, so
+            // "it has not finished" is the wrong thing to say to a chat that
+            // already got its answer: the agent decided each check, and the
+            // watch is simply over.
+            _ if self.is_agent_fallback() => format!(
+                "The watch on {label} was stopped automatically: it {reason}, so you will not be woken by it \
+                 again. Tell the user in a sentence or two that it is over and what you last saw; if you \
+                 already gave them the answer, say only that the watch has ended. Do not search again and do \
+                 not invent a result."
+            ),
             _ => format!(
                 "The watch on {label} stopped without a result: it {reason}. \
                  Tell the user plainly that it has not finished, say what was \
@@ -785,6 +904,116 @@ mod tests {
         assert!(c.is_agent_fallback(), "whitespace is not a tool name");
         c.tool = Some("mcp__x__y".into());
         assert!(!c.is_agent_fallback());
+    }
+
+    fn agent_turn_cfg() -> WatchConfig {
+        WatchConfig {
+            tool: None,
+            args: json!({}),
+            max_checks: 60,
+            resume_prompt: "Tôi đã tìm kiếm giá vàng cho Benji. {{result}}".into(),
+            label: Some("Giá vàng hôm nay".into()),
+            ..cfg(DoneWhen::default())
+        }
+    }
+
+    #[test]
+    fn an_agent_turn_watch_is_capped_in_wakes_and_floored_in_interval() {
+        // 2026-10-17: armed with no tool at 60 s and the default hour, it woke
+        // the chat 32 times in 32 minutes. Each wake is a whole agent turn.
+        let asked = WatchBounds::clamp(true, None, None);
+        assert_eq!(asked.interval_secs, 60);
+        assert_eq!(asked.max_checks, AGENT_TURN_MAX_CHECKS);
+        assert_eq!(asked.timeout_secs, 60 * (AGENT_TURN_MAX_CHECKS + 1), "the deadline does not promise the hour that was asked for");
+
+        let hasty = WatchBounds::clamp(true, Some(2), Some(86_400));
+        assert_eq!(hasty.interval_secs, AGENT_TURN_MIN_INTERVAL_SECS, "a 15 s floor is for probes");
+        assert_eq!(hasty.max_checks, AGENT_TURN_MAX_CHECKS);
+
+        // A long wait asks for a coarser interval, not more wakes.
+        let patient = WatchBounds::clamp(true, Some(300), Some(3600));
+        assert_eq!((patient.interval_secs, patient.max_checks), (300, 10));
+        assert_eq!(patient.timeout_secs, 300 * 11);
+
+        // A short deadline still wins when it is the nearer limit.
+        let short = WatchBounds::clamp(true, Some(600), Some(1200));
+        assert_eq!((short.max_checks, short.timeout_secs), (2, 1200));
+    }
+
+    #[test]
+    fn a_probe_watch_keeps_its_cheap_bounds() {
+        let asked = WatchBounds::clamp(false, None, None);
+        assert_eq!((asked.interval_secs, asked.timeout_secs, asked.max_checks), (60, 3600, 60));
+
+        let hasty = WatchBounds::clamp(false, Some(2), Some(999_999));
+        assert_eq!(hasty.interval_secs, 15, "a probe is a tool call, not a turn");
+        assert_eq!(hasty.max_checks, 500);
+        assert!(hasty.timeout_secs <= 86_400);
+    }
+
+    #[test]
+    fn a_stored_agent_turn_row_is_held_to_the_cap_too() {
+        // Rows armed before the cap carry max_checks 60.
+        let mut c = agent_turn_cfg();
+        c.checks = AGENT_TURN_MAX_CHECKS - 1;
+        assert!(c.exhausted(chrono::Utc::now()).is_none());
+        c.checks = AGENT_TURN_MAX_CHECKS;
+        let reason = c.exhausted(chrono::Utc::now()).expect("the ceiling stops it");
+        assert!(reason.contains(&AGENT_TURN_MAX_CHECKS.to_string()), "{reason}");
+
+        // A probe watch with the same row is unaffected: its checks are free.
+        let mut probe = cfg(DoneWhen::default());
+        probe.max_checks = 60;
+        probe.checks = AGENT_TURN_MAX_CHECKS;
+        assert!(probe.exhausted(chrono::Utc::now()).is_none());
+    }
+
+    #[test]
+    fn a_wake_says_it_is_automatic_and_names_the_way_out() {
+        let mut c = agent_turn_cfg();
+        c.checks = 3;
+        let wake = c.render_wake("f727a81b");
+        assert!(wake.contains("Automatic check 3 of 10"), "{wake}");
+        assert!(wake.contains("not from the user"), "{wake}");
+        assert!(wake.contains("Giá vàng hôm nay"), "{wake}");
+        // The way out is a tool call with the id in it, not a promise to stop.
+        assert!(wake.contains("schedule_watch_stop"), "{wake}");
+        assert!(wake.contains("watch_id \"f727a81b\""), "{wake}");
+        assert!(wake.contains("7 more check(s)"), "{wake}");
+        assert!(wake.contains("Tôi đã tìm kiếm giá vàng cho Benji."), "the model's own prompt still travels: {wake}");
+    }
+
+    #[test]
+    fn a_wake_never_carries_an_unfilled_placeholder() {
+        // There is no probe, so there is nothing to put in `{{result}}`; the
+        // literal braces made the woken model read its input as a memory dump.
+        let wake = agent_turn_cfg().render_wake("w1");
+        assert!(!wake.contains("{{result}}"), "{wake}");
+        assert!(wake.contains("no probe tool"), "{wake}");
+
+        // Unknown placeholders survive verbatim, like everywhere else.
+        let mut c = agent_turn_cfg();
+        c.resume_prompt = "check {{job}}".into();
+        assert!(c.render_wake("w1").contains("check {{job}}"));
+    }
+
+    #[test]
+    fn the_last_wake_counts_down_to_zero_and_never_goes_negative() {
+        let mut c = agent_turn_cfg();
+        c.checks = AGENT_TURN_MAX_CHECKS;
+        assert!(c.render_wake("w1").contains("0 more check(s)"));
+        c.checks = AGENT_TURN_MAX_CHECKS + 5;
+        assert!(c.render_wake("w1").contains("0 more check(s)"), "a row past the cap still reads sanely");
+    }
+
+    #[test]
+    fn an_agent_turn_watch_that_runs_out_tells_the_chat_it_is_over() {
+        let c = agent_turn_cfg();
+        let msg = c.render_timeout("reached the 10 check ceiling");
+        assert!(msg.contains("Giá vàng hôm nay"), "{msg}");
+        assert!(msg.contains("will not be woken"), "{msg}");
+        assert!(msg.contains("Do not search again") && msg.contains("not invent"), "{msg}");
+        assert!(!msg.contains("offer to keep waiting"), "a watch with no probe has nothing to keep waiting on: {msg}");
     }
 
     #[test]

@@ -242,7 +242,16 @@ chỉ tốn mấy chục lời gọi tool. Chỉ lượt cuối — lúc điều
 cuộc — mới tốn một lượt agent thật.
 
 Không khai báo được `tool` thì watch rơi về **đánh thức agent mỗi kỳ** để tự kiểm
-tra: vẫn chạy, nhưng mỗi kỳ tốn trọn một lượt.
+tra: vẫn chạy, nhưng mỗi kỳ tốn trọn một lượt. Vì vậy loại này bị chặn chặt hơn:
+khoảng cách tối thiểu **60 giây** và **tối đa 10 lần đánh thức** (muốn chờ lâu thì
+tăng `interval_secs`, không tăng số lần). Tin nhắn đánh thức mở đầu bằng
+`[Automatic check n of 10 …]`, nói rõ nó là tự động chứ không phải của người dùng,
+và dặn agent kết thúc watch bằng `schedule_watch_stop` (kèm id) khi việc đã xong
+hoặc không xác định được — nói "tôi đã xong" thì watch **không** tự dừng. Hết 10
+lần mà agent vẫn chưa dừng, chat được báo một lần là watch đã kết thúc.
+
+Đừng arm watch cho việc trả lời được ngay trong lượt (tra giá, tìm kiếm, điểm số):
+không có gì đang chạy để chờ, mỗi lần đánh thức chỉ là một lượt agent vô ích.
 
 ### D3. Dùng
 
@@ -276,7 +285,7 @@ cuộc trò chuyện, nên không thể để bên gọi chỉ định chat củ
   *trạng thái nghỉ bình thường*, không phải hỏng; phải hỏng liên tiếp nhiều lần
   mới dừng.
 - **Hai phanh độc lập**: hạn chót (`deadline_at`) và trần số lần kiểm tra
-  (`max_checks`).
+  (`max_checks`; watch không có `tool` còn bị kẹp ở 10).
 - **Nhớ đưa cả trạng thái thất bại vào `done_values`** (`failed`, `error`,
   `cancelled`). Watch chỉ khớp `done` sẽ chờ hết hạn trên một job đã chết từ phút
   đầu.
