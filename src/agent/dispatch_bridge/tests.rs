@@ -973,6 +973,49 @@ fn a_parent_whose_tasks_can_never_start_is_failed_rather_than_left_active() {
 }
 
 #[test]
+fn sweeping_a_stalled_parent_promotes_the_next_queued_one_for_its_admin() {
+    // Two parents created back to back share one admin: the first runs, the
+    // second waits as `queued`. The normal completion paths hand the baton on
+    // (`mark_task_done` / `mark_task_error` call `activate_next_queued`); a
+    // sweep that fails the first parent must too, or the queued one is never
+    // activated and the admin's dispatch queue is wedged until a restart.
+    let path = tmp_state_path("stall_promotes_queued");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(parent_with(
+                "2020-01-01T00:00:00Z",
+                vec![unstartable_virtual("d1", "ghost-task")],
+            ));
+
+            let mut queued = parent_with("2020-01-01T00:00:05Z", vec![]);
+            queued.id = "p_queued".into();
+            queued.status = "queued".into();
+            s.parents.push(queued);
+
+            // Another admin's queue is not this parent's to advance.
+            let mut other = parent_with("2020-01-01T00:00:06Z", vec![]);
+            other.id = "p_other_admin".into();
+            other.admin_folder = "someone-else".into();
+            other.status = "queued".into();
+            s.parents.push(other);
+        })
+        .unwrap();
+
+    bridge.process_pending();
+
+    let parents = bridge.get_parents();
+    let by_id: HashMap<_, _> = parents.iter().map(|p| (p.id.as_str(), p)).collect();
+    assert_eq!(by_id["p1"].status, "done", "the stalled parent is failed");
+    assert_eq!(
+        by_id["p_queued"].status, "active",
+        "the next queued parent for the same admin must be promoted"
+    );
+    assert_eq!(by_id["p_other_admin"].status, "queued");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn a_freshly_created_parent_is_never_swept() {
     // At creation and at boot the persona registry and worker pool are briefly
     // unwired, so every task is legitimately un-startable for a moment.

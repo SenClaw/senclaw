@@ -862,6 +862,11 @@ Rules for Claude:
   persona registry and virtual-worker pool are briefly unwired, so every task is
   legitimately un-startable for a moment. `STALL_GRACE_SECONDS` covers it;
   without it a fresh DAG is killed on the first tick.
+- **Every path that closes a parent must call `activate_next_queued` for its
+  admin folder** — `mark_task_done`, `mark_task_error` *and*
+  `sweep_stalled_parents`. A parent created while another is active waits as
+  `queued`; the sweep failed the stalled one without promoting it, so the queue
+  stayed wedged (nothing logged) until a restart. A test pins the sweep path.
 - **User retry is not the infra-retry budget.** `MAX_INFRA_RETRIES` is automatic,
   capped at 1, and gated on `is_retryable_infra_error`. `retry_task` is a person
   deciding, so it is uncapped and does not inspect the cause. Do not fold them

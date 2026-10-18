@@ -946,6 +946,7 @@ impl DispatchBridge {
                 blocked.len()
             );
             let now_s = now.to_rfc3339();
+            let mut closed_admin: Option<String> = None;
             let _ = self.modify_state(|state| {
                 let Some(parent) = state.parents.iter_mut().find(|p| p.id == parent_id) else {
                     return;
@@ -963,7 +964,14 @@ impl DispatchBridge {
                 }
                 parent.status = "done".into();
                 parent.completed_at = Some(now_s.clone());
+                closed_admin = Some(parent.admin_folder.clone());
             });
+            // Closing a parent frees its admin's slot, same as the completion
+            // paths: without this the next `queued` parent is never activated
+            // and the admin's whole dispatch queue stays wedged.
+            if let Some(folder) = closed_admin {
+                self.activate_next_queued(&folder);
+            }
             self.notify_ws_parents();
         }
     }
