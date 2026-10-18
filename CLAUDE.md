@@ -425,6 +425,14 @@ Rules for Claude:
   `browser_do` → `browser_read` is that turn four times; `browser_task` and
   `browser_read {url}` are one. The tool descriptions and the v2 skill text
   say so — keep them saying so.
+- **A web search runs in the browser Settings → Browser chose, and the model must not have to discover the tool.**
+  `browser_search` names no browser itself and reads `driver` back from `/open` so `/read` stays on that tab; it
+  once sent `"managed"` every time, so a person who picked their own Chrome (`defaultDriver: "extension"`) got the
+  headless profile. It is in `ALWAYS_LOADED_MCP_TOOLS`: a small model told to `ToolSearch` first went straight to
+  `WebFetch` on a Google URL (2026-10-18, gemma-4-e4b, twice) and reported the price unreadable. `WebFetch` now
+  refuses a search engine's results page (`search_results_engine`) and names `browser_search`; a site's own search
+  URL still passes. An unconnected extension is `extension_not_connected` — never a silent switch to the managed
+  browser, whose profile has none of the person's sign-ins.
 - **A skill that teaches the browser tools has a text per engine.**
   `SKILL.browser-v2.md` beside `SKILL.md` is what engine v2 reads
   (`skills::scan::with_variant`, resolved the way the tool set is). The legacy

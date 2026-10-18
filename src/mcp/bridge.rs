@@ -156,6 +156,15 @@ pub const ALWAYS_LOADED_MCP_TOOLS: &[&str] = &[
     // both spellings are listed because either bridge may be the live one.
     "mcp__core__schedule_watch",
     "mcp__senclaw-schedule__schedule_watch",
+    // `browser_search` is the only web search that returns results: a search
+    // engine's own results page cannot be fetched remotely (scripts, consent and
+    // bot checks answer a plain HTTP request with no results). Left deferred, a
+    // small model skipped the discovery step the prompt asks for and went
+    // straight to `WebFetch` on a Google URL — 2026-10-18, gemma-4-e4b, twice,
+    // then told the user it "could not extract" the price. Visible, it is the
+    // tool the prompt's "use a visible tool that fits" rule points at.
+    "mcp__core__browser_search",
+    "mcp__senclaw-browser__browser_search",
     "mcp__workspace__workspace_info",
     "mcp__senclaw-workspace__workspace_info",
 ];
@@ -235,5 +244,15 @@ mod always_loaded_tests {
         // and per-server modes, since either bridge may be the live one.
         assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__core__schedule_watch"));
         assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__senclaw-schedule__schedule_watch"));
+    }
+
+    #[test]
+    fn browser_search_is_never_deferred_under_either_naming_scheme() {
+        // A web search must not hang on a discovery step a small model skips:
+        // it fetched a Google results page with WebFetch instead and got nothing.
+        assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__core__browser_search"));
+        assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__senclaw-browser__browser_search"));
+        // Only the search: the other browser tools stay behind ToolSearch.
+        assert!(!ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__core__browser_task"));
     }
 }

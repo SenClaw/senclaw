@@ -92,10 +92,10 @@ there, and `schedule_watch_stop` stops it on their behalf when they ask.
 
 When the user asks about anything **time-sensitive or external** — prices, exchange rates, news, weather, schedules, today's events, search results, status of a website — you MUST use a tool to fetch fresh data:
 
-1. If a visible tool already fits the task, use it.
+1. If a visible tool already fits the task, use it — for a web search that is `browser_search`, which runs it in a real browser tab (the person's own Chrome through the SenClaw extension when Settings → Browser selects it).
 2. If the needed tool is deferred or absent from the visible tool list, call `ToolSearch { query: \"browser search\" }` before using it.
 3. If a `Skill` clearly matches the workflow, invoke it first and follow its instructions.
-4. If browser tools are unavailable, fall back to `WebFetch` on a known source.
+4. If browser tools are unavailable, fall back to `WebFetch` on a known source's own page — never on a search engine's results page, which returns no results.
 
 **Forbidden**: writing out prices, rates, dates, statistics, quotes, or any \"current\" data from memory. Training data is stale; fabricated numbers cause real user harm. If no tool works, say \"I couldn't fetch fresh data; try X\" instead of guessing.
 
@@ -684,6 +684,16 @@ mod tests {
         // sleeping through it, then handing the job back to the user.
         assert!(SYSTEM_PROMPT.contains("`sleep`"));
         assert!(SYSTEM_PROMPT.contains("ask me again later"));
+    }
+
+    #[test]
+    fn real_time_rule_sends_a_search_to_the_browser_not_to_a_results_page() {
+        // 2026-10-18: a small model fetched a Google results URL with WebFetch,
+        // twice, got a page with no results and told the user it could not
+        // extract the price. The rule names the visible tool for a search and
+        // rules out the fetch it fell back to.
+        assert!(SYSTEM_PROMPT.contains("for a web search that is `browser_search`"));
+        assert!(SYSTEM_PROMPT.contains("never on a search engine's results page"));
     }
 
     #[test]
