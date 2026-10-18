@@ -1,0 +1,18 @@
+<system-reminder>
+Today's date is 2026-10-18.
+</system-reminder>
+
+
+<system-reminder>
+Skill hint: `space` may help with this request — Personal productivity tools — manage notes via the Space MCP server, and email via the Email Space App's `email-mcp` server.
+
+**Workflow:**
+1. Invoke it with `Skill { "skill": "space" }` to load its instructions.
+2. Follow the skill's workflow if it fits the user's exact request.
+3. For time-sensitive or external data, use a live data tool; do not answer from memory.
+</system-reminder>
+
+
+Where does the plain payment gateway listen
+
+run script KX1 ¶¶STEPS{"tag":"KX1","steps":[{"t":"ToolSearch","a":{"query":"select:mcp__senclaw-kanban__kanban_show,mcp__senclaw-kanban__kanban_complete,mcp__senclaw-kanban__kanban_block","max_results":5}},{"t":"mcp__senclaw-kanban__kanban_complete","a":{"card_id":6,"summary":"Moved the plain gateway to port 5150. ¤¤FACTS{\"facts\":[{\"text\":\"The plain gateway listens on port 5150.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"plain gateway\"]}]}¤¤"}}]}¶¶

@@ -1,0 +1,770 @@
+{
+ "label": "p2",
+ "total": 53,
+ "failed": 0,
+ "checks": [
+  {
+   "name": "two projects are created",
+   "ok": true,
+   "detail": {
+    "PA": {
+     "archivedAt": null,
+     "chatCount": 0,
+     "createdAt": 1792339282248,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_7e6bc3f2",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/runs/run-p2/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792339282248
+    },
+    "PB": {
+     "archivedAt": null,
+     "chatCount": 0,
+     "createdAt": 1792339282251,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_8d803c19",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Beta",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/runs/run-p2/proj/B",
+     "rootExists": true,
+     "updatedAt": 1792339282251
+    }
+   }
+  },
+  {
+   "name": "the common fact is visible through the agent facts API",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a new project has no facts",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "what A1 said lands in the project bank (2 facts)",
+   "ok": true,
+   "detail": {
+    "bank": "project:prj_7e6bc3f2",
+    "count": 2,
+    "facts": [
+     {
+      "entities": [
+       "alpha",
+       "release"
+      ],
+      "id": "0adaa07f-99c4-4679-b3c8-fe8e10c13a4f",
+      "kind": "world",
+      "mentionedAt": 1792339285,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "reflection",
+      "supersededBy": null,
+      "text": "The Alpha release is deployed on Friday."
+     },
+     {
+      "entities": [
+       "alpha",
+       "payment gateway"
+      ],
+      "id": "ead4c516-cb24-40eb-a15f-0eb6bd7d802a",
+      "kind": "world",
+      "mentionedAt": 1792339285,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "reflection",
+      "supersededBy": null,
+      "text": "The Alpha payment gateway listens on port 7421."
+     }
+    ],
+    "total": 2
+   }
+  },
+  {
+   "name": "project facts are tagged with no chat and were extracted by the conversation",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "0adaa07f-99c4-4679-b3c8-fe8e10c13a4f",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha release is deployed on Friday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "payment gateway"
+     ],
+     "id": "ead4c516-cb24-40eb-a15f-0eb6bd7d802a",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha payment gateway listens on port 7421."
+    }
+   ]
+  },
+  {
+   "name": "the profile's own bank got none of it",
+   "ok": true,
+   "detail": {
+    "bank": "shared",
+    "count": 1,
+    "facts": [
+     {
+      "entities": [],
+      "id": "common-1",
+      "kind": "world",
+      "mentionedAt": 1792339283,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "upload",
+      "supersededBy": null,
+      "text": "Lan lives in quokkaville and works at the ferry company."
+     }
+    ],
+    "total": 1
+   }
+  },
+  {
+   "name": "the bank listing shows project:<id> beside the profile",
+   "ok": true,
+   "detail": [
+    {
+     "bank": "project:prj_7e6bc3f2",
+     "current": 2,
+     "lastMentionedAt": 1792339285,
+     "replaced": 0
+    },
+    {
+     "bank": "shared",
+     "current": 1,
+     "lastMentionedAt": 1792339283,
+     "replaced": 0
+    }
+   ]
+  },
+  {
+   "name": "chat A2 of the project is told what A1 said",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[3] (fact) noted 2026-10-18\nThe Alpha release is deployed on Friday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…and labels it a fact",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[3] (fact) noted 2026-10-18\nThe Alpha release is deployed on Friday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…and is still told the agent-wide fact",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[3] (fact) noted 2026-10-18\nThe Alpha release is deployed on Friday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "a chat outside every project is NOT told it",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…but is told the agent-wide fact",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "a chat of another project is NOT told it",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…but is told the agent-wide fact",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "A2 retires what A1 said; the old fact is kept for history",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "c46e630e-6c9e-43d0-8c93-43d6ae2e337c",
+     "kind": "world",
+     "mentionedAt": 1792339287,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha release is now deployed on Thursday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "0adaa07f-99c4-4679-b3c8-fe8e10c13a4f",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": "c46e630e-6c9e-43d0-8c93-43d6ae2e337c",
+     "text": "The Alpha release is deployed on Friday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "payment gateway"
+     ],
+     "id": "ead4c516-cb24-40eb-a15f-0eb6bd7d802a",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha payment gateway listens on port 7421."
+    }
+   ]
+  },
+  {
+   "name": "the live list has the new value and not the old",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "c46e630e-6c9e-43d0-8c93-43d6ae2e337c",
+     "kind": "world",
+     "mentionedAt": 1792339287,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha release is now deployed on Thursday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "payment gateway"
+     ],
+     "id": "ead4c516-cb24-40eb-a15f-0eb6bd7d802a",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha payment gateway listens on port 7421."
+    }
+   ]
+  },
+  {
+   "name": "A1, who said Friday, is now told Thursday and not Friday",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha release is now deployed on Thursday.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "PATCH inheritCommon=false",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "archivedAt": null,
+     "chatCount": 2,
+     "createdAt": 1792339282248,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_7e6bc3f2",
+     "inheritCommon": false,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/runs/run-p2/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792339288103
+    }
+   }
+  },
+  {
+   "name": "inheriting nothing: the project’s own facts stay, the agent-wide fact goes",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[2] (fact) noted 2026-10-18\nThe Alpha release is now deployed on Thursday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…and a chat outside the project is unaffected",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "inheriting again brings it back on the next turn",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nLan lives in quokkaville and works at the ferry company.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[3] (fact) noted 2026-10-18\nThe Alpha release is now deployed on Thursday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "POST a manual fact → 201, source manual, no chat",
+   "ok": true,
+   "detail": {
+    "status": 201,
+    "body": {
+     "existing": false,
+     "fact": {
+      "entities": [],
+      "id": "912a9c0f-2210-4169-b3c7-3c9da41603dd",
+      "kind": "world",
+      "mentionedAt": 1792339288,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "manual",
+      "supersededBy": null,
+      "text": "The Alpha database is PostgreSQL 16."
+     }
+    }
+   }
+  },
+  {
+   "name": "the same words again → 200 existing, same fact",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "existing": true,
+     "fact": {
+      "entities": [],
+      "id": "912a9c0f-2210-4169-b3c7-3c9da41603dd",
+      "kind": "world",
+      "mentionedAt": 1792339288,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 2,
+      "slot": null,
+      "source": "manual",
+      "supersededBy": null,
+      "text": "The Alpha database is PostgreSQL 16."
+     }
+    }
+   }
+  },
+  {
+   "name": "a fragment is refused",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "invalid_fact",
+     "message": "a fact is 8 to 600 characters, this one is 5"
+    }
+   }
+  },
+  {
+   "name": "a secret is refused",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "secret_in_fact",
+     "kinds": [
+      "api_key"
+     ]
+    }
+   }
+  },
+  {
+   "name": "chat A2 is told the typed fact",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha database is PostgreSQL 16.\n\n[2] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[3] (fact) noted 2026-10-18\nThe Alpha release is now deployed on Thursday.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "a conversation that contradicts the typed fact does not replace it",
+   "ok": true,
+   "detail": {
+    "entities": [],
+    "id": "912a9c0f-2210-4169-b3c7-3c9da41603dd",
+    "kind": "world",
+    "mentionedAt": 1792339288,
+    "occurredEnd": null,
+    "occurredStart": null,
+    "origin": "",
+    "proofCount": 2,
+    "slot": null,
+    "source": "manual",
+    "supersededBy": null,
+    "text": "The Alpha database is PostgreSQL 16."
+   }
+  },
+  {
+   "name": "…and what it said is kept beside it",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "database"
+     ],
+     "id": "80ee286d-4d3d-4801-9985-a7de44bef4d1",
+     "kind": "world",
+     "mentionedAt": 1792339289,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha database is now MySQL 9."
+    },
+    {
+     "entities": [],
+     "id": "912a9c0f-2210-4169-b3c7-3c9da41603dd",
+     "kind": "world",
+     "mentionedAt": 1792339288,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 2,
+     "slot": null,
+     "source": "manual",
+     "supersededBy": null,
+     "text": "The Alpha database is PostgreSQL 16."
+    },
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "c46e630e-6c9e-43d0-8c93-43d6ae2e337c",
+     "kind": "world",
+     "mentionedAt": 1792339287,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha release is now deployed on Thursday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "release"
+     ],
+     "id": "0adaa07f-99c4-4679-b3c8-fe8e10c13a4f",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": "c46e630e-6c9e-43d0-8c93-43d6ae2e337c",
+     "text": "The Alpha release is deployed on Friday."
+    },
+    {
+     "entities": [
+      "alpha",
+      "payment gateway"
+     ],
+     "id": "ead4c516-cb24-40eb-a15f-0eb6bd7d802a",
+     "kind": "world",
+     "mentionedAt": 1792339285,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "reflection",
+     "supersededBy": null,
+     "text": "The Alpha payment gateway listens on port 7421."
+    }
+   ]
+  },
+  {
+   "name": "memory_search_facts from a project chat finds the project’s fact",
+   "ok": true,
+   "detail": [
+    "ead4c516-cb24-40eb-a15f-0eb6bd7d802a · noted 2026-10-18 · The Alpha payment gateway listens on port 7421.",
+    "common-1 · noted 2026-10-18 · Lan lives in quokkaville and works at the ferry company."
+   ]
+  },
+  {
+   "name": "…and the agent-wide one",
+   "ok": true,
+   "detail": [
+    "ead4c516-cb24-40eb-a15f-0eb6bd7d802a · noted 2026-10-18 · The Alpha payment gateway listens on port 7421.",
+    "common-1 · noted 2026-10-18 · Lan lives in quokkaville and works at the ferry company."
+   ]
+  },
+  {
+   "name": "memory_search_facts from outside the project does not",
+   "ok": true,
+   "detail": "No matching facts."
+  },
+  {
+   "name": "…nor from another project",
+   "ok": true,
+   "detail": "No matching facts."
+  },
+  {
+   "name": "memory_forget_fact from outside the project cannot reach its fact",
+   "ok": true,
+   "detail": "No fact with id '82b8389e-97bc-4afd-923f-7ffca2be541b' in this agent's memory. Use memory_search_facts to find the id."
+  },
+  {
+   "name": "…from inside it can",
+   "ok": true,
+   "detail": "Forgot fact 82b8389e-97bc-4afd-923f-7ffca2be541b."
+  },
+  {
+   "name": "DELETE of a fact that is already gone → 404",
+   "ok": true,
+   "detail": {
+    "status": 404,
+    "body": {
+     "error": "fact_not_found"
+    }
+   }
+  },
+  {
+   "name": "a project cannot delete another project’s fact",
+   "ok": true,
+   "detail": {
+    "status": 404,
+    "body": {
+     "error": "fact_not_found"
+    }
+   }
+  },
+  {
+   "name": "PATCH factsWrite=chat",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "archivedAt": null,
+     "chatCount": 1,
+     "createdAt": 1792339282251,
+     "description": "",
+     "factsWrite": "chat",
+     "hasClaudeMd": false,
+     "id": "prj_8d803c19",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Beta",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/runs/run-p2/proj/B",
+     "rootExists": true,
+     "updatedAt": 1792339290424
+    }
+   }
+  },
+  {
+   "name": "facts_write=chat: it goes to the profile’s bank, tagged with the chat",
+   "ok": true,
+   "detail": {
+    "bank": "shared",
+    "count": 1,
+    "facts": [
+     {
+      "entities": [
+       "beta",
+       "hazelnut"
+      ],
+      "id": "90abba8e-6d38-4a60-b372-4316704be6be",
+      "kind": "world",
+      "mentionedAt": 1792339291,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "web:shared:b1",
+      "proofCount": 1,
+      "slot": null,
+      "source": "reflection",
+      "supersededBy": null,
+      "text": "The Beta queue runs on the hazelnut broker."
+     }
+    ],
+    "total": 2
+   }
+  },
+  {
+   "name": "…and not into the project",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "…and that chat is told it",
+   "ok": true,
+   "detail": "\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Beta queue runs on the hazelnut broker.\n\n[2] (fact) noted 2026-10-18\nThe Beta cache is redis-7 in production.\n\nIf you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).\n"
+  },
+  {
+   "name": "…and no other chat is",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "PATCH factsWrite=off",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "archivedAt": null,
+     "chatCount": 2,
+     "createdAt": 1792339282248,
+     "description": "",
+     "factsWrite": "off",
+     "hasClaudeMd": false,
+     "id": "prj_7e6bc3f2",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/runs/run-p2/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792339292010
+    }
+   }
+  },
+  {
+   "name": "facts_write=off: nothing is retained anywhere",
+   "ok": true,
+   "detail": {
+    "totalBefore": "8",
+    "now": "8"
+   }
+  },
+  {
+   "name": "Gamma holds 42 facts (2 said, 40 typed)",
+   "ok": true,
+   "detail": 42
+  },
+  {
+   "name": "purge → 200 and says how many facts went",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "deleted": "prj_54e3ce01",
+     "deletedFacts": 42,
+     "detachedChats": [
+      "web:shared:c1"
+     ]
+    }
+   }
+  },
+  {
+   "name": "the bank is empty",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "no entity, link or text-index row is left without its fact",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "another project’s facts and the common ones are untouched",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "the purged project is gone",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "a chat whose project was purged remembers like any other chat again",
+   "ok": true,
+   "detail": {
+    "bank": "shared",
+    "count": 1,
+    "facts": [
+     {
+      "entities": [
+       "miso"
+      ],
+      "id": "8ffeecbc-b703-4736-ae4b-a406ba626152",
+      "kind": "world",
+      "mentionedAt": 1792339304,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "web:shared:c1",
+      "proofCount": 1,
+      "slot": null,
+      "source": "reflection",
+      "supersededBy": null,
+      "text": "The chat’s cat is called Miso."
+     }
+    ],
+    "total": 3
+   }
+  },
+  {
+   "name": "no panic and no fact error in the daemon log",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "the daemon still answers",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "no gateway error was raised",
+   "ok": true,
+   "detail": []
+  }
+ ]
+}

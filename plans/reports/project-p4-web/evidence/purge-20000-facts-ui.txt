@@ -1,0 +1,8 @@
+# UI purge of a project with 20,000 synthetic facts (isolated daemon, 2026-10-19)
+click -> redirect to /projects: 22.0 s measured in the page (daemon-side measurement in the P2 report: ~23 s)
+project row: ['Thanh toán (đổi tên từ cửa sổ khác)']
+mem_facts of bank: 0
+mem_facts_fts rows for bulk facts: 0
+mem_fact_entities rows for bulk facts: 0
+mem_links rows from bulk facts: 0
+root folder still there:        0 entries (project root never touched)

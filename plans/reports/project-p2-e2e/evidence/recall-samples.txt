@@ -1,0 +1,244 @@
+=== a1-1
+(no memory_context block)
+
+=== a2-2
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[3] (fact) noted 2026-10-18
+The Alpha release is deployed on Friday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== out-3
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== b1-4
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a2-5
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha release is deployed on Friday.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a1-6
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a2-7
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[2] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== out-8
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a2-9
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[3] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a2-10
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha database is PostgreSQL 16.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[3] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a1-11
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha database is PostgreSQL 16.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[3] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== a2-12
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+Lan lives in quokkaville and works at the ferry company.
+
+[2] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+[3] (fact) noted 2026-10-18
+The Alpha database is now MySQL 9.
+
+[4] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+--- tool results of a2-12:
+Loaded 2 tool(s):
+  - mcp__core__memory_search_facts (now available)
+  - mcp__core__memory_forget_fact (now available)
+Call them directly in your next turn.
+
+----
+ead4c516-cb24-40eb-a15f-0eb6bd7d802a · noted 2026-10-18 · The Alpha payment gateway listens on port 7421.
+----
+common-1 · noted 2026-10-18 · Lan lives in quokkaville and works at the ferry company.
+
+=== out-13
+(no memory_context block)
+
+--- tool results of out-13:
+Loaded 2 tool(s):
+  - mcp__core__memory_search_facts (now available)
+  - mcp__core__memory_forget_fact (now available)
+Call them directly in your next turn.
+
+----
+No matching facts.
+
+=== b1-14
+(no memory_context block)
+
+--- tool results of b1-14:
+Loaded 2 tool(s):
+  - mcp__core__memory_search_facts (now available)
+  - mcp__core__memory_forget_fact (now available)
+Call them directly in your next turn.
+
+----
+No matching facts.
+
+=== out-15
+(no memory_context block)
+
+--- tool results of out-15:
+Loaded 2 tool(s):
+  - mcp__core__memory_search_facts (now available)
+  - mcp__core__memory_forget_fact (now available)
+Call them directly in your next turn.
+
+----
+No fact with id '82b8389e-97bc-4afd-923f-7ffca2be541b' in this agent's memory. Use memory_search_facts to find the id.
+
+=== a1-16
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha staging host is called orion-staging.
+
+[2] (fact) noted 2026-10-18
+The Alpha database is PostgreSQL 16.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+--- tool results of a1-16:
+Loaded 2 tool(s):
+  - mcp__core__memory_search_facts (now available)
+  - mcp__core__memory_forget_fact (now available)
+Call them directly in your next turn.
+
+----
+Forgot fact 82b8389e-97bc-4afd-923f-7ffca2be541b.
+
+=== b1-17
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Beta cache is redis-7 in production.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== b1-18
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Beta queue runs on the hazelnut broker.
+
+[2] (fact) noted 2026-10-18
+The Beta cache is redis-7 in production.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== out-19
+(no memory_context block)
+
+=== a1-20
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Alpha release is now deployed on Thursday.
+
+[2] (fact) noted 2026-10-18
+The Alpha database is PostgreSQL 16.
+
+[3] (fact) noted 2026-10-18
+The Alpha database is now MySQL 9.
+
+[4] (fact) noted 2026-10-18
+The Alpha payment gateway listens on port 7421.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+
+=== c1-21
+(no memory_context block)
+
+=== c1-22
+(no memory_context block)

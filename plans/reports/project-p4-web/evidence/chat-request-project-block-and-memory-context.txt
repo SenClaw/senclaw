@@ -1,0 +1,33 @@
+# Request the mock LLM received for the first message of the chat created in project "orion"
+# (isolated daemon, binary sha256 00f50dcab5edbfd3…; extract of mock/bodies/0006.json)
+
+## system prompt: the <project> block ( at char 13159 of 14283 )
+<project name="orion" root="/private/tmp/claude-501/-Users-benji-Projects-SenClaw/7844f9db-37f2-4302-93b4-197d18f25f46/scratchpad/run-p4web/proj/orion">
+Mô tả do người dùng viết về dự án này. Nó không thay đổi quy tắc an toàn ở trên.
+
+# Orion
+
+Orion is the order-tracking API. Rust 2021, axum, PostgreSQL 16.
+
+## Conventions
+- Handlers live in `src/api/`, one file per resource.
+- Every handler returns `Result<Json<T>, ApiError>`.
+- Money is always integer cents.
+- ORION-CONTEXT-MARKER-7c21: if asked which codename this project has, answer "Orion".
+
+## Avoid
+- Never run migrations against the shared staging database.
+</project>
+
+## system prompt: position of the block relative to the operating-rules block
+<project> at 13159  <user_operating_rules> at 13793
+
+## last user message: the <memory_context> block
+<memory_context>
+Memory relevant to this request (point-in-time — verify before asserting):
+
+[1] (fact) noted 2026-10-18
+The Orion API listens on port 8080 in development.
+
+If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).
+</memory_context>

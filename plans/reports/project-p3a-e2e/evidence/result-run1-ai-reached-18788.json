@@ -1,0 +1,658 @@
+{
+ "projects": {
+  "pA": "prj_acb0fa42",
+  "pB": "prj_78a908e1",
+  "pG": "prj_3070c74c"
+ },
+ "boards": {
+  "bA": {
+   "id": 1,
+   "todo": 2,
+   "ready": 3,
+   "status": 200
+  },
+  "bB": {
+   "id": 2,
+   "todo": 8,
+   "ready": 9,
+   "status": 200
+  },
+  "bX": {
+   "id": 3,
+   "todo": 14,
+   "ready": 15,
+   "status": 200
+  },
+  "bG": {
+   "id": 4,
+   "todo": 20,
+   "ready": 21,
+   "status": 200
+  }
+ },
+ "cards": {
+  "A": {
+   "id": 24,
+   "tag": "KA"
+  },
+  "B": {
+   "id": 25,
+   "tag": "KB"
+  },
+  "X": {
+   "id": 26,
+   "tag": "KX"
+  },
+  "B2": {
+   "id": 27,
+   "tag": "KB2"
+  },
+  "A2": {
+   "id": 28,
+   "tag": "KA2"
+  },
+  "G": {
+   "id": 29,
+   "tag": "KG"
+  }
+ },
+ "KA": {
+  "systemPromptChars": 5400,
+  "startsWithGuidance": true,
+  "hasProjectBlock": true,
+  "blockRightAfterGuidance": true,
+  "markerPresent": true,
+  "leakedMarkers": [],
+  "hasDefaultAssistantPrompt": false,
+  "bashPwd": "proj/A",
+  "writeResult": "Wrote kanban-KA.txt (2 bytes)",
+  "cardRoleAfter": "done"
+ },
+ "KB": {
+  "systemPromptChars": 5401,
+  "startsWithGuidance": true,
+  "hasProjectBlock": true,
+  "blockRightAfterGuidance": true,
+  "markerPresent": true,
+  "leakedMarkers": [],
+  "hasDefaultAssistantPrompt": false,
+  "bashPwd": "proj/B/sub",
+  "writeResult": "Wrote kanban-KB.txt (2 bytes)",
+  "cardRoleAfter": "done"
+ },
+ "KX": {
+  "systemPromptChars": 5130,
+  "startsWithGuidance": true,
+  "hasProjectBlock": false,
+  "blockRightAfterGuidance": null,
+  "markerPresent": null,
+  "leakedMarkers": [],
+  "hasDefaultAssistantPrompt": false,
+  "bashPwd": "home/.senclaw/mcp-dispatch/26",
+  "writeResult": "Wrote kanban-KX.txt (2 bytes)",
+  "cardRoleAfter": "done"
+ },
+ "KB2": {
+  "systemPromptChars": 5401,
+  "startsWithGuidance": true,
+  "hasProjectBlock": true,
+  "blockRightAfterGuidance": true,
+  "markerPresent": true,
+  "leakedMarkers": [],
+  "hasDefaultAssistantPrompt": false,
+  "bashPwd": "proj/B/sub",
+  "writeResult": "Wrote kanban-KB2.txt (3 bytes)",
+  "cardRoleAfter": "done"
+ },
+ "KA2": {
+  "systemPromptChars": 5107,
+  "startsWithGuidance": true,
+  "hasProjectBlock": false,
+  "blockRightAfterGuidance": null,
+  "markerPresent": null,
+  "leakedMarkers": [],
+  "hasDefaultAssistantPrompt": false,
+  "bashPwd": "proj/A",
+  "writeResult": "Wrote kanban-KA2.txt (3 bytes)",
+  "cardRoleAfter": "done"
+ },
+ "gammaComment": "gave_up: project ",
+ "checks": [
+  {
+   "name": "boards are created in projects and plain",
+   "ok": true,
+   "detail": {
+    "bA": {
+     "id": 1,
+     "todo": 2,
+     "ready": 3,
+     "status": 200
+    },
+    "bB": {
+     "id": 2,
+     "todo": 8,
+     "ready": 9,
+     "status": 200
+    },
+    "bX": {
+     "id": 3,
+     "todo": 14,
+     "ready": 15,
+     "status": 200
+    },
+    "bG": {
+     "id": 4,
+     "todo": 20,
+     "ready": 21,
+     "status": 200
+    }
+   }
+  },
+  {
+   "name": "a folder outside the root is refused (400)",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "workspace_dir must be an absolute path inside the project root /private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A"
+    }
+   }
+  },
+  {
+   "name": "a folder with .. is refused (400)",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "workspace_dir must be an absolute path inside the project root /private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A"
+    }
+   }
+  },
+  {
+   "name": "an unknown project is refused (404)",
+   "ok": true,
+   "detail": {
+    "status": 404,
+    "body": {
+     "error": "unknown project: prj_ffffffff"
+    }
+   }
+  },
+  {
+   "name": "refusals create nothing",
+   "ok": true,
+   "detail": {
+    "before": 4,
+    "afterRefusals": 4
+   }
+  },
+  {
+   "name": "list: project board shows project_id and the root as effective dir",
+   "ok": true,
+   "detail": {
+    "card_count": 0,
+    "column_count": 6,
+    "created_at": 1792337411,
+    "description": "",
+    "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A",
+    "id": 1,
+    "project_id": "prj_acb0fa42",
+    "title": "Alpha board",
+    "updated_at": 1792337411,
+    "workspace_dir": null
+   }
+  },
+  {
+   "name": "list: project board with a folder inside the root keeps it",
+   "ok": true,
+   "detail": {
+    "card_count": 0,
+    "column_count": 6,
+    "created_at": 1792337411,
+    "description": "",
+    "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/B/sub",
+    "id": 2,
+    "project_id": "prj_78a908e1",
+    "title": "Beta board",
+    "updated_at": 1792337411,
+    "workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/B/sub"
+   }
+  },
+  {
+   "name": "list: plain board has no project and no effective dir",
+   "ok": true,
+   "detail": {
+    "card_count": 0,
+    "column_count": 6,
+    "created_at": 1792337411,
+    "description": "",
+    "effective_workspace_dir": null,
+    "id": 3,
+    "project_id": null,
+    "title": "Plain board",
+    "updated_at": 1792337411,
+    "workspace_dir": null
+   }
+  },
+  {
+   "name": "get board: meta carries project_id and effective_workspace_dir",
+   "ok": true,
+   "detail": {
+    "card_count": 0,
+    "column_count": 6,
+    "created_at": 1792337411,
+    "description": "",
+    "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A",
+    "id": 1,
+    "project_id": "prj_acb0fa42",
+    "title": "Alpha board",
+    "updated_at": 1792337411,
+    "workspace_dir": null
+   }
+  },
+  {
+   "name": "GET /api/projects/:id/boards lists only its boards",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "boards": [
+      {
+       "card_count": 0,
+       "column_count": 6,
+       "created_at": 1792337411,
+       "description": "",
+       "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A",
+       "id": 1,
+       "project_id": "prj_acb0fa42",
+       "title": "Alpha board",
+       "updated_at": 1792337411,
+       "workspace_dir": null
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "GET /api/projects/<unknown>/boards is 404",
+   "ok": true,
+   "detail": {
+    "status": 404,
+    "body": {
+     "error": "project_not_found"
+    }
+   }
+  },
+  {
+   "name": "/generate with project_id puts the project context in the board-planner prompt",
+   "ok": false,
+   "detail": [
+    {
+     "seq": 1,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 2,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 3,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 4,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 5,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    }
+   ]
+  },
+  {
+   "name": "/breakdown of a card on a project board puts the context in the prompt",
+   "ok": false,
+   "detail": [
+    {
+     "seq": 1,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 2,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 3,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 4,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 5,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    }
+   ]
+  },
+  {
+   "name": "/generate and /breakdown without a project carry no project section",
+   "ok": false,
+   "detail": [
+    {
+     "seq": 1,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 2,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 3,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 4,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    },
+    {
+     "seq": 5,
+     "head": "You are a knowledge-graph buil",
+     "carries": false,
+     "alpha": false
+    }
+   ]
+  },
+  {
+   "name": "Alpha worker: cwd is the project root and the file landed there",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5400,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Alpha worker: system prompt = card guidance, then the <project> block (Alpha), nothing else replaced",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5400,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Alpha worker: no other project’s context leaked in",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5400,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Alpha worker: card reached Done",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5400,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Beta worker: cwd is the board’s folder inside the root",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5401,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/B/sub",
+    "writeResult": "Wrote kanban-KB.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Beta worker: system prompt carries the Beta block and not Alpha’s",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5401,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/B/sub",
+    "writeResult": "Wrote kanban-KB.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Plain worker: system prompt is only the card guidance (+ the usual env), no project block",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5130,
+    "startsWithGuidance": true,
+    "hasProjectBlock": false,
+    "blockRightAfterGuidance": null,
+    "markerPresent": null,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "home/.senclaw/mcp-dispatch/26",
+    "writeResult": "Wrote kanban-KX.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "Plain worker: still runs in the throwaway folder under mcp-dispatch",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5130,
+    "startsWithGuidance": true,
+    "hasProjectBlock": false,
+    "blockRightAfterGuidance": null,
+    "markerPresent": null,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "home/.senclaw/mcp-dispatch/26",
+    "writeResult": "Wrote kanban-KX.txt (2 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "archiving Beta keeps its board linked",
+   "ok": true,
+   "detail": {
+    "arch": {
+     "archivedAt": 1792337513755,
+     "chatCount": 0,
+     "createdAt": 1792337411508,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_78a908e1",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Beta",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/B",
+     "rootExists": true,
+     "updatedAt": 1792337513755
+    },
+    "stillB": {
+     "boards": [
+      {
+       "card_count": 1,
+       "column_count": 6,
+       "created_at": 1792337411,
+       "description": "",
+       "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/B/sub",
+       "id": 2,
+       "project_id": "prj_78a908e1",
+       "title": "Beta board",
+       "updated_at": 1792337510,
+       "workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/B/sub"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "a new board cannot join an archived project (400)",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "project prj_78a908e1 is archived"
+    }
+   }
+  },
+  {
+   "name": "after archiving, the Beta card still runs in the folder with the block",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5401,
+    "startsWithGuidance": true,
+    "hasProjectBlock": true,
+    "blockRightAfterGuidance": true,
+    "markerPresent": true,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/B/sub",
+    "writeResult": "Wrote kanban-KB2.txt (3 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "purging Alpha: the board leaves the project and is pinned to the old root",
+   "ok": true,
+   "detail": {
+    "purge": {
+     "deleted": "prj_acb0fa42",
+     "detachedChats": []
+    },
+    "afterA": {
+     "card_count": 7,
+     "column_count": 6,
+     "created_at": 1792337411,
+     "description": "",
+     "effective_workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A",
+     "id": 1,
+     "project_id": null,
+     "title": "Alpha board",
+     "updated_at": 1792337517,
+     "workspace_dir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/9fc65418-2155-4360-90b7-9d103c3e8f6d/scratchpad/runs/run-p3a/proj/A"
+    }
+   }
+  },
+  {
+   "name": "the project folder is untouched",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "after the purge, the same board still runs its cards in the old root",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5107,
+    "startsWithGuidance": true,
+    "hasProjectBlock": false,
+    "blockRightAfterGuidance": null,
+    "markerPresent": null,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA2.txt (3 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "after the purge, the worker prompt has no project block (the project is gone)",
+   "ok": true,
+   "detail": {
+    "systemPromptChars": 5107,
+    "startsWithGuidance": true,
+    "hasProjectBlock": false,
+    "blockRightAfterGuidance": null,
+    "markerPresent": null,
+    "leakedMarkers": [],
+    "hasDefaultAssistantPrompt": false,
+    "bashPwd": "proj/A",
+    "writeResult": "Wrote kanban-KA2.txt (3 bytes)",
+    "cardRoleAfter": "done"
+   }
+  },
+  {
+   "name": "a root that vanished: the card is Blocked, no worker was started",
+   "ok": true,
+   "detail": {
+    "blocked": "blocked",
+    "workers": 0
+   }
+  },
+  {
+   "name": "a root that vanished: the card says why",
+   "ok": false,
+   "detail": "gave_up: project "
+  }
+ ]
+}

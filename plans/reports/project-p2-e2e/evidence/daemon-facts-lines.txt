@@ -1,0 +1,6 @@
+2026-10-18T16:01:25.372747Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=2 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_ch
+2026-10-18T16:01:27.578957Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=1 reinforced=0 folded=0 replaces_claimed=1 superseded=1 superseded_by_slot=0 failed_ch
+2026-10-18T16:01:29.727799Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=1 reinforced=0 folded=0 replaces_claimed=1 superseded=0 superseded_by_slot=0 failed_ch
+2026-10-18T16:01:31.950620Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_ch
+2026-10-18T16:01:42.623450Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=2 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_ch
+2026-10-18T16:01:44.722327Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from reflection stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_ch

@@ -1,0 +1,550 @@
+{
+ "projects": {
+  "pA": "prj_77bb9ae4",
+  "pB": "prj_65c72f7d",
+  "pC": "prj_b49f30f6",
+  "pD": "prj_064a42e6",
+  "pE": "prj_65c9ff7f"
+ },
+ "boards": {
+  "bA": {
+   "id": 1,
+   "todo": 2,
+   "ready": 3
+  },
+  "bB": {
+   "id": 2,
+   "todo": 8,
+   "ready": 9
+  },
+  "bC": {
+   "id": 3,
+   "todo": 14,
+   "ready": 15
+  },
+  "bD": {
+   "id": 4,
+   "todo": 20,
+   "ready": 21
+  },
+  "bE": {
+   "id": 5,
+   "todo": 26,
+   "ready": 27
+  },
+  "bX": {
+   "id": 6,
+   "todo": 32,
+   "ready": 33
+  }
+ },
+ "before": {
+  "prj_77bb9ae4": 1,
+  "prj_65c72f7d": 1,
+  "prj_b49f30f6": 1,
+  "prj_064a42e6": 1,
+  "prj_65c9ff7f": 0
+ },
+ "after": {
+  "prj_77bb9ae4": 2,
+  "prj_65c72f7d": 3,
+  "prj_b49f30f6": 1,
+  "prj_064a42e6": 1,
+  "prj_65c9ff7f": 1
+ },
+ "extractions": [
+  {
+   "seq": 15,
+   "refused": false,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"Where does the Beta payment gateway listen\" completed: Scheduled the Beta nightly backup. ¤¤FACTS{\"facts\":[{\"text\":\"The Beta nightly backup runs at 03:15.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Beta\",\"backup\"]}]}¤¤\n\nKNOWN FACTS:\n[F1] The Beta payment gateway "
+  },
+  {
+   "seq": 16,
+   "refused": false,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"Where does the Alpha payment gateway listen\" completed: Set up the Falcon blue-green deploy pipeline for Alpha. ¤¤FACTS{\"facts\":[{\"text\":\"Alpha deploys through the Falcon blue-green pipeline.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Alpha\",\"Falcon pipeline\"]}]}"
+  },
+  {
+   "seq": 26,
+   "refused": false,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"Which port does the Epsilon cache use\" completed: Pointed the Epsilon cache at port 6379. ¤¤FACTS{\"facts\":[{\"text\":\"The Epsilon cache runs on port 6379.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Epsilon cache\"]}]}¤¤"
+  },
+  {
+   "seq": 35,
+   "refused": true,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"Alpha card whose extractor is down\" completed: Rotated the Alpha keys EXTRACTOR-DOWN. ¤¤FACTS{\"facts\":[{\"text\":\"The Alpha keys were rotated.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Alpha\"]}]}¤¤\n\nKNOWN FACTS:\n[F1] The Alpha payment gateway listens on port 7421."
+  },
+  {
+   "seq": 42,
+   "refused": false,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"How does Alpha deploy and which port does the payment gateway listen on\" completed: Checked the deploy and the port, nothing to change.\n\nKNOWN FACTS:\n[F1] The Alpha payment gateway listens on port 7421.\n[F2] Alpha deploys through the Falcon blue-green pipeline."
+  },
+  {
+   "seq": 46,
+   "refused": false,
+   "text": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"When does the Beta nightly backup run and where does the payment gateway listen\" completed: Set the Beta backup retention. ¤¤FACTS{\"facts\":[{\"text\":\"The Beta backup retention is 14 days.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Beta\",\"backup\"]}]}¤¤\n\nKNOWN FACTS"
+  }
+ ],
+ "factsOfAlpha": [
+  {
+   "text": "Alpha deploys through the Falcon blue-green pipeline.",
+   "source": "kanban",
+   "origin": ""
+  },
+  {
+   "text": "The Alpha payment gateway listens on port 7421.",
+   "source": "manual",
+   "origin": ""
+  }
+ ],
+ "checks": [
+  {
+   "name": "KA1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KB1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KC1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KD1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KE1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KX1: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "A: the worker was handed a <memory_context> block",
+   "ok": true,
+   "detail": "<system-reminder>\nToday's date is 2026-10-18.\n</system-reminder>\n\n\n<system-reminder>\nSkill hint: `space` may help with this request — Personal productivity tools — manage notes via the Space MCP server, and email via the Email Space App's `email-mcp` server.\n\n**Workflow:**\n1. Invoke it with `Skill { \"skill\": \"space\" }` to load its instructions.\n2. Follow the skill's workflow if it fits the user's exact request.\n3. For time-sensitive or external data, use a live data tool; do not answer from memory.\n</system-reminder>\n\n\n<memory_context>\nMemory relevant to this request (point-in-time — verify be"
+  },
+  {
+   "name": "A: …with the Alpha fact a person typed",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n</memory_context>"
+  },
+  {
+   "name": "A: …labelled a fact",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n</memory_context>"
+  },
+  {
+   "name": "A: …the first thing of the task, ahead of the card title",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n</memory_context>\n\nWhere does the Alpha payment gateway listen\n\nrun script KA1 ¶¶STEPS{\"tag\":\"KA1\",\"steps\":[{\"t\":\"ToolSearch\",\"a\":{\"query\":\"select:mcp__senclaw-kanban__kanban_show,mcp__senclaw-kanban__kanban_complete,mcp__senclaw-k"
+  },
+  {
+   "name": "A: …and no other project’s fact, no agent-wide fact",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "A: …and the block points at no memory tool (the worker has none in its roster)",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "B: the Beta worker is told the Beta fact and not Alpha’s",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Beta payment gateway listens on port 9090.\n</memory_context>"
+  },
+  {
+   "name": "C (facts_write=off): the worker is still told the project’s facts",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Gamma archive is kept in vault 12.\n</memory_context>"
+  },
+  {
+   "name": "D (facts_write=chat): the worker is still told the project’s facts",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Delta ledger sits in table 55.\n</memory_context>"
+  },
+  {
+   "name": "E (no facts yet): the worker prompt is the card and nothing else",
+   "ok": true,
+   "detail": "<system-reminder>\nToday's date is 2026-10-18.\n</system-reminder>\n\n\n<system-reminder>\nSkill hint: `space` may help with this request — Personal productivity tools — manage notes via the Space MCP server, and email via the Email Space App's `email-mcp` server.\n\n**Workflow:**\n1. Invoke it with `Skill {"
+  },
+  {
+   "name": "E: its task starts with the card title, as it always did",
+   "ok": true,
+   "detail": "Which port does the Epsilon cache use\n\nrun script KE1 ¶¶STEPS{\"tag\":\"KE1\",\"steps\":[{\"t\":\"ToolSearch\",\"a\":{\"query\":\"selec"
+  },
+  {
+   "name": "X (plain board): no block, no fact of any project or of the agent",
+   "ok": true,
+   "detail": "<system-reminder>\nToday's date is 2026-10-18.\n</system-reminder>\n\n\n<system-reminder>\nSkill hint: `space` may help with this request — Personal productivity tools — manage notes via the Space MCP server, and email via the Email Space App's `email-mcp` server.\n\n**Workflow:**\n1. Invoke it with `Skill {"
+  },
+  {
+   "name": "X: its task starts with the card title, as it always did",
+   "ok": true,
+   "detail": "Where does the plain payment gateway listen\n\nrun script KX1 ¶¶STEPS{\"tag\":\"KX1\",\"steps\":[{\"t\":\"ToolSearch\",\"a\":{\"query\":"
+  },
+  {
+   "name": "A: the closed card left a fact in the project bank",
+   "ok": true,
+   "detail": {
+    "bank": "project:prj_77bb9ae4",
+    "count": 2,
+    "facts": [
+     {
+      "entities": [
+       "alpha",
+       "falcon pipeline"
+      ],
+      "id": "a094e5a4-b0bc-4736-9659-8e9c271702f2",
+      "kind": "world",
+      "mentionedAt": 1792344462,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "kanban",
+      "supersededBy": null,
+      "text": "Alpha deploys through the Falcon blue-green pipeline."
+     },
+     {
+      "entities": [],
+      "id": "d661e905-04d0-4bb1-9809-335b7f95985c",
+      "kind": "world",
+      "mentionedAt": 1792344457,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "manual",
+      "supersededBy": null,
+      "text": "The Alpha payment gateway listens on port 7421."
+     }
+    ],
+    "total": 2
+   }
+  },
+  {
+   "name": "A: …tagged with no chat, from the kanban worker, in bank project:<id>",
+   "ok": true,
+   "detail": {
+    "entities": [
+     "alpha",
+     "falcon pipeline"
+    ],
+    "id": "a094e5a4-b0bc-4736-9659-8e9c271702f2",
+    "kind": "world",
+    "mentionedAt": 1792344462,
+    "occurredEnd": null,
+    "occurredStart": null,
+    "origin": "",
+    "proofCount": 1,
+    "slot": null,
+    "source": "kanban",
+    "supersededBy": null,
+    "text": "Alpha deploys through the Falcon blue-green pipeline."
+   }
+  },
+  {
+   "name": "A: …next to the fact a person typed, which it did not replace",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "falcon pipeline"
+     ],
+     "id": "a094e5a4-b0bc-4736-9659-8e9c271702f2",
+     "kind": "world",
+     "mentionedAt": 1792344462,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "kanban",
+     "supersededBy": null,
+     "text": "Alpha deploys through the Falcon blue-green pipeline."
+    },
+    {
+     "entities": [],
+     "id": "d661e905-04d0-4bb1-9809-335b7f95985c",
+     "kind": "world",
+     "mentionedAt": 1792344457,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "manual",
+     "supersededBy": null,
+     "text": "The Alpha payment gateway listens on port 7421."
+    }
+   ]
+  },
+  {
+   "name": "A: the extractor was handed the title and the worker’s own summary, not the first line of its last answer",
+   "ok": true,
+   "detail": "TODAY: 2026-10-19\n\nINPUT:\nKanban task \"Where does the Alpha payment gateway listen\" completed: Set up the Falcon blue-green deploy pipeline for Alpha. ¤¤FACTS{\"facts\":[{\"text\":\"Alpha deploys through the Falcon blue-green pipeline.\",\"kind\":\"world\",\"when\":null,\"entities\":[\"Alpha\",\"Falcon pipeline\"]}]}¤¤\n\nKNOWN FACTS:\n[F1] The Alpha payment gateway listens on port 7421."
+  },
+  {
+   "name": "B: the Beta card left its fact in Beta’s bank only",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "backup",
+      "beta"
+     ],
+     "id": "1be81c2b-4413-488c-98c4-b44b96523135",
+     "kind": "world",
+     "mentionedAt": 1792344462,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "kanban",
+     "supersededBy": null,
+     "text": "The Beta nightly backup runs at 03:15."
+    }
+   ]
+  },
+  {
+   "name": "E: a project that had no facts keeps what its first card finished",
+   "ok": true,
+   "detail": {
+    "bank": "project:prj_65c9ff7f",
+    "count": 1,
+    "facts": [
+     {
+      "entities": [
+       "epsilon cache"
+      ],
+      "id": "5d221f2e-580b-4d0e-bb93-0e8c02aea433",
+      "kind": "world",
+      "mentionedAt": 1792344467,
+      "occurredEnd": null,
+      "occurredStart": null,
+      "origin": "",
+      "proofCount": 1,
+      "slot": null,
+      "source": "kanban",
+      "supersededBy": null,
+      "text": "The Epsilon cache runs on port 6379."
+     }
+    ],
+    "total": 1
+   }
+  },
+  {
+   "name": "C (facts_write=off): nothing was retained, nothing was sent to the extractor",
+   "ok": true,
+   "detail": {
+    "afterC": 1,
+    "asked": false
+   }
+  },
+  {
+   "name": "D (facts_write=chat): nothing in the project bank, nothing sent to the extractor",
+   "ok": true,
+   "detail": {
+    "afterD": 1,
+    "asked": false
+   }
+  },
+  {
+   "name": "…and no bank appeared for a worker that has no profile or chat",
+   "ok": true,
+   "detail": [
+    "project:prj_064a42e6",
+    "project:prj_65c72f7d",
+    "project:prj_65c9ff7f",
+    "project:prj_77bb9ae4",
+    "project:prj_b49f30f6",
+    "shared"
+   ]
+  },
+  {
+   "name": "X (plain board): nothing was sent to the extractor and no fact of it exists",
+   "ok": true,
+   "detail": {
+    "asked": false,
+    "xFacts": 0
+   }
+  },
+  {
+   "name": "KC1: the card still reached Done",
+   "ok": true,
+   "detail": "done"
+  },
+  {
+   "name": "KD1: the card still reached Done",
+   "ok": true,
+   "detail": "done"
+  },
+  {
+   "name": "KX1: the card still reached Done",
+   "ok": true,
+   "detail": "done"
+  },
+  {
+   "name": "KA2: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KA3: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KA4: the worker ran to its end",
+   "ok": true,
+   "detail": 2
+  },
+  {
+   "name": "KA5: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "KA6: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "A2: the next card of Alpha is told what the first one left (kanban fact) and what a person typed",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Alpha payment gateway listens on port 7421.\n\n[2] (fact) noted 2026-10-18\nAlpha deploys through the Falcon blue-green pipeline.\n</memory_context>"
+  },
+  {
+   "name": "A2: …and nothing of any other project or of the agent",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "A3 (blocked by the worker): nothing sent to the extractor",
+   "ok": true,
+   "detail": 5
+  },
+  {
+   "name": "A4 (left to the dispatcher): nothing sent to the extractor",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A4: the dispatcher closed it with its own line (so this really is the auto-close path)",
+   "ok": true,
+   "detail": [
+    {
+     "author": "dispatcher",
+     "body": "MOCK-DONE KA4",
+     "created_at": 1792344477,
+     "id": 8,
+     "kind": "complete"
+    }
+   ]
+  },
+  {
+   "name": "A5 (closed with no summary): nothing sent to the extractor",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A6 (extractor down): the extractor was asked and refused, and the card is Done all the same",
+   "ok": true,
+   "detail": {
+    "role": "done"
+   }
+  },
+  {
+   "name": "A6: …and no fact was kept",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A2/A3/A4/A5/A6: Alpha holds exactly one fact from a card (the first)",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "alpha",
+      "falcon pipeline"
+     ],
+     "id": "a094e5a4-b0bc-4736-9659-8e9c271702f2",
+     "kind": "world",
+     "mentionedAt": 1792344462,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "kanban",
+     "supersededBy": null,
+     "text": "Alpha deploys through the Falcon blue-green pipeline."
+    }
+   ]
+  },
+  {
+   "name": "KB2: the worker ran to its end",
+   "ok": true,
+   "detail": 3
+  },
+  {
+   "name": "B archived: the worker is still told the project’s facts (typed and from the first card)",
+   "ok": true,
+   "detail": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-18\nThe Beta nightly backup runs at 03:15.\n\n[2] (fact) noted 2026-10-18\nThe Beta payment gateway listens on port 9090.\n</memory_context>"
+  },
+  {
+   "name": "B archived: what its card finished is kept all the same",
+   "ok": true,
+   "detail": [
+    {
+     "entities": [
+      "backup",
+      "beta"
+     ],
+     "id": "90a42ab2-78a5-48f3-8275-0e1c876b8056",
+     "kind": "world",
+     "mentionedAt": 1792344497,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "kanban",
+     "supersededBy": null,
+     "text": "The Beta backup retention is 14 days."
+    },
+    {
+     "entities": [
+      "backup",
+      "beta"
+     ],
+     "id": "1be81c2b-4413-488c-98c4-b44b96523135",
+     "kind": "world",
+     "mentionedAt": 1792344462,
+     "occurredEnd": null,
+     "occurredStart": null,
+     "origin": "",
+     "proofCount": 1,
+     "slot": null,
+     "source": "kanban",
+     "supersededBy": null,
+     "text": "The Beta nightly backup runs at 03:15."
+    }
+   ]
+  }
+ ]
+}

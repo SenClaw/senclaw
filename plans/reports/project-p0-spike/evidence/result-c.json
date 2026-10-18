@@ -1,0 +1,13 @@
+{
+ "requestSeq": 1,
+ "systemPromptChars": 4011,
+ "personaMarkerInSystemPrompt": true,
+ "guidanceDefMarkerInSystemPrompt": false,
+ "guidanceStepMarkerInSystemPrompt": false,
+ "anyGuidanceMarkerAnywhereInRequestBody": false,
+ "requestBodyBytes": 7445,
+ "roles": [
+  "system:PERSONA-SYSTEM-MARKER-7f3a: you are the P0 spike worker. Do ",
+  "user:<system-reminder> Today's date is 2026-10-18. </system-remin"
+ ]
+}

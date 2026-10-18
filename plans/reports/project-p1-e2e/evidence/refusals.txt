@@ -1,0 +1,8 @@
+14:57:50.099 PASS registering the three sessions raised no gateway error 
+14:57:50.147 gateway error: register:group failed: only web-only sessions (empty channel) can belong to a project
+14:57:50.148 gateway error: register:group failed: no such project
+14:57:50.148 gateway error: register:group failed: only chat and code sessions can belong to a project
+14:57:50.148 gateway error: update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead
+14:57:50.148 gateway error: update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead
+14:57:50.148 gateway error: update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead
+14:58:58.835 gateway error: register:group failed: the project is archived and takes no new sessions
