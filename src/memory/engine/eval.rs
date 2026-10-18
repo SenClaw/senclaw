@@ -937,6 +937,10 @@ struct Asker {
     chat: String,
     #[serde(default = "yes")]
     include_common: bool,
+    /// A kanban worker of the project: no chat and no profile, so it asks the
+    /// way `projects::worker_recall_query` does and `include_common` has no say.
+    #[serde(default)]
+    worker: bool,
 }
 
 fn yes() -> bool {
@@ -1008,18 +1012,28 @@ async fn retain_project_windows(w: &World, fx: &Fixture) {
 /// One project question through the fact arms the daemon runs.
 async fn ask_from(w: &World, fx: &Fixture, pc: &ProjectCase) -> (String, Recalled) {
     let pf = project_fixture(fx);
-    let project = pc.from.project.as_deref().map(|key| {
-        crate::projects::recall_scope(Some(&project_row(pf.id(key), pc.from.include_common)))
-            .expect("a project has a bank to read")
-    });
-    let query = RecallQuery {
-        text: pc.case.text.clone(),
-        folder: w.folder.clone(),
-        chat_jid: pc.from.chat.clone(),
-        facts_by_chat: true,
-        limit: Config::from_env().memory.search_max_results as usize,
-        now: fixture_now(fx),
-        project,
+    let limit = Config::from_env().memory.search_max_results as usize;
+    let query = if pc.from.worker {
+        let key = pc
+            .from
+            .project
+            .as_deref()
+            .expect("a worker belongs to a project");
+        crate::projects::worker_recall_query(pf.id(key), &pc.case.text, limit, fixture_now(fx))
+    } else {
+        let project = pc.from.project.as_deref().map(|key| {
+            crate::projects::recall_scope(Some(&project_row(pf.id(key), pc.from.include_common)))
+                .expect("a project has a bank to read")
+        });
+        RecallQuery {
+            text: pc.case.text.clone(),
+            folder: w.folder.clone(),
+            chat_jid: pc.from.chat.clone(),
+            facts_by_chat: true,
+            limit,
+            now: fixture_now(fx),
+            project,
+        }
     };
     let arms = facts::fact_arms(Arc::clone(&w.facts));
     let recalled = recall(&arms, &query, &RecallConfig::default()).await;

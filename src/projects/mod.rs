@@ -29,7 +29,9 @@ pub use context::{
     read_context, render_block, write_context, ContextFile, ContextWriteError, CONTEXT_FILE,
     CONTEXT_MAX_CHARS,
 };
-pub use facts::{fact_target, recall_scope};
+pub use facts::{
+    fact_target, recall_scope, worker_fact_target, worker_recall_query, worker_recall_scope,
+};
 pub use directory::DbProjectDirectory;
 pub use root::{check_root, recheck_root, RootCheck, RootProblem, RootRules};
 pub use session::{

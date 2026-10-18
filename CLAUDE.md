@@ -691,12 +691,23 @@ Rules for Claude:
 - **A project's facts are a second bank, read beside the agent's.** A chat created in a project retains into `project:<id>`
   with no chat tag (`facts_write=project`, so its chats read, confirm and replace each other's facts), into the agent's bank
   tagged with the chat (`chat`), or nowhere (`off`) — decided in ONE place, `projects::fact_target`, which every writer
-  (reflection windows, compaction, later the kanban worker) goes through as a `FactTarget { bank, origin }`. What a question
+  (reflection windows, compaction, the kanban worker) goes through as a `FactTarget { bank, origin }`. What a question
   also reads is `projects::recall_scope` → `RecallQuery::project`: four `ProjectFacts` arms run the same four strategies over
   that bank (`Scope::Agent`, `folder` swapped for the bank) and answer nothing when the question comes from no project. They
   keep `hit.arm = "facts"`, as the fusion rule above requires; only the strategy name differs. `inherit_common=false` makes
   the four ordinary fact arms answer nothing, so only the project's own facts remain. A reflection window is per chat even
   when the bank is shared (`reflection::window_key`): the extractor reads one conversation at a time.
+- **A kanban worker reads its project's bank and leaves one line in it.** A card of a board in a project is started with a
+  `<memory_context>` block ahead of its title: `projects::worker_recall_query` reads the project's bank and nothing else (a
+  worker has no profile, so no agent-wide facts and `inherit_common` has no say; `facts_write` and archiving do not matter to a
+  read). The wait is bounded (`RECALL_BUDGET` in `kanban/dispatch.rs`, 3 s for all the cards of a tick together); an error, a
+  panic or a timeout is a log line and the card runs without the block. The block drops `format::DETAIL_HINT`: a worker has no
+  memory tools. When the worker closes a card itself with `kanban_complete` and a summary, `Kanban task "<title>" completed:
+  <summary>` is retained in the background into `projects::worker_fact_target` — the project's bank for `facts_write=project`,
+  nothing for `chat` (no chat to tag) or `off`. The summary is the card's own `complete` comment, not
+  `Outcome::Completed::summary`, which is only the first line of the worker's last answer; a blocked card, one left for
+  `finalize` to close, an empty summary, `Failed` and `TimedOut` retain nothing. The kanban module reaches both only through
+  `ProjectDirectory::{recall, retain}`, so it never imports the fact store.
 - **A fact a person typed (`source = 'manual'`) is never replaced by what a conversation says** — `FactStore::supersede`
   refuses it, whether the model named it in `replaces` or a slot would retire it. Adding one is `POST /api/projects/:id/facts`
   (no model, secrets refused, the same words already stored become the typed fact); changing one is delete + add.

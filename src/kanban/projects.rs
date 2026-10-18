@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::kanban::db::{BoardMeta, Db};
@@ -36,11 +37,26 @@ pub struct ProjectInfo {
     pub context_block: Option<String>,
 }
 
-/// Looks a project up by id. Implemented over the daemon's database; the board
-/// store only sees this trait.
+/// What the board store asks of the daemon about projects. Implemented over the
+/// daemon's database and fact store; the board store only sees this trait, and
+/// so never imports the fact store.
+#[async_trait]
 pub trait ProjectDirectory: Send + Sync {
     /// `None` when there is no such project (or it cannot be read).
     fn project(&self, id: &str) -> Option<ProjectInfo>;
+
+    /// What the project's own facts say about `query`, as a block for the
+    /// prompt of a worker about to start a card; `None` when they say nothing
+    /// relevant or cannot be read. Never calls a model, and a failure is
+    /// `None`, not an error: it must not hold a card back.
+    async fn recall(&self, _project_id: &str, _query: &str) -> Option<String> {
+        None
+    }
+
+    /// Keeps `text` among the project's facts, when the project keeps what its
+    /// workers finish. Calls a model, so a caller that cannot wait spawns it;
+    /// a failure is logged here and goes no further.
+    async fn retain(&self, _project_id: &str, _text: &str, _source: &str) {}
 }
 
 pub type SharedDirectory = Arc<dyn ProjectDirectory>;

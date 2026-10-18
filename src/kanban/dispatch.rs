@@ -3,18 +3,34 @@
 //! `Ready` tasks, run a worker agent per task, and report the outcome back.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use app_space_sdk::dispatch::{
     Capacity, DispatchProvider, McpServerSpec, Outcome, WorkItem, Workspace,
 };
 use async_trait::async_trait;
+use futures::future::join_all;
 
 use crate::kanban::api::now;
-use crate::kanban::db::Db;
+use crate::kanban::db::{ClaimedCard, Db};
 use crate::kanban::projects::{effective_workspace_dir, ProjectInfo, SharedDirectory};
+use crate::util::text::truncate_on_char_boundary;
 
 /// How long a claim is valid before the dispatcher may reclaim it (seconds).
 const LEASE_SECS: i64 = 15 * 60;
+
+/// The longest a card waits for its project's facts. Past it the card runs
+/// without them: remembering is never worth a card that does not start.
+const RECALL_BUDGET: Duration = Duration::from_secs(3);
+
+/// The comment author of the lines `finalize` writes itself.
+const DISPATCHER: &str = "dispatcher";
+
+/// What a fact retained from a finished card says it came from.
+const RETAIN_SOURCE: &str = "kanban";
+
+/// The most of a worker's summary handed to fact extraction (bytes).
+const RETAIN_MAX_BYTES: usize = 4000;
 
 pub struct KanbanDispatchProvider {
     db: Arc<Db>,
@@ -25,6 +41,8 @@ pub struct KanbanDispatchProvider {
     /// Where the projects of project boards are looked up. Without it every
     /// board is run as a board with no project.
     projects: Option<SharedDirectory>,
+    /// How long `claim_ready` waits for a project's facts, per tick.
+    recall_budget: Duration,
 }
 
 impl KanbanDispatchProvider {
@@ -33,6 +51,7 @@ impl KanbanDispatchProvider {
             db,
             worker_mcp,
             projects: None,
+            recall_budget: RECALL_BUDGET,
         }
     }
 
@@ -57,6 +76,91 @@ impl KanbanDispatchProvider {
         self.projects.as_deref()?.project(project_id?)
     }
 
+    /// The project's facts that bear on `query`, as a block for the card's
+    /// prompt. `None` — and the card runs as it would have — when the project
+    /// has none, cannot be read, or does not answer within the budget. The
+    /// lookup runs as a task of its own so that even a panic in it is only a
+    /// line in the log.
+    async fn recall_for(&self, query: &str, project: Option<&ProjectInfo>) -> Option<String> {
+        let directory = Arc::clone(self.projects.as_ref()?);
+        let id = project?.id.clone();
+        let query = query.to_string();
+        let mut lookup = {
+            let id = id.clone();
+            tokio::spawn(async move { directory.recall(&id, &query).await })
+        };
+        match tokio::time::timeout(self.recall_budget, &mut lookup).await {
+            Ok(Ok(block)) => block.filter(|b| !b.trim().is_empty()),
+            Ok(Err(e)) => {
+                tracing::warn!("[kanban] recalling the facts of project {id} failed: {e}");
+                None
+            }
+            Err(_) => {
+                lookup.abort();
+                tracing::warn!(
+                    "[kanban] the facts of project {id} did not answer within {:?}; running the card without them",
+                    self.recall_budget
+                );
+                None
+            }
+        }
+    }
+
+    /// Keeps what the worker said it achieved among the project's facts, so
+    /// the next card of the project hears of it.
+    ///
+    /// Only a worker's own `kanban_complete` counts. A card the worker blocked,
+    /// one it left for `finalize` to close (still not `done` here) and one it
+    /// closed with no summary say nothing about what the work achieved. This
+    /// can fail nothing: the model call is spawned and every error ends in the
+    /// log, so `finalize` never waits for a model.
+    fn retain_completion(&self, card_id: i64, title: &str, board_id: i64, role: &str) {
+        if role != "done" {
+            return;
+        }
+        let Some(directory) = self.projects.clone() else {
+            return;
+        };
+        let project_id = match self.db.board_meta(board_id) {
+            Ok(meta) => meta.and_then(|m| m.project_id),
+            Err(e) => {
+                tracing::warn!("[kanban] card {card_id}: cannot read its board: {e}");
+                return;
+            }
+        };
+        let Some(project_id) = project_id else {
+            return;
+        };
+        let summary = match self.db.comments_of_card(card_id) {
+            Ok(notes) => notes
+                .into_iter()
+                .rev()
+                .find(|n| n.kind == "complete" && n.author != DISPATCHER)
+                .map(|n| n.body.trim().to_string())
+                .filter(|body| !body.is_empty()),
+            Err(e) => {
+                tracing::warn!("[kanban] card {card_id}: cannot read its comments: {e}");
+                None
+            }
+        };
+        let Some(summary) = summary else {
+            return;
+        };
+        let kept = truncate_on_char_boundary(&summary, RETAIN_MAX_BYTES);
+        let ellipsis = if kept.len() < summary.len() {
+            "…"
+        } else {
+            ""
+        };
+        let text = format!(
+            "Kanban task \"{}\" completed: {kept}{ellipsis}",
+            title.trim()
+        );
+        tokio::spawn(async move {
+            directory.retain(&project_id, &text, RETAIN_SOURCE).await;
+        });
+    }
+
     fn guidance(card_id: i64) -> String {
         format!(
             "You are running Kanban task #{id}. First call the tool \
@@ -77,7 +181,7 @@ impl DispatchProvider for KanbanDispatchProvider {
         let claimed = self
             .db
             .dispatch_claim(cap.total, cap.per_assignee, LEASE_SECS, now())?;
-        let mut items = Vec::with_capacity(claimed.len());
+        let mut cards = Vec::with_capacity(claimed.len());
         for c in claimed {
             let project = self.project_of(c.project_id.as_deref());
             if c.project_id.is_some() && project.is_none() {
@@ -97,11 +201,25 @@ impl DispatchProvider for KanbanDispatchProvider {
                     continue;
                 }
             }
-            let mut prompt = c.title.clone();
-            if !c.description.trim().is_empty() {
-                prompt.push_str("\n\n");
-                prompt.push_str(&c.description);
-            }
+            cards.push((c, project));
+        }
+        // What the project already knows about each card, asked for all of
+        // them at once so the wait is one budget however many were claimed.
+        let tasks: Vec<String> = cards.iter().map(|(c, _)| task_text(c)).collect();
+        let recalled = join_all(
+            cards
+                .iter()
+                .zip(&tasks)
+                .map(|((_, project), task)| self.recall_for(task, project.as_ref())),
+        )
+        .await;
+        let mut items = Vec::with_capacity(cards.len());
+        for (((c, project), task), recalled) in cards.into_iter().zip(tasks).zip(recalled) {
+            // What the project knows leads the prompt, ahead of the task.
+            let prompt = match recalled {
+                Some(block) => format!("{block}\n\n{task}"),
+                None => task,
+            };
             // The worker's system prompt IS the guidance (a worker has no persona
             // of its own), so the project's context is appended to it, after the
             // card's own instructions.
@@ -173,7 +291,7 @@ impl DispatchProvider for KanbanDispatchProvider {
         // Always release the claim first.
         self.db.clear_claim(id)?;
 
-        let (_t, _d, _col, board_id) = match self.db.card_detail(id) {
+        let (title, _d, _col, board_id) = match self.db.card_detail(id) {
             Ok(v) => v,
             Err(_) => return Ok(()), // card gone
         };
@@ -195,7 +313,7 @@ impl DispatchProvider for KanbanDispatchProvider {
                     );
                     let _ = self
                         .db
-                        .add_comment(id, "dispatcher", &body, "worktree", now());
+                        .add_comment(id, DISPATCHER, &body, "worktree", now());
                 }
                 if role != "done" {
                     if let Some(done) = self.db.column_by_role(board_id, "done")? {
@@ -208,9 +326,10 @@ impl DispatchProvider for KanbanDispatchProvider {
                         };
                         let _ = self
                             .db
-                            .add_comment(id, "dispatcher", &body, "complete", now());
+                            .add_comment(id, DISPATCHER, &body, "complete", now());
                     }
                 }
+                self.retain_completion(id, &title, board_id, &role);
             }
             Outcome::Blocked { reason } => {
                 if role != "blocked" {
@@ -221,7 +340,7 @@ impl DispatchProvider for KanbanDispatchProvider {
                         } else {
                             reason
                         };
-                        let _ = self.db.add_comment(id, "dispatcher", &body, "block", now());
+                        let _ = self.db.add_comment(id, DISPATCHER, &body, "block", now());
                     }
                 }
             }
@@ -231,7 +350,7 @@ impl DispatchProvider for KanbanDispatchProvider {
                         self.db.move_card(id, bl, 0, now())?;
                         let _ = self.db.add_comment(
                             id,
-                            "dispatcher",
+                            DISPATCHER,
                             &format!("gave_up: {error}"),
                             "block",
                             now(),
@@ -245,7 +364,7 @@ impl DispatchProvider for KanbanDispatchProvider {
                         self.db.move_card(id, bl, 0, now())?;
                         let _ = self.db.add_comment(
                             id,
-                            "dispatcher",
+                            DISPATCHER,
                             "gave_up: run timed out",
                             "block",
                             now(),
@@ -256,6 +375,16 @@ impl DispatchProvider for KanbanDispatchProvider {
         }
         Ok(())
     }
+}
+
+/// The card as its worker is told it: the title, then the description.
+fn task_text(c: &ClaimedCard) -> String {
+    let mut text = c.title.clone();
+    if !c.description.trim().is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&c.description);
+    }
+    text
 }
 
 fn prio_num(p: Option<&str>) -> i32 {
@@ -270,7 +399,9 @@ fn prio_num(p: Option<&str>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kanban::projects::{sample_project, StaticDirectory};
+    use crate::kanban::projects::{sample_project, ProjectDirectory, StaticDirectory};
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
 
     const P: &str = "prj_0a1b2c3d";
 
@@ -346,6 +477,117 @@ mod tests {
             .to_string_lossy()
             .to_string();
         (dir, path)
+    }
+
+    /// How the fake directory's recall behaves.
+    #[derive(Clone, Copy)]
+    enum Recall {
+        Answers,
+        Stalls,
+        Panics,
+    }
+
+    type Retained = (String, String, String);
+
+    /// A directory that tells a canned block, records what it is asked and
+    /// what is kept in it, and can be made to fail.
+    struct FakeFacts {
+        projects: Vec<ProjectInfo>,
+        block: Option<String>,
+        recall: Recall,
+        retain_stalls: bool,
+        asked: Mutex<Vec<(String, String)>>,
+        kept: mpsc::UnboundedSender<Retained>,
+    }
+
+    #[async_trait]
+    impl ProjectDirectory for FakeFacts {
+        fn project(&self, id: &str) -> Option<ProjectInfo> {
+            self.projects.iter().find(|p| p.id == id).cloned()
+        }
+
+        async fn recall(&self, project_id: &str, query: &str) -> Option<String> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((project_id.into(), query.into()));
+            match self.recall {
+                Recall::Answers => self.block.clone(),
+                Recall::Stalls => std::future::pending().await,
+                Recall::Panics => panic!("the fact store is down"),
+            }
+        }
+
+        async fn retain(&self, project_id: &str, text: &str, source: &str) {
+            let _ = self
+                .kept
+                .send((project_id.into(), text.into(), source.into()));
+            if self.retain_stalls {
+                std::future::pending::<()>().await;
+            }
+        }
+    }
+
+    const FACT_BLOCK: &str = "<memory_context>\nThe gateway listens on 7421.\n</memory_context>";
+
+    fn fake_facts(
+        projects: Vec<ProjectInfo>,
+        block: Option<&str>,
+    ) -> (FakeFacts, mpsc::UnboundedReceiver<Retained>) {
+        let (kept, rx) = mpsc::unbounded_channel();
+        let fake = FakeFacts {
+            projects,
+            block: block.map(String::from),
+            recall: Recall::Answers,
+            retain_stalls: false,
+            asked: Mutex::new(Vec::new()),
+            kept,
+        };
+        (fake, rx)
+    }
+
+    fn provider_over(rig: &Rig, directory: Arc<FakeFacts>) -> KanbanDispatchProvider {
+        KanbanDispatchProvider::new(Arc::clone(&rig.db), worker_mcp()).with_projects(directory)
+    }
+
+    /// What `kanban_complete` does when a worker calls it.
+    fn worker_completes(rig: &Rig, card: i64, summary: &str) {
+        let (_, _, _, board) = rig.db.card_detail(card).unwrap();
+        let done = rig.db.column_by_role(board, "done").unwrap().unwrap();
+        rig.db.move_card(card, done, 0, now()).unwrap();
+        if !summary.is_empty() {
+            rig.db
+                .add_comment(card, "agent", summary, "complete", now())
+                .unwrap();
+        }
+    }
+
+    /// What `kanban_block` does.
+    fn worker_blocks(rig: &Rig, card: i64, reason: &str) {
+        let (_, _, _, board) = rig.db.card_detail(card).unwrap();
+        let blocked = rig.db.column_by_role(board, "blocked").unwrap().unwrap();
+        rig.db.move_card(card, blocked, 0, now()).unwrap();
+        rig.db
+            .add_comment(card, "agent", reason, "block", now())
+            .unwrap();
+    }
+
+    fn ran_ok() -> Outcome {
+        Outcome::Completed {
+            summary: "Done.".into(),
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    /// Whatever was handed to `retain` by now; the model call is spawned, so
+    /// give the spawned task its turn first.
+    async fn kept_by_now(rx: &mut mpsc::UnboundedReceiver<Retained>) -> Vec<Retained> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut out = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            out.push(r);
+        }
+        out
     }
 
     #[tokio::test]
@@ -517,5 +759,315 @@ mod tests {
             .dispatch_claim(5, 0, LEASE_SECS, now())
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn what_the_project_knows_leads_the_prompt_of_its_card() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        ready_card(&rig, None, Some(P), None);
+        let (fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some(FACT_BLOCK));
+        let fake = Arc::new(fake);
+
+        let item = claim_one(&provider_over(&rig, Arc::clone(&fake))).await;
+
+        assert_eq!(
+            item.prompt,
+            format!("{FACT_BLOCK}\n\nFix login\n\nSteps here")
+        );
+        // The question is the task as the worker is told it, asked of the project the board is in.
+        assert_eq!(
+            *fake.asked.lock().unwrap(),
+            vec![(P.to_string(), "Fix login\n\nSteps here".to_string())]
+        );
+        // The instructions and the folder are the ones a card without facts gets.
+        let guidance = item.guidance.unwrap();
+        assert!(guidance.starts_with("You are running Kanban task #"));
+        assert!(guidance.contains("PROJECT-CONTEXT-MARKER for Sen"));
+        assert!(matches!(item.workspace, Workspace::Dir { ref path } if path == &root));
+    }
+
+    #[tokio::test]
+    async fn a_project_with_nothing_to_tell_claims_a_card_exactly_as_before() {
+        let (_keep, root) = root();
+        let with_none = {
+            let rig = new_rig();
+            ready_card(&rig, None, Some(P), None);
+            let (fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+            serde_json::to_string(&claim_one(&provider_over(&rig, Arc::new(fake))).await).unwrap()
+        };
+        let with_blank = {
+            let rig = new_rig();
+            ready_card(&rig, None, Some(P), None);
+            let (fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some("  \n"));
+            serde_json::to_string(&claim_one(&provider_over(&rig, Arc::new(fake))).await).unwrap()
+        };
+        let before = {
+            let rig = new_rig();
+            ready_card(&rig, None, Some(P), None);
+            serde_json::to_string(
+                &claim_one(&provider(&rig, vec![sample_project(P, "Sen", &root)])).await,
+            )
+            .unwrap()
+        };
+        assert_eq!(with_none, before);
+        assert_eq!(with_blank, before);
+    }
+
+    #[tokio::test]
+    async fn a_board_without_a_project_is_never_told_what_a_project_knows() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        let card = ready_card(&rig, Some("/work/own"), None, None);
+        let (fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some(FACT_BLOCK));
+        let fake = Arc::new(fake);
+
+        let item = claim_one(&provider_over(&rig, Arc::clone(&fake))).await;
+
+        assert!(fake.asked.lock().unwrap().is_empty(), "nothing was asked");
+        let expected = WorkItem {
+            id: card.to_string(),
+            assignee: None,
+            prompt: "Fix login\n\nSteps here".into(),
+            guidance: Some(KanbanDispatchProvider::guidance(card)),
+            mcp: vec![worker_mcp()],
+            workspace: Workspace::Dir {
+                path: "/work/own".into(),
+            },
+            depends_on: Vec::new(),
+            priority: 0,
+            timeout_secs: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&item).unwrap(),
+            serde_json::to_string(&expected).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn facts_that_do_not_answer_in_time_do_not_hold_the_card_back() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        ready_card(&rig, None, Some(P), None);
+        let (mut fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some(FACT_BLOCK));
+        fake.recall = Recall::Stalls;
+        let mut p = provider_over(&rig, Arc::new(fake));
+        p.recall_budget = Duration::from_millis(100);
+
+        let started = std::time::Instant::now();
+        let item = claim_one(&p).await;
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(item.prompt, "Fix login\n\nSteps here");
+        assert!(matches!(item.workspace, Workspace::Dir { ref path } if path == &root));
+    }
+
+    #[tokio::test]
+    async fn facts_that_fail_outright_are_a_log_line_and_the_card_still_runs() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        ready_card(&rig, None, Some(P), None);
+        let (mut fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some(FACT_BLOCK));
+        fake.recall = Recall::Panics;
+
+        let item = claim_one(&provider_over(&rig, Arc::new(fake))).await;
+
+        assert_eq!(item.prompt, "Fix login\n\nSteps here");
+    }
+
+    #[tokio::test]
+    async fn cards_claimed_together_wait_for_their_facts_together() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        for _ in 0..3 {
+            ready_card(&rig, None, Some(P), None);
+        }
+        let (mut fake, _rx) = fake_facts(vec![sample_project(P, "Sen", &root)], Some(FACT_BLOCK));
+        fake.recall = Recall::Stalls;
+        let mut p = provider_over(&rig, Arc::new(fake));
+        p.recall_budget = Duration::from_millis(300);
+
+        let started = std::time::Instant::now();
+        let items = p.claim_ready(cap()).await.unwrap();
+
+        assert_eq!(items.len(), 3);
+        // One after the other this would be three budgets (900 ms).
+        assert!(
+            started.elapsed() < Duration::from_millis(700),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn what_a_worker_wrote_when_it_closed_the_card_is_kept_in_the_project() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        let card = ready_card(&rig, None, Some(P), None);
+        let (fake, mut rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+        let p = provider_over(&rig, Arc::new(fake));
+        claim_one(&p).await;
+
+        worker_completes(
+            &rig,
+            card,
+            "Moved login to cookie sessions; the suite passes.",
+        );
+        p.finalize(&card.to_string(), ran_ok()).await.unwrap();
+
+        // Its own words, not the first line of what it answered last ("Done.").
+        assert_eq!(
+            kept_by_now(&mut rx).await,
+            vec![(
+                P.to_string(),
+                "Kanban task \"Fix login\" completed: Moved login to cookie sessions; the suite passes."
+                    .to_string(),
+                "kanban".to_string()
+            )]
+        );
+        assert_eq!(rig.db.card_role(card).unwrap().as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn a_card_that_was_not_closed_by_its_worker_keeps_nothing() {
+        let (_keep, root) = root();
+        for scenario in [
+            "blocked",
+            "blocked after an earlier run was completed",
+            "closed without a summary",
+            "left for the dispatcher, no words",
+            "left for the dispatcher, some words",
+        ] {
+            let rig = new_rig();
+            let card = ready_card(&rig, None, Some(P), None);
+            let (fake, mut rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+            let p = provider_over(&rig, Arc::new(fake));
+            claim_one(&p).await;
+
+            let summary = match scenario {
+                "blocked" => {
+                    worker_blocks(&rig, card, "needs the staging key");
+                    "Done."
+                }
+                "blocked after an earlier run was completed" => {
+                    // The card was done once, moved back, and blocks this time.
+                    rig.db
+                        .add_comment(card, "agent", "Last week's summary.", "complete", now())
+                        .unwrap();
+                    worker_blocks(&rig, card, "needs the staging key");
+                    "Done."
+                }
+                "closed without a summary" => {
+                    worker_completes(&rig, card, "");
+                    "Done."
+                }
+                "left for the dispatcher, no words" => "",
+                _ => "Which approach do you prefer?",
+            };
+            p.finalize(
+                &card.to_string(),
+                Outcome::Completed {
+                    summary: summary.into(),
+                    metadata: serde_json::json!({}),
+                },
+            )
+            .await
+            .unwrap();
+
+            assert!(kept_by_now(&mut rx).await.is_empty(), "{scenario}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_card_that_failed_timed_out_or_was_blocked_keeps_nothing_even_after_a_summary() {
+        let (_keep, root) = root();
+        for outcome in [
+            Outcome::Failed {
+                error: "agent error".into(),
+            },
+            Outcome::TimedOut,
+            Outcome::Blocked {
+                reason: "needs a person".into(),
+            },
+        ] {
+            let rig = new_rig();
+            let card = ready_card(&rig, None, Some(P), None);
+            let (fake, mut rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+            let p = provider_over(&rig, Arc::new(fake));
+            claim_one(&p).await;
+            worker_completes(&rig, card, "Looked done to me.");
+
+            p.finalize(&card.to_string(), outcome).await.unwrap();
+
+            assert!(kept_by_now(&mut rx).await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_card_of_a_board_without_a_project_keeps_nothing() {
+        let rig = new_rig();
+        let card = ready_card(&rig, None, None, None);
+        let (fake, mut rx) = fake_facts(Vec::new(), None);
+        let p = provider_over(&rig, Arc::new(fake));
+        claim_one(&p).await;
+
+        worker_completes(&rig, card, "Fixed it.");
+        p.finalize(&card.to_string(), ran_ok()).await.unwrap();
+
+        assert!(kept_by_now(&mut rx).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finishing_a_card_never_waits_for_the_facts_to_be_kept() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        let card = ready_card(&rig, None, Some(P), None);
+        let (mut fake, mut rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+        fake.retain_stalls = true;
+        let p = provider_over(&rig, Arc::new(fake));
+        claim_one(&p).await;
+        worker_completes(&rig, card, "Fixed it.");
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            p.finalize(&card.to_string(), ran_ok()),
+        )
+        .await
+        .expect("finalize returned while keeping the fact was still pending")
+        .unwrap();
+
+        assert_eq!(kept_by_now(&mut rx).await.len(), 1, "it was handed over");
+    }
+
+    #[tokio::test]
+    async fn a_very_long_summary_is_cut_before_it_is_handed_to_extraction() {
+        let (_keep, root) = root();
+        let rig = new_rig();
+        let card = ready_card(&rig, None, Some(P), None);
+        let (fake, mut rx) = fake_facts(vec![sample_project(P, "Sen", &root)], None);
+        let p = provider_over(&rig, Arc::new(fake));
+        claim_one(&p).await;
+        // Multi-byte characters, so a cut inside one would panic.
+        worker_completes(&rig, card, &"ế".repeat(RETAIN_MAX_BYTES));
+
+        p.finalize(&card.to_string(), ran_ok()).await.unwrap();
+
+        let kept = kept_by_now(&mut rx).await;
+        let text = &kept[0].1;
+        assert!(text.ends_with('…'));
+        assert!(text.len() < RETAIN_MAX_BYTES + 64, "{} bytes", text.len());
+    }
+
+    #[tokio::test]
+    async fn without_a_directory_finishing_a_card_is_what_it_always_was() {
+        let rig = new_rig();
+        let card = ready_card(&rig, None, Some(P), None);
+        let bare = KanbanDispatchProvider::new(Arc::clone(&rig.db), worker_mcp());
+        claim_one(&bare).await;
+        worker_completes(&rig, card, "Fixed it.");
+
+        bare.finalize(&card.to_string(), ran_ok()).await.unwrap();
+
+        assert_eq!(rig.db.card_role(card).unwrap().as_deref(), Some("done"));
     }
 }

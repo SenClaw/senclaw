@@ -5,7 +5,7 @@
 //! windows and the tests all arrive at the same answer.
 
 use crate::memory::engine::facts::FactTarget;
-use crate::memory::engine::ProjectRecall;
+use crate::memory::engine::{ProjectRecall, RecallQuery};
 
 use super::session::project_bank;
 use super::types::{FactsWrite, Project};
@@ -45,6 +45,44 @@ pub fn recall_scope(project: Option<&Project>) -> Option<ProjectRecall> {
         bank: project_bank(&p.id),
         include_common: p.inherit_common,
     })
+}
+
+/// Where what a kanban worker finished is kept, or `None` when nothing is.
+///
+/// A worker has no chat to tag a fact with and no profile whose bank could
+/// hold one, so the project's own bank is the only place there is — and only
+/// for a project that keeps its conversations' facts there. `chat` and `off`
+/// both say the person wants nothing kept in the project's bank.
+pub fn worker_fact_target(project: &Project) -> Option<FactTarget> {
+    match project.facts_write {
+        FactsWrite::Project => fact_target(Some(project), "", "", false),
+        FactsWrite::Chat | FactsWrite::Off => None,
+    }
+}
+
+/// What a kanban worker's recall reads: the project's bank and nothing else.
+/// A worker has no profile, so the agent-wide facts are not its to read
+/// whatever the project's `inherit_common` says.
+pub fn worker_recall_scope(project_id: &str) -> ProjectRecall {
+    ProjectRecall {
+        bank: project_bank(project_id),
+        include_common: false,
+    }
+}
+
+/// The question a worker about to start a card asks of the project's facts.
+/// No folder and no chat: the four arms over the agent's bank have nothing to
+/// look at, and the four over the project's bank are the ones that answer.
+pub fn worker_recall_query(project_id: &str, text: &str, limit: usize, now: i64) -> RecallQuery {
+    RecallQuery {
+        text: text.to_string(),
+        folder: String::new(),
+        chat_jid: String::new(),
+        facts_by_chat: false,
+        limit,
+        now,
+        project: Some(worker_recall_scope(project_id)),
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +138,52 @@ mod tests {
     fn facts_write_off_retains_nothing() {
         let p = project(FactsWrite::Off, true);
         assert_eq!(fact_target(Some(&p), "main", "web:main:1", true), None);
+    }
+
+    #[test]
+    fn a_worker_keeps_what_it_finished_in_the_projects_bank_and_only_when_the_project_keeps_facts_there(
+    ) {
+        let t = worker_fact_target(&project(FactsWrite::Project, true)).unwrap();
+        assert_eq!(
+            (t.bank.as_str(), t.origin.as_str()),
+            ("project:prj_0a1b2c3d", "")
+        );
+        // The same place a chat of the project writes to, so the two read each other's.
+        assert_eq!(
+            Some(t),
+            fact_target(
+                Some(&project(FactsWrite::Project, true)),
+                "main",
+                "web:main:1",
+                true
+            )
+        );
+        // `chat` would put a worker's facts in a profile bank it does not have,
+        // tagged with a chat it does not have.
+        assert_eq!(worker_fact_target(&project(FactsWrite::Chat, true)), None);
+        assert_eq!(worker_fact_target(&project(FactsWrite::Off, true)), None);
+    }
+
+    #[test]
+    fn a_worker_reads_the_projects_bank_alone() {
+        // The scope takes no project row: `inherit_common` has no say in it.
+        let q = worker_recall_query("prj_0a1b2c3d", "fix login", 5, 1_700_000_000);
+        assert_eq!(
+            q.project,
+            Some(ProjectRecall {
+                bank: "project:prj_0a1b2c3d".into(),
+                include_common: false
+            })
+        );
+        assert_eq!((q.folder.as_str(), q.chat_jid.as_str()), ("", ""));
+        assert_eq!(
+            (q.text.as_str(), q.limit, q.now),
+            ("fix login", 5, 1_700_000_000)
+        );
+        assert_eq!(
+            worker_recall_scope("prj_0a1b2c3d").bank,
+            project_bank("prj_0a1b2c3d")
+        );
     }
 
     #[test]

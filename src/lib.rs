@@ -1871,6 +1871,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             Arc::clone(&db),
             cfg.paths.projects_dir.clone(),
             projects::RootRules::from_config(&cfg),
+            cfg.clone(),
         ));
     let kanban_state = kanban::make_state_with(Some(Arc::clone(&project_directory)));
 

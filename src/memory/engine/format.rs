@@ -31,11 +31,14 @@ pub fn render(items: &[Item]) -> String {
         }
         out.push('\n');
     }
-    out.push_str(
-        "If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).",
-    );
+    out.push_str(DETAIL_HINT);
     out
 }
+
+/// The closing line of every block: where to look for more. A reader with no
+/// memory tools (a kanban worker) drops it with `strip_suffix`.
+pub const DETAIL_HINT: &str =
+    "If you need more detail, call the memory_recall tool (search) or memory_get (read a full memory file).";
 
 /// The wrapper tag the block travels in. Stored text is data and some of it is
 /// written by whoever the agent talked to, so it must not be able to end the
@@ -90,6 +93,8 @@ mod tests {
         assert!(out.contains("[1] (note) ports (reference) — daemon ports\nUI 18788"));
         assert!(out.contains("[2] (knowledge) Ada (entity)\nAda invented the compiler"));
         assert!(out.ends_with("(read a full memory file)."));
+        // A reader that has no memory tools drops this line by name.
+        assert!(out.ends_with(DETAIL_HINT));
     }
 
     #[test]
