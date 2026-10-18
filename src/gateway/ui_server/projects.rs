@@ -15,13 +15,16 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::memory::cognitive::retrievers::build_fts_match;
+use crate::memory::engine::facts::store::{FactKind, Inserted, NewFact, Scope};
+use crate::memory::engine::facts::{self, defense, extract, FactEngine, FactStore};
 use crate::projects::{
     self, check_root, ArchivedFilter, ContextWriteError, FactsWrite, NewProject, Project,
     ProjectPatch, ProjectStoreError, RootRules,
@@ -63,7 +66,8 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>(ctx: ProjectsCtx) -> Rout
             get(projects_context_get).put(projects_context_put),
         )
         .route("/api/projects/:id/chats", get(projects_chats))
-        .with_state(ctx)
+        .with_state(ctx.clone())
+        .merge(facts_routes(ctx))
 }
 
 // ===== Errors =====
@@ -394,6 +398,11 @@ async fn projects_delete(
         let chats = chats_of(db, &archived.id);
         return Ok(Json(wire(&archived, chats)));
     }
+    // Its facts go first, a slice at a time. Were the row to go first, a
+    // failure half-way would leave a bank that no project owns and nothing
+    // to retry it from; this way the project is still there to purge again.
+    load(&ctx, &id)?;
+    let deleted_facts = purge_fact_bank(&ctx, &id).await?;
     let detached = db.delete_project(&id)?;
     let home = crate::util::paths::senclaw_home();
     for chat in &detached {
@@ -405,6 +414,7 @@ async fn projects_delete(
     }
     Ok(Json(json!({
         "deleted": id,
+        "deletedFacts": deleted_facts,
         "detachedChats": detached.iter().map(|c| c.jid.clone()).collect::<Vec<_>>(),
     })))
 }
@@ -490,6 +500,248 @@ async fn projects_chats(State(ctx): State<ProjectsCtx>, Path(id): Path<String>) 
             }))
             .collect::<Vec<_>>(),
     })))
+}
+
+// ===== Facts =====
+
+/// How a request finds the fact engine, which is where the embedding model
+/// lives: the process-wide one in the daemon, a private one in a test. Listing,
+/// forgetting and purging need only the database; adding a fact uses the model
+/// when there is one.
+type EngineResolver = Arc<dyn Fn() -> Option<Arc<FactEngine>> + Send + Sync>;
+
+#[derive(Clone)]
+struct FactsState {
+    ctx: ProjectsCtx,
+    engine: EngineResolver,
+}
+
+impl FactsState {
+    fn store(&self) -> Result<FactStore, ApiError> {
+        Ok(FactStore::new(Arc::clone(self.ctx.db()?)))
+    }
+}
+
+/// The routes of a project's own facts, for any router state.
+pub(crate) fn facts_routes<S: Clone + Send + Sync + 'static>(ctx: ProjectsCtx) -> Router<S> {
+    facts_router(ctx, Arc::new(facts::instance))
+}
+
+fn facts_router<S: Clone + Send + Sync + 'static>(
+    ctx: ProjectsCtx,
+    engine: EngineResolver,
+) -> Router<S> {
+    Router::new()
+        .route(
+            "/api/projects/:id/facts",
+            get(project_facts_list).post(project_facts_add),
+        )
+        .route(
+            "/api/projects/:id/facts/:fact_id",
+            delete(project_fact_forget),
+        )
+        .with_state(FactsState { ctx, engine })
+}
+
+const FACTS_DEFAULT_LIMIT: u32 = 50;
+const FACTS_MAX_LIMIT: u32 = 200;
+
+#[derive(Deserialize)]
+struct FactsQuery {
+    /// Keyword search; omitted → newest first.
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+    /// Also list facts that were replaced (they carry `supersededBy`). Only the
+    /// newest-first listing has a history.
+    #[serde(default)]
+    history: Option<bool>,
+}
+
+/// GET /api/projects/:id/facts?q=&limit=&history= — the project's own facts,
+/// newest first or best keyword matches. The agent's common facts are not
+/// here; they are listed under the agent's bank.
+async fn project_facts_list(
+    State(st): State<FactsState>,
+    Path(id): Path<String>,
+    Query(q): Query<FactsQuery>,
+) -> ApiResult {
+    let p = load(&st.ctx, &id)?;
+    let bank = projects::project_bank(&p.id);
+    let store = st.store()?;
+    let limit = q
+        .limit
+        .unwrap_or(FACTS_DEFAULT_LIMIT)
+        .clamp(1, FACTS_MAX_LIMIT) as usize;
+    let found = match q.q.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => match build_fts_match(text) {
+            Some(m) => store.search_keyword(&bank, &m, None, limit, Scope::Agent),
+            None => Ok(Vec::new()),
+        },
+        None => store.recent(&bank, limit, q.history.unwrap_or(false), Scope::Agent),
+    }
+    .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "bank": bank,
+        "total": store.count(&bank).map_err(ApiError::internal)?,
+        "count": found.len(),
+        "facts": found.iter().map(super::memory_facts::wire).collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FactBody {
+    text: String,
+    /// `world` (default) or `experience`.
+    #[serde(default)]
+    kind: Option<String>,
+    /// When it happened: `2026-03`, `2026-03-02`, or a range `a/b`. Omitted for
+    /// a standing fact.
+    #[serde(default)]
+    when: Option<String>,
+}
+
+fn invalid_fact(code: &str, message: String) -> ApiError {
+    ApiError::with(StatusCode::BAD_REQUEST, code, json!({ "message": message }))
+}
+
+/// POST /api/projects/:id/facts {text, kind?, when?} — add a fact by hand.
+///
+/// No model reads it: the text is stored as typed (whitespace collapsed), with
+/// a vector when an embedding model is configured. It is marked `manual`, and
+/// nothing a conversation says replaces it. The same words already in the
+/// project become this fact. A secret in the text is refused, since a fact is
+/// shown to the model whenever it is relevant.
+async fn project_facts_add(
+    State(st): State<FactsState>,
+    Path(id): Path<String>,
+    Json(body): Json<FactBody>,
+) -> Result<Response, ApiError> {
+    let p = load(&st.ctx, &id)?;
+    let text = body.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let len = text.chars().count();
+    if !(extract::MIN_FACT_CHARS..=extract::MAX_FACT_CHARS).contains(&len) {
+        return Err(invalid_fact(
+            "invalid_fact",
+            format!(
+                "a fact is {} to {} characters, this one is {len}",
+                extract::MIN_FACT_CHARS,
+                extract::MAX_FACT_CHARS
+            ),
+        ));
+    }
+    if let defense::Verdict::Blocked { kinds } = defense::scrub(&text, defense::Mode::Block) {
+        return Err(ApiError::with(
+            StatusCode::BAD_REQUEST,
+            "secret_in_fact",
+            json!({ "kinds": kinds }),
+        ));
+    }
+    let kind = match body
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+    {
+        None => FactKind::World,
+        Some(k) => FactKind::parse(k).ok_or_else(|| {
+            invalid_fact(
+                "invalid_kind",
+                format!("kind is world or experience, not {k:?}"),
+            )
+        })?,
+    };
+    let occurred = match body
+        .when
+        .as_deref()
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+    {
+        None => None,
+        Some(w) => Some(extract::parse_when(w).ok_or_else(|| {
+            invalid_fact(
+                "invalid_when",
+                format!("when is a date like 2026-03 or 2026-03-02, or a range a/b, not {w:?}"),
+            )
+        })?),
+    };
+
+    let (embedding, model) = match (st.engine)() {
+        Some(engine) => (
+            engine
+                .embed_all(std::slice::from_ref(&text))
+                .await
+                .pop()
+                .flatten(),
+            engine.model_key(),
+        ),
+        None => (None, None),
+    };
+    let bank = projects::project_bank(&p.id);
+    let store = st.store()?;
+    let inserted = store
+        .insert_manual(
+            &bank,
+            &NewFact {
+                text,
+                kind,
+                occurred,
+                mentioned_at: chrono::Utc::now().timestamp(),
+                entities: Vec::new(),
+                // A vector made by a model other than the one that will search
+                // is never compared, so one is stored only with its model.
+                model: embedding.as_ref().and(model),
+                embedding,
+                source: facts::store::SOURCE_MANUAL.to_string(),
+                origin: String::new(),
+                slot: None,
+            },
+        )
+        .map_err(ApiError::internal)?;
+    let (fact_id, status, existing) = match inserted {
+        Inserted::New(fid) => (fid, StatusCode::CREATED, false),
+        Inserted::Existing(fid) => (fid, StatusCode::OK, true),
+    };
+    let fact = store
+        .get(&fact_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal("the fact vanished after it was stored"))?;
+    Ok((
+        status,
+        Json(json!({ "fact": super::memory_facts::wire(&fact), "existing": existing })),
+    )
+        .into_response())
+}
+
+/// DELETE /api/projects/:id/facts/:factId — forget one fact of the project. A
+/// fact of another bank is a 404, whatever its id.
+async fn project_fact_forget(
+    State(st): State<FactsState>,
+    Path((id, fact_id)): Path<(String, String)>,
+) -> ApiResult {
+    let p = load(&st.ctx, &id)?;
+    let deleted = st
+        .store()?
+        .delete_in_bank(&projects::project_bank(&p.id), &fact_id)
+        .map_err(ApiError::internal)?;
+    if !deleted {
+        return Err(ApiError::plain(StatusCode::NOT_FOUND, "fact_not_found"));
+    }
+    Ok(Json(json!({ "deleted": fact_id })))
+}
+
+/// Delete every fact of a project's bank, off the async runtime: a slice at a
+/// time, with the database free in between (see `FactStore::delete_bank`).
+/// Returns how many facts went.
+async fn purge_fact_bank(ctx: &ProjectsCtx, id: &str) -> Result<usize, ApiError> {
+    let store = FactStore::new(Arc::clone(ctx.db()?));
+    let bank = projects::project_bank(id);
+    tokio::task::spawn_blocking(move || store.delete_bank(&bank))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)
 }
 
 #[cfg(test)]
@@ -1084,5 +1336,363 @@ mod tests {
             (rows[0]["chatCount"].as_u64(), rows[1]["chatCount"].as_u64()),
             (Some(1), Some(0))
         );
+    }
+
+    // ===== Facts =====
+
+    /// One dimension per known word, so similarity is shared vocabulary.
+    struct Bag;
+
+    #[async_trait::async_trait]
+    impl crate::memory::embedding::EmbeddingProvider for Bag {
+        fn name(&self) -> &str {
+            "bag"
+        }
+        fn model(&self) -> &str {
+            "v1"
+        }
+        fn dimensions(&self) -> u32 {
+            3
+        }
+        async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+            Ok(texts
+                .iter()
+                .map(|t| {
+                    let t = t.to_lowercase();
+                    ["deploy", "friday", "staging"]
+                        .iter()
+                        .map(|w| t.matches(w).count() as f32)
+                        .collect()
+                })
+                .collect())
+        }
+    }
+
+    impl Fixture {
+        fn store(&self) -> FactStore {
+            FactStore::new(self.ctx.db.clone().unwrap())
+        }
+
+        /// The facts routes alone, with `engine` standing in for the daemon's.
+        async fn facts_call(
+            &self,
+            engine: Option<Arc<FactEngine>>,
+            method: Method,
+            uri: &str,
+            body: Option<Value>,
+        ) -> (StatusCode, Value) {
+            let resolver: EngineResolver = Arc::new(move || engine.clone());
+            let app: Router<()> = facts_router(self.ctx.clone(), resolver);
+            let mut req = Request::builder().method(method).uri(uri);
+            let body = match body {
+                Some(b) => {
+                    req = req.header("content-type", "application/json");
+                    Body::from(b.to_string())
+                }
+                None => Body::empty(),
+            };
+            let resp = app.oneshot(req.body(body).unwrap()).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            )
+        }
+
+        /// A fact said in a conversation, as retain would store it.
+        fn said(&self, bank: &str, text: &str, origin: &str) -> String {
+            match self
+                .store()
+                .insert(
+                    bank,
+                    &NewFact {
+                        text: text.into(),
+                        kind: FactKind::World,
+                        occurred: None,
+                        mentioned_at: 10,
+                        entities: vec![],
+                        embedding: None,
+                        model: None,
+                        source: "reflection".into(),
+                        origin: origin.into(),
+                        slot: None,
+                    },
+                )
+                .unwrap()
+            {
+                Inserted::New(id) => id,
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fact_is_added_by_hand_listed_and_forgotten() {
+        let f = fixture();
+        let p = f.create("Sen", &f.folder("sen")).await;
+        let id = p["id"].as_str().unwrap();
+        let uri = format!("/api/projects/{id}/facts");
+
+        // Through the merged router, the way the daemon serves it.
+        let (status, empty) = f.call(Method::GET, &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{empty}");
+        assert_eq!(
+            (empty["bank"].as_str(), empty["total"].as_u64()),
+            (Some(format!("project:{id}").as_str()), Some(0))
+        );
+
+        let (status, added) = f
+            .call(
+                Method::POST,
+                &uri,
+                Some(json!({ "text": "  The   deploy is on Friday ", "when": "2026-10-23" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{added}");
+        assert_eq!(added["existing"], false);
+        let fact = &added["fact"];
+        assert_eq!(fact["text"], "The deploy is on Friday");
+        assert_eq!(fact["source"], "manual");
+        assert_eq!(fact["origin"], "", "belongs to the project, not to a chat");
+        assert_eq!(fact["kind"], "world");
+        assert!(fact["occurredStart"].is_i64());
+        let fact_id = fact["id"].as_str().unwrap().to_string();
+
+        let (_, list) = f.call(Method::GET, &uri, None).await;
+        assert_eq!(
+            (list["total"].as_u64(), list["count"].as_u64()),
+            (Some(1), Some(1))
+        );
+        let (_, found) = f.call(Method::GET, &format!("{uri}?q=friday"), None).await;
+        assert_eq!(found["facts"][0]["id"], fact_id.as_str());
+        let (_, none) = f.call(Method::GET, &format!("{uri}?q=tuesday"), None).await;
+        assert_eq!(none["count"], 0);
+
+        let (status, gone) = f
+            .call(Method::DELETE, &format!("{uri}/{fact_id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{gone}");
+        assert_eq!(gone["deleted"], fact_id.as_str());
+        let (status, again) = f
+            .call(Method::DELETE, &format!("{uri}/{fact_id}"), None)
+            .await;
+        assert_eq!(
+            (status, again["error"].as_str()),
+            (StatusCode::NOT_FOUND, Some("fact_not_found"))
+        );
+        let (_, list) = f.call(Method::GET, &uri, None).await;
+        assert_eq!(list["total"], 0);
+    }
+
+    #[tokio::test]
+    async fn adding_a_fact_calls_no_model_and_the_same_words_become_the_typed_fact() {
+        let f = fixture();
+        let p = f.create("Sen", &f.folder("sen")).await;
+        let id = p["id"].as_str().unwrap();
+        let uri = format!("/api/projects/{id}/facts");
+        let bank = format!("project:{id}");
+        // A conversation already said it.
+        let said = f.said(&bank, "The deploy is on Friday", "");
+
+        let (status, added) = f
+            .call(
+                Method::POST,
+                &uri,
+                Some(json!({ "text": "the deploy is on friday" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{added}");
+        assert_eq!(added["existing"], true);
+        assert_eq!(added["fact"]["id"], said.as_str());
+        assert_eq!(
+            added["fact"]["source"], "manual",
+            "kept as typed from now on"
+        );
+        assert_eq!(f.store().count(&bank).unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_fact_added_by_hand_gets_a_vector_when_a_model_is_configured() {
+        let f = fixture();
+        let p = f.create("Sen", &f.folder("sen")).await;
+        let id = p["id"].as_str().unwrap();
+        let engine = Arc::new(FactEngine::new(
+            f.ctx.db.clone().unwrap(),
+            Some(Arc::new(Bag)),
+        ));
+        let (status, added) = f
+            .facts_call(
+                Some(engine.clone()),
+                Method::POST,
+                &format!("/api/projects/{id}/facts"),
+                Some(json!({ "text": "Deploy to staging on Friday", "kind": "experience" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{added}");
+        assert_eq!(added["fact"]["kind"], "experience");
+        let near = engine
+            .store
+            .search_vector(
+                &format!("project:{id}"),
+                "bag:v1:3",
+                &[1.0, 1.0, 1.0],
+                0.5,
+                5,
+                Scope::Agent,
+            )
+            .unwrap();
+        assert_eq!(
+            near.len(),
+            1,
+            "stored with its vector and the model's identity"
+        );
+        assert_eq!(near[0].0.text, "Deploy to staging on Friday");
+    }
+
+    #[tokio::test]
+    async fn a_fact_that_is_not_a_fact_is_refused_and_nothing_is_stored() {
+        let f = fixture();
+        let p = f.create("Sen", &f.folder("sen")).await;
+        let id = p["id"].as_str().unwrap();
+        let uri = format!("/api/projects/{id}/facts");
+        let long = "x".repeat(extract::MAX_FACT_CHARS + 1);
+        let key = concat!("sk-proj-", "abcdefghijklmnopqrstuvwxyz");
+        let secret = format!("The staging key is {key} and rotates monthly");
+        for (body, code) in [
+            (json!({ "text": "short" }), "invalid_fact"),
+            (json!({ "text": "   " }), "invalid_fact"),
+            (json!({ "text": long }), "invalid_fact"),
+            (
+                json!({ "text": "The deploy is on Friday", "kind": "rumour" }),
+                "invalid_kind",
+            ),
+            (
+                json!({ "text": "The deploy is on Friday", "when": "next week" }),
+                "invalid_when",
+            ),
+            (json!({ "text": secret }), "secret_in_fact"),
+        ] {
+            let (status, got) = f.call(Method::POST, &uri, Some(body.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {got}");
+            assert_eq!(got["error"], code, "{body}");
+        }
+        // A misspelt field is an error, not a field that is ignored.
+        let (status, _) = f
+            .call(
+                Method::POST,
+                &uri,
+                Some(json!({ "text": "The deploy is on Friday", "origen": "x" })),
+            )
+            .await;
+        assert!(status.is_client_error());
+        let (_, list) = f.call(Method::GET, &uri, None).await;
+        assert_eq!(list["total"], 0);
+
+        let (status, body) = f
+            .call(
+                Method::POST,
+                "/api/projects/prj_00000000/facts",
+                Some(json!({ "text": "The deploy is on Friday" })),
+            )
+            .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::NOT_FOUND, Some("project_not_found"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_project_can_only_list_and_forget_its_own_facts() {
+        let f = fixture();
+        let a = f.create("Alpha", &f.folder("a")).await;
+        let b = f.create("Beta", &f.folder("b")).await;
+        let (a_id, b_id) = (a["id"].as_str().unwrap(), b["id"].as_str().unwrap());
+        let theirs = f.said(&format!("project:{b_id}"), "Beta ships on Monday", "");
+        let agents = f.said("main", "Sen lives in Hue", "");
+
+        let (_, list) = f
+            .call(Method::GET, &format!("/api/projects/{a_id}/facts"), None)
+            .await;
+        assert_eq!(list["count"], 0, "Beta's fact is not Alpha's");
+        for fact_id in [&theirs, &agents] {
+            let (status, _) = f
+                .call(
+                    Method::DELETE,
+                    &format!("/api/projects/{a_id}/facts/{fact_id}"),
+                    None,
+                )
+                .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{fact_id}");
+        }
+        assert_eq!(f.store().count(&format!("project:{b_id}")).unwrap(), 1);
+        assert_eq!(f.store().count("main").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn purging_a_project_deletes_its_bank_and_only_its_bank() {
+        let f = fixture();
+        let a = f.create("Alpha", &f.folder("a")).await;
+        let b = f.create("Beta", &f.folder("b")).await;
+        let (a_id, b_id) = (a["id"].as_str().unwrap(), b["id"].as_str().unwrap());
+        let a_bank = format!("project:{a_id}");
+        // More than one slice of facts, so the deletion takes several passes.
+        let n = crate::memory::engine::facts::store::DELETE_BATCH + 10;
+        f.ctx
+            .db
+            .clone()
+            .unwrap()
+            .with_conn_mut(|c| {
+                let tx = c.transaction()?;
+                for i in 0..n {
+                    tx.execute(
+                        "INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash) \
+                         VALUES (?1, ?2, 'world', 'x', 1, 1, ?1)",
+                        rusqlite::params![format!("f{i}"), a_bank],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .unwrap();
+        f.said(&format!("project:{b_id}"), "Beta ships on Monday", "");
+        f.said("main", "Sen lives in Hue", "web:main:1");
+
+        // Archiving keeps every fact: it hides the project, it forgets nothing.
+        let (status, _) = f
+            .call(Method::DELETE, &format!("/api/projects/{a_id}"), None)
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(f.store().count(&a_bank).unwrap(), n);
+
+        let (status, gone) = f
+            .call(
+                Method::DELETE,
+                &format!("/api/projects/{a_id}?purge=true"),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{gone}");
+        assert_eq!(gone["deletedFacts"], n);
+        assert_eq!(f.store().count(&a_bank).unwrap(), 0);
+        assert_eq!(f.store().count(&format!("project:{b_id}")).unwrap(), 1);
+        assert_eq!(f.store().count("main").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn purging_a_project_that_does_not_exist_deletes_no_facts() {
+        let f = fixture();
+        f.said("project:prj_0a1b2c3d", "Someone's orphaned fact", "");
+        let (status, _) = f
+            .call(
+                Method::DELETE,
+                "/api/projects/prj_0a1b2c3d?purge=true",
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(f.store().count("project:prj_0a1b2c3d").unwrap(), 1);
     }
 }

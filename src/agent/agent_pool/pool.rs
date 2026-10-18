@@ -910,6 +910,53 @@ impl AgentPool {
         }
     }
 
+    /// The project row a session was created in, as it is now. `None` outside a
+    /// project, once the row is gone, and when the database cannot be read: the
+    /// session then behaves like any other chat, which keeps its memory working.
+    fn project_row(&self, project_id: Option<&str>) -> Option<crate::projects::Project> {
+        let id = project_id?;
+        let db = self.db.lock().unwrap().clone()?;
+        match db.get_project(id) {
+            Ok(project) => project,
+            Err(e) => {
+                tracing::warn!("[AgentPool] cannot load project {id}: {e}");
+                None
+            }
+        }
+    }
+
+    /// Whether the facts of a conversation are tagged with its chat
+    /// (`SENCLAW_MEMORY_FACTS_SCOPE`, `chat` by default).
+    fn facts_by_chat(&self) -> bool {
+        self.config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.memory.engine_facts_by_chat)
+            .unwrap_or(true)
+    }
+
+    /// Where the facts of this session's conversation are stored, or `None`
+    /// when its project says to keep none. Read on every use, so a change of
+    /// the project's `facts_write` applies to the next window and summary.
+    pub(crate) fn fact_target(
+        &self,
+        folder: &str,
+        jid: &str,
+        project_id: Option<&str>,
+    ) -> Option<crate::memory::engine::facts::FactTarget> {
+        let project = self.project_row(project_id);
+        crate::projects::fact_target(project.as_ref(), folder, jid, self.facts_by_chat())
+    }
+
+    /// The project bank recall reads for this session besides the agent's own.
+    fn project_recall(
+        &self,
+        project_id: Option<&str>,
+    ) -> Option<crate::memory::engine::ProjectRecall> {
+        crate::projects::recall_scope(self.project_row(project_id).as_ref())
+    }
+
     /// `~/.senclaw/workspace-state-{key}.json` — mirrors TS path scheme
     /// (with the `senclaw` brand rename). `key` is
     /// [`crate::projects::workspace_state_key`] of a binding: the profile
@@ -1979,6 +2026,7 @@ impl AgentPool {
                     facts_by_chat,
                     limit: max_results,
                     now: chrono::Utc::now().timestamp(),
+                    project: self.project_recall(group.project_id.as_deref()),
                 },
                 &crate::memory::engine::RecallConfig {
                     max_tokens,
@@ -2020,7 +2068,11 @@ impl AgentPool {
                 .map(|c| c.memory.cognitive_reflection)
                 .unwrap_or(true);
             if reflect_enabled {
-                super::reflection::reflect_push(&group.folder, jid, "User", prompt);
+                if let Some(target) =
+                    self.fact_target(&group.folder, jid, group.project_id.as_deref())
+                {
+                    super::reflection::reflect_push(&group.folder, jid, &target, "User", prompt);
+                }
             }
         }
 
@@ -2928,6 +2980,7 @@ impl AgentPool {
         let _folder = binding.folder.clone();
         let _name = binding.name.clone();
         let _bot_token = binding.bot_token.clone();
+        let _project_id = binding.project_id.clone();
 
         // Mutable state shared across event handlers.
         let last_reply: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
@@ -2937,6 +2990,7 @@ impl AgentPool {
             let pool = Arc::clone(self);
             let jid = _jid.clone();
             let folder = _folder.clone();
+            let project_id = _project_id.clone();
             let bot_token = _bot_token.clone();
             let last_reply = Arc::clone(&last_reply);
             let jid_arg = jid.clone();
@@ -2994,12 +3048,16 @@ impl AgentPool {
                         .map(|c| c.memory.cognitive_reflection)
                         .unwrap_or(true);
                     if reflect_enabled {
-                        crate::agent::agent_pool::reflection::reflect_push(
-                            &folder,
-                            &jid,
-                            "Assistant",
-                            &data.content,
-                        );
+                        if let Some(target) = pool.fact_target(&folder, &jid, project_id.as_deref())
+                        {
+                            crate::agent::agent_pool::reflection::reflect_push(
+                                &folder,
+                                &jid,
+                                &target,
+                                "Assistant",
+                                &data.content,
+                            );
+                        }
                     }
                 }),
             );
@@ -3161,6 +3219,7 @@ impl AgentPool {
             let pool = Arc::clone(self);
             let jid = _jid.clone();
             let folder = _folder.clone();
+            let project_id = _project_id.clone();
             let jid_arg = jid.clone();
             self.core_api.on_compact_exec(
                 &jid_arg,
@@ -3176,16 +3235,17 @@ impl AgentPool {
                     // decided or done stays recallable after the context is
                     // cut. Fire-and-forget: a failure logs and never touches
                     // the turn.
+                    // It goes where the conversation's own facts go: a session
+                    // in a project keeps them with the project's, or nowhere
+                    // when the project keeps none.
                     if let Some(summary) = data.summary.clone() {
                         let cfg = pool.config.lock().unwrap().as_ref().cloned();
-                        if let Some(cfg) = cfg {
-                            let folder = folder.clone();
-                            let chat = jid.clone();
+                        let target = pool.fact_target(&folder, &jid, project_id.as_deref());
+                        if let (Some(cfg), Some(target)) = (cfg, target) {
                             tokio::spawn(async move {
                                 crate::memory::engine::facts::retain_text(
                                     &cfg,
-                                    &folder,
-                                    &chat,
+                                    &target,
                                     &summary,
                                     "compaction",
                                 )

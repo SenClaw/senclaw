@@ -14,8 +14,10 @@
 //! - [`root`]: which folders may be a root, and why not.
 //! - [`context`]: `CONTEXT.md` on disk and the `<project>` prompt block.
 //! - [`session`]: what a session needs from its project (state file, env).
+//! - [`facts`]: where its facts are written and which bank its recall reads.
 
 pub mod context;
+pub mod facts;
 pub mod root;
 pub mod session;
 pub mod store;
@@ -25,6 +27,7 @@ pub use context::{
     read_context, render_block, write_context, ContextFile, ContextWriteError, CONTEXT_FILE,
     CONTEXT_MAX_CHARS,
 };
+pub use facts::{fact_target, recall_scope};
 pub use root::{check_root, recheck_root, RootCheck, RootProblem, RootRules};
 pub use session::{
     check_joinable, check_member_shape, decide_membership, project_bank, project_for_binding,

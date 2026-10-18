@@ -45,7 +45,7 @@ use std::sync::Arc;
 pub use arms::{CognitiveArm, CuratedArm, RecallArm};
 pub use format::WRAPPER_TAG;
 pub use recall::{recall, RecallConfig};
-pub use types::{ArmStat, Hit, Item, RecallQuery, Recalled};
+pub use types::{ArmStat, Hit, Item, ProjectRecall, RecallQuery, Recalled};
 
 /// Which stores a turn may read. Notes follow `memoryRecall` and the graph
 /// follows `preCognitive`, so a store the user switched off is never read.
@@ -73,10 +73,7 @@ pub fn default_arms(selection: ArmSelection) -> Vec<Arc<dyn RecallArm>> {
     }
     if selection.facts {
         if let Some(engine) = facts::instance() {
-            arms.push(Arc::new(facts::SemanticArm(Arc::clone(&engine))));
-            arms.push(Arc::new(facts::KeywordArm(Arc::clone(&engine))));
-            arms.push(Arc::new(facts::GraphArm(Arc::clone(&engine))));
-            arms.push(Arc::new(facts::TemporalArm(engine)));
+            arms.extend(facts::fact_arms(engine));
         }
     }
     arms

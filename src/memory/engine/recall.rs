@@ -182,6 +182,7 @@ mod tests {
             facts_by_chat: true,
             limit: 5,
             now: 0,
+            project: None,
         }
     }
 

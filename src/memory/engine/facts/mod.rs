@@ -28,8 +28,9 @@ use tokio::sync::OnceCell;
 
 use crate::db::Db;
 use crate::memory::embedding::EmbeddingProvider;
+use crate::memory::engine::arms::RecallArm;
 
-pub use arms::{GraphArm, KeywordArm, SemanticArm, TemporalArm, FACTS};
+pub use arms::{GraphArm, KeywordArm, ProjectFacts, SemanticArm, TemporalArm, FACTS};
 pub use retain::{retain, RetainReport, RetainRequest};
 pub use store::{FactStore, StoredFact};
 
@@ -128,6 +129,69 @@ pub fn instance() -> Option<Arc<FactEngine>> {
     INSTANCE.get().cloned()
 }
 
+/// Where a retained text's facts are stored and whom they belong to.
+///
+/// A chat outside a project writes into its agent's bank tagged with its own
+/// JID. A chat in a project writes into the project's bank with no chat at all,
+/// so every chat of the project reads, confirms and replaces the others' facts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct FactTarget {
+    pub bank: String,
+    /// The chat the facts are tagged with; empty for the whole bank.
+    pub origin: String,
+}
+
+impl FactTarget {
+    /// The agent's bank, tagged with the chat unless per-chat scoping is off
+    /// (`SENCLAW_MEMORY_FACTS_SCOPE=agent`) or the chat is unknown.
+    pub fn chat(folder: &str, chat_jid: &str, by_chat: bool) -> Self {
+        Self {
+            bank: folder.to_string(),
+            origin: if by_chat {
+                chat_jid.to_string()
+            } else {
+                String::new()
+            },
+        }
+    }
+
+    /// A bank that belongs to a project as a whole.
+    pub fn project(bank: &str) -> Self {
+        Self {
+            bank: bank.to_string(),
+            origin: String::new(),
+        }
+    }
+}
+
+/// The four ways to find a fact in `engine`'s store, then the same four over a
+/// project's bank. The second four answer only a question asked from a project
+/// (see [`ProjectFacts`]); they cost nothing otherwise.
+pub fn fact_arms(engine: Arc<FactEngine>) -> Vec<Arc<dyn RecallArm>> {
+    vec![
+        Arc::new(SemanticArm(Arc::clone(&engine))),
+        Arc::new(KeywordArm(Arc::clone(&engine))),
+        Arc::new(GraphArm(Arc::clone(&engine))),
+        Arc::new(TemporalArm(Arc::clone(&engine))),
+        Arc::new(ProjectFacts::new(
+            "facts_project_semantic",
+            SemanticArm(Arc::clone(&engine)),
+        )),
+        Arc::new(ProjectFacts::new(
+            "facts_project_keyword",
+            KeywordArm(Arc::clone(&engine)),
+        )),
+        Arc::new(ProjectFacts::new(
+            "facts_project_graph",
+            GraphArm(Arc::clone(&engine)),
+        )),
+        Arc::new(ProjectFacts::new(
+            "facts_project_temporal",
+            TemporalArm(engine),
+        )),
+    ]
+}
+
 /// Retain text into the process-wide engine, with the model the cognitive
 /// layer is configured to use. `source` says where it came from
 /// (`"reflection"` for a conversation window, `"compaction"` for the summary
@@ -135,8 +199,7 @@ pub fn instance() -> Option<Arc<FactEngine>> {
 /// the engine is not booted or no model is configured.
 pub async fn retain_text(
     config: &crate::config::Config,
-    bank: &str,
-    chat_jid: &str,
+    target: &FactTarget,
     text: &str,
     source: &str,
 ) -> Option<RetainReport> {
@@ -147,17 +210,11 @@ pub async fn retain_text(
     };
     let mode = defense::Mode::parse(&config.memory.engine_defense);
     let req = RetainRequest {
-        bank,
+        bank: &target.bank,
         text,
         source,
         now: chrono::Utc::now().timestamp(),
-        // Per-chat scoping is the default; `SENCLAW_MEMORY_FACTS_SCOPE=agent`
-        // keeps every chat of an agent in one pool of facts.
-        origin: if config.memory.engine_facts_by_chat {
-            chat_jid
-        } else {
-            ""
-        },
+        origin: &target.origin,
     };
     Some(retain(&engine, llm.as_ref(), mode, &req).await)
 }
@@ -252,8 +309,7 @@ mod tests {
         let cfg = Config::from_env();
         assert!(retain_text(
             &cfg,
-            "main",
-            "web:t",
+            &FactTarget::chat("main", "web:t", true),
             "User: a conversation window",
             "reflection"
         )

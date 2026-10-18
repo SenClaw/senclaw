@@ -2,10 +2,8 @@
 
 use serde::Serialize;
 
-/// Where facts extracted from a project's chats are stored.
-///
-/// Kept with the project from the start so the column never needs a second
-/// migration; nothing reads it until the fact store learns about projects.
+/// Where facts extracted from a project's chats are stored (see
+/// [`fact_target`](super::facts::fact_target)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FactsWrite {

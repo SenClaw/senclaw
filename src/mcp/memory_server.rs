@@ -101,6 +101,9 @@ pub struct McpMemoryServer {
     /// The chat asking (`SENCLAW_CHAT_JID`); empty when not told, in which case
     /// the fact tools see only what belongs to the whole agent.
     chat_jid: String,
+    /// The fact bank of the project the chat was created in
+    /// (`SENCLAW_PROJECT_BANK`), set when the session's core was built.
+    project_bank: Option<String>,
 }
 
 impl McpMemoryServer {
@@ -123,6 +126,10 @@ impl McpMemoryServer {
                 .ok()
                 .map(PathBuf::from),
             chat_jid: std::env::var("SENCLAW_CHAT_JID").unwrap_or_default(),
+            project_bank: std::env::var(crate::projects::ENV_PROJECT_BANK)
+                .ok()
+                .map(|b| b.trim().to_string())
+                .filter(|b| !b.is_empty()),
         }))
     }
 
@@ -135,13 +142,28 @@ impl McpMemoryServer {
             .unwrap_or_else(|| self.profiles_dir.join(&self.folder))
     }
 
-    /// The fact store, opened over the same database file. No embedding model
-    /// here (see `facts::tools`), so none is loaded.
-    fn fact_store(&self) -> Result<crate::memory::engine::facts::FactStore> {
+    /// The fact store, opened over the same database file (no embedding model
+    /// here, see `facts::tools`), and the project the chat is in: its bank and
+    /// whether the agent's own facts are still shown beside it. `None` outside a
+    /// project, and when the project has been deleted since the session
+    /// started — the bank named in the environment is then nobody's.
+    fn fact_store_and_project(
+        &self,
+    ) -> Result<(
+        crate::memory::engine::facts::FactStore,
+        Option<(String, bool)>,
+    )> {
         let mut cfg = crate::config::Config::from_env();
         cfg.paths.db_path = PathBuf::from(&self.db_path);
-        let db = Db::open(&cfg).context("open memory DB")?;
-        Ok(crate::memory::engine::facts::FactStore::new(Arc::new(db)))
+        let db = Arc::new(Db::open(&cfg).context("open memory DB")?);
+        let project = self.project_bank.as_deref().and_then(|bank| {
+            let id = bank.strip_prefix("project:")?;
+            match db.get_project(id) {
+                Ok(Some(p)) => Some((bank.to_string(), p.inherit_common)),
+                _ => None,
+            }
+        });
+        Ok((crate::memory::engine::facts::FactStore::new(db), project))
     }
 
     /// What the fact tools may show: this chat's facts and the agent-wide ones,
@@ -272,7 +294,7 @@ impl McpMemoryServer {
     }
 
     #[rmcp::tool(
-        description = "Look through the facts you remember automatically from conversations (dated, one or two sentences each). With a query, finds facts by words and/or by the time it names (\"hôm qua\", \"tháng 3\", \"last week\"); without one, lists the newest. Each line starts with the fact's id, which memory_forget_fact needs. Use it when the user asks what you remember, or before forgetting something."
+        description = "Look through the facts you remember automatically from conversations (dated, one or two sentences each). With a query, finds facts by words and/or by the time it names (\"hôm qua\", \"tháng 3\", \"last week\"); without one, lists the newest. In a project chat the project's own facts come first. Each line starts with the fact's id, which memory_forget_fact needs. Use it when the user asks what you remember, or before forgetting something."
     )]
     fn memory_search_facts(
         &self,
@@ -281,14 +303,20 @@ impl McpMemoryServer {
         >,
     ) -> String {
         use crate::memory::engine::facts::tools;
-        let store = match self.fact_store() {
-            Ok(s) => s,
+        let (store, project) = match self.fact_store_and_project() {
+            Ok(v) => v,
             Err(e) => return format!("Error: {e}"),
         };
         let today = chrono::Local::now().date_naive();
-        match tools::lookup(
+        match tools::lookup_for_chat(
             &store,
             &self.folder,
+            project
+                .as_ref()
+                .map(|(bank, include_common)| tools::ProjectView {
+                    bank,
+                    include_common: *include_common,
+                }),
             p.query.as_deref().unwrap_or(""),
             today,
             p.limit.unwrap_or(tools::DEFAULT_LIMIT),
@@ -308,10 +336,11 @@ impl McpMemoryServer {
             MemoryForgetFactParams,
         >,
     ) -> String {
-        match self.fact_store() {
-            Ok(store) => crate::memory::engine::facts::tools::forget(
+        match self.fact_store_and_project() {
+            Ok((store, project)) => crate::memory::engine::facts::tools::forget_for_chat(
                 &store,
                 &self.folder,
+                project.as_ref().map(|(bank, _)| bank.as_str()),
                 &p.id,
                 self.facts_scope(),
             ),

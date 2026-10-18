@@ -352,5 +352,215 @@
       "must_include": ["VNG"],
       "why": "a statement about 2025 is history and must not hide where the user works now"
     }
-  ]
+  ],
+  "projects": {
+    "about": "Facts that belong to a project. A project keeps its own bank (project:<id>) that every chat of the project reads and writes; the agent's common facts are the facts above (bank main, no chat). `windows` are retained into the project of `project` (p or q) the way the pool does it, in order; `queries` are asked `from` a chat, inside a project or not, and graded like the fact queries. A project fact must never reach a chat outside the project or in another one; the common facts must stay visible inside a project until it stops inheriting them; what is said in one chat of a project must be answerable in another; and a change of mind in one chat must replace what another chat said.",
+    "p": "prj_0000000a",
+    "q": "prj_0000000b",
+    "windows": [
+      {
+        "project": "p",
+        "chat": "web:p-a",
+        "match": "cổng thanh toán của dự án Mặt Trời",
+        "text": "User: cổng thanh toán của dự án Mặt Trời chạy ở cổng 7421\nAssistant: Đã ghi nhận.",
+        "facts": [
+          {
+            "text": "Cổng thanh toán của dự án Mặt Trời chạy ở cổng 7421.",
+            "kind": "world",
+            "when": null,
+            "entities": [
+              "Mặt Trời",
+              "cổng thanh toán"
+            ]
+          }
+        ]
+      },
+      {
+        "project": "p",
+        "chat": "web:p-a",
+        "match": "bản demo của dự án Mặt Trời phải giao",
+        "text": "User: bản demo của dự án Mặt Trời phải giao vào thứ Năm",
+        "facts": [
+          {
+            "text": "Bản demo của dự án Mặt Trời phải giao vào thứ Năm.",
+            "kind": "world",
+            "when": null,
+            "entities": [
+              "Mặt Trời",
+              "bản demo"
+            ]
+          }
+        ]
+      },
+      {
+        "project": "p",
+        "chat": "web:p-b",
+        "match": "dời sang thứ Sáu",
+        "text": "User: bản demo của Mặt Trời dời sang thứ Sáu rồi",
+        "facts": [
+          {
+            "text": "Bản demo của dự án Mặt Trời được dời sang giao vào thứ Sáu.",
+            "kind": "world",
+            "when": null,
+            "entities": [
+              "Mặt Trời",
+              "bản demo"
+            ],
+            "replaces_matching": "thứ Năm"
+          }
+        ]
+      },
+      {
+        "project": "q",
+        "chat": "web:q-a",
+        "match": "ngân sách của dự án Biển Xanh",
+        "text": "User: ngân sách của dự án Biển Xanh là 900 triệu",
+        "facts": [
+          {
+            "text": "Ngân sách của dự án Biển Xanh là 900 triệu.",
+            "kind": "world",
+            "when": null,
+            "entities": [
+              "Biển Xanh",
+              "ngân sách"
+            ]
+          }
+        ]
+      }
+    ],
+    "queries": [
+      {
+        "id": "leak-outside-a-project",
+        "from": {
+          "project": null,
+          "chat": "web:eval"
+        },
+        "text": "Cổng thanh toán của dự án Mặt Trời chạy ở cổng nào?",
+        "must_exclude": [
+          "7421"
+        ],
+        "why": "a chat outside any project, of the same agent, must not see what was said inside one"
+      },
+      {
+        "id": "leak-into-another-project",
+        "from": {
+          "project": "q",
+          "chat": "web:q-a"
+        },
+        "text": "Cổng thanh toán và hạn giao bản demo của dự án Mặt Trời là gì?",
+        "must_exclude": [
+          "7421",
+          "thứ Sáu",
+          "thứ Năm"
+        ],
+        "why": "project Q must not see project P's facts, current or replaced"
+      },
+      {
+        "id": "leak-into-the-other-direction",
+        "from": {
+          "project": "p",
+          "chat": "web:p-a"
+        },
+        "text": "Ngân sách của dự án Biển Xanh là bao nhiêu?",
+        "must_exclude": [
+          "900 triệu"
+        ],
+        "why": "and P must not see Q's"
+      },
+      {
+        "id": "the-project-itself-answers",
+        "from": {
+          "project": "q",
+          "chat": "web:q-a"
+        },
+        "text": "Ngân sách của dự án Biển Xanh là bao nhiêu?",
+        "must_include": [
+          "900 triệu"
+        ],
+        "why": "the control for the three above: the fact is there, so keeping it out is the project's doing"
+      },
+      {
+        "id": "common-facts-reach-the-project",
+        "from": {
+          "project": "p",
+          "chat": "web:p-b"
+        },
+        "text": "Emily hiện sống ở đâu và làm ở đâu?",
+        "must_include": [
+          "Huế",
+          "FPT"
+        ],
+        "why": "the agent's common facts are still known inside a project"
+      },
+      {
+        "id": "common-facts-off",
+        "from": {
+          "project": "p",
+          "chat": "web:p-b",
+          "include_common": false
+        },
+        "text": "Emily hiện sống ở đâu và làm ở đâu?",
+        "must_exclude": [
+          "Huế",
+          "FPT"
+        ],
+        "why": "a project that does not inherit them hides them"
+      },
+      {
+        "id": "own-facts-when-common-off",
+        "from": {
+          "project": "p",
+          "chat": "web:p-b",
+          "include_common": false
+        },
+        "text": "Cổng thanh toán của dự án Mặt Trời chạy ở cổng nào?",
+        "must_include": [
+          "7421"
+        ],
+        "why": "not inheriting the common facts does not blind the project to its own"
+      },
+      {
+        "id": "said-in-another-chat",
+        "from": {
+          "project": "p",
+          "chat": "web:p-b"
+        },
+        "text": "Cổng thanh toán của dự án Mặt Trời chạy ở cổng nào?",
+        "must_include": [
+          "7421"
+        ],
+        "why": "chat B of the project answers what was said in chat A"
+      },
+      {
+        "id": "changed-mind-in-another-chat-b",
+        "from": {
+          "project": "p",
+          "chat": "web:p-b"
+        },
+        "text": "Bản demo của dự án Mặt Trời phải giao vào thứ mấy?",
+        "must_include": [
+          "thứ Sáu"
+        ],
+        "must_exclude": [
+          "thứ Năm"
+        ],
+        "why": "chat B changed what chat A said; B is told the new day, not both"
+      },
+      {
+        "id": "changed-mind-in-another-chat-a",
+        "from": {
+          "project": "p",
+          "chat": "web:p-a"
+        },
+        "text": "Bản demo của dự án Mặt Trời phải giao vào thứ mấy?",
+        "must_include": [
+          "thứ Sáu"
+        ],
+        "must_exclude": [
+          "thứ Năm"
+        ],
+        "why": "and chat A, which said the old day, is told the new one too"
+      }
+    ]
+  }
 }

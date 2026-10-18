@@ -6763,6 +6763,85 @@ paths:
       - projects
       x-handler: projects_context_put
       x-untyped: true
+  /api/projects/{id}/facts:
+    get:
+      operationId: get_api_projects_id_facts
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Project facts list
+      tags:
+      - projects
+      x-handler: project_facts_list
+      x-untyped: true
+    post:
+      operationId: post_api_projects_id_facts
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Project facts add
+      tags:
+      - projects
+      x-handler: project_facts_add
+      x-untyped: true
+  /api/projects/{id}/facts/{fact_id}:
+    delete:
+      operationId: delete_api_projects_id_facts_fact_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: fact_id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Project fact forget
+      tags:
+      - projects
+      x-handler: project_fact_forget
+      x-untyped: true
   /api/provider-catalog:
     get:
       operationId: get_api_provider_catalog
@@ -11233,5 +11312,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 399
-x-untyped-operations: 493
+x-route-count: 401
+x-untyped-operations: 496
