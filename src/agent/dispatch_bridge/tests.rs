@@ -548,6 +548,148 @@ fn activate_next_queued_promotes_oldest_and_picks_up_admin_workspace() {
 }
 
 #[test]
+fn a_queued_parent_keeps_the_workspace_it_was_created_with() {
+    // The profile's workspace-state file belongs to whichever session of the
+    // profile wrote it last. A parent that already knows where it runs (its
+    // project's root) must not be pointed there when it is promoted.
+    let dir = std::env::temp_dir().join(format!("senclaw-qk-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let state_path = dir.join("dispatch-state.json");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(lock_path_for(&state_path));
+    std::fs::write(
+        dir.join("workspace-state-main.json"),
+        r#"{"currentDir":"/tmp/some-other-session"}"#,
+    )
+    .unwrap();
+
+    let bridge = DispatchBridge::new(&state_path);
+    let now = chrono::Utc::now();
+    let parent = |id: &str, age: i64, workspace: Option<&str>| DispatchParent {
+        id: id.into(),
+        goal: "g".into(),
+        admin_folder: "main".into(),
+        chat_jid: None,
+        shared_workspace: workspace.map(String::from),
+        status: "queued".into(),
+        created_at: (now - chrono::Duration::seconds(age)).to_rfc3339(),
+        completed_at: None,
+        tasks: vec![],
+    };
+    bridge
+        .modify_state(|s| {
+            s.parents.push(parent("p_project", 10, Some("/work/alpha")));
+            s.parents.push(parent("p_plain", 5, None));
+        })
+        .unwrap();
+
+    bridge.activate_next_queued("main");
+    let by_id = |bridge: &DispatchBridge, id: &str| {
+        bridge
+            .get_parents()
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap()
+    };
+    let first = by_id(&bridge, "p_project");
+    assert_eq!(first.status, "active");
+    assert_eq!(first.shared_workspace.as_deref(), Some("/work/alpha"));
+
+    // It finishes; the next one has no workspace yet and picks up the file's.
+    bridge
+        .modify_state(|s| {
+            s.parents
+                .iter_mut()
+                .find(|p| p.id == "p_project")
+                .unwrap()
+                .status = "done".into();
+        })
+        .unwrap();
+    bridge.activate_next_queued("main");
+    let second = by_id(&bridge, "p_plain");
+    assert_eq!(second.status, "active");
+    assert_eq!(
+        second.shared_workspace.as_deref(),
+        Some("/tmp/some-other-session")
+    );
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_dag_queued_behind_another_in_a_project_still_runs_in_the_project_root() {
+    // The whole path: the dispatch server creates a parent that has to wait,
+    // and the daemon's bridge promotes it later with no session around.
+    use crate::mcp::dispatch_server::{
+        BuiltinAwarePersonaResolver, DispatchServer, DispatchTaskInput, PersonaResolver,
+    };
+
+    let dir = std::env::temp_dir().join(format!("senclaw-qp-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let state_path = dir.join("dispatch-state.json");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(lock_path_for(&state_path));
+    std::fs::write(&state_path, "{}").unwrap();
+    std::fs::write(
+        dir.join("workspace-state-main.json"),
+        r#"{"currentDir":"/tmp/the-profiles-folder"}"#,
+    )
+    .unwrap();
+
+    let two = || -> Vec<DispatchTaskInput> {
+        ["a", "b"]
+            .iter()
+            .map(|l| {
+                serde_json::from_value(serde_json::json!({
+                    "label": l, "agentName": "persona:researcher", "prompt": "look"
+                }))
+                .unwrap()
+            })
+            .collect()
+    };
+    let server = |root: &str| {
+        let resolver: Box<dyn PersonaResolver> = Box::new(BuiltinAwarePersonaResolver::new(None));
+        DispatchServer::new(&state_path, "main", Some(resolver))
+            .with_state_dir(dir.clone())
+            .with_project_root(Some(root.to_string()))
+    };
+    // Two chats of the same profile, in two projects: the second DAG queues.
+    assert!(
+        !server("/work/alpha")
+            .create_parent("one", two(), None)
+            .is_error
+    );
+    assert!(
+        !server("/work/beta")
+            .create_parent("two", two(), None)
+            .is_error
+    );
+
+    let bridge = DispatchBridge::new(&state_path);
+    let parents = bridge.get_parents();
+    assert_eq!(
+        parents
+            .iter()
+            .map(|p| (p.status.as_str(), p.shared_workspace.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("active", Some("/work/alpha")),
+            ("queued", Some("/work/beta"))
+        ]
+    );
+
+    bridge
+        .modify_state(|s| s.parents[0].status = "done".into())
+        .unwrap();
+    bridge.activate_next_queued("main");
+    let promoted = &bridge.get_parents()[1];
+    assert_eq!(promoted.status, "active");
+    assert_eq!(promoted.shared_workspace.as_deref(), Some("/work/beta"));
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn cleanup_drops_old_done_parents() {
     let path = tmp_state_path("cleanup");
     let bridge = DispatchBridge::new(&path);

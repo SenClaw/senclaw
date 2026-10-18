@@ -126,6 +126,8 @@ pub struct PathsConfig {
     /// Defaults to a sibling `senclaw_cognitive.db` next to `db_path`.
     pub cognitive_db_path: PathBuf,
     pub profiles_dir: PathBuf,
+    /// One folder per project (`<id>/CONTEXT.md`), beside `profiles_dir`.
+    pub projects_dir: PathBuf,
     pub workspace_dir: PathBuf,
     /// Soul Core — who the *human* is (`~/.senclaw/USER.md`).
     ///
@@ -626,6 +628,7 @@ impl Config {
                     "PROFILES_DIR",
                     env_path("AGENTS_DIR", senclaw_data.join("profiles")),
                 ),
+                projects_dir: env_path("PROJECTS_DIR", senclaw_data.join("projects")),
                 workspace_dir: env_path("WORKSPACE_DIR", senclaw_data.join("workspace")),
                 user_profile_path: env_path(
                     "SENCLAW_USER_PROFILE_PATH",

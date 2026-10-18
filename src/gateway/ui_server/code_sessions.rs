@@ -227,6 +227,7 @@ pub(crate) async fn sessions_create(
         llm_config_id: None,
         last_active: Some(now.clone()),
         added_at: now,
+        project_id: None,
     };
     gm.register(&db, &s.config, &binding);
     let language = body

@@ -152,6 +152,12 @@ pub struct DispatchServer {
     /// creates. `None` when the session did not supply one — the clients then
     /// fall back to matching the creating tool call.
     chat_jid: Option<String>,
+    /// The root of the project the chat was created in. A DAG started from a
+    /// project chat runs there, whatever workspace-state file the profile's
+    /// other sessions have left behind.
+    project_root: Option<PathBuf>,
+    /// Where the `workspace-state-<folder>.json` files live (SenClaw's home).
+    state_dir: PathBuf,
     persona_resolver: Option<Box<dyn PersonaResolver>>,
 }
 
@@ -165,8 +171,25 @@ impl DispatchServer {
             state_path: state_path.to_path_buf(),
             admin_folder: admin_folder.to_owned(),
             chat_jid: None,
+            project_root: None,
+            state_dir: crate::util::paths::senclaw_home(),
             persona_resolver,
         }
+    }
+
+    /// Read workspace-state files from `dir` instead of SenClaw's home.
+    #[cfg(test)]
+    pub(crate) fn with_state_dir(mut self, dir: PathBuf) -> Self {
+        self.state_dir = dir;
+        self
+    }
+
+    /// Attach the project root of the session. Separate from [`Self::new`] so
+    /// every existing caller keeps compiling, and a session outside a project
+    /// is exactly what it was.
+    pub fn with_project_root(mut self, root: Option<String>) -> Self {
+        self.project_root = root.filter(|r| !r.trim().is_empty()).map(PathBuf::from);
+        self
     }
 
     /// Attach the originating chat. Separate from [`Self::new`] so every
@@ -210,7 +233,14 @@ impl DispatchServer {
     }
 
     fn read_admin_workspace(&self) -> Option<String> {
-        let state_file = crate::util::paths::senclaw_home()
+        // A project session's folder is its project's root. The state file
+        // below belongs to the agent profile and is rewritten by whichever
+        // session of that profile built its core last.
+        if let Some(root) = &self.project_root {
+            return Some(root.to_string_lossy().to_string());
+        }
+        let state_file = self
+            .state_dir
             .join(format!("workspace-state-{}.json", self.admin_folder));
         let raw = fs::read_to_string(&state_file).ok()?;
         let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -512,7 +542,12 @@ impl DispatchServer {
                 id: parent_id.clone(),
                 admin_folder: self.admin_folder.clone(),
                 chat_jid: self.chat_jid.clone(),
-                shared_workspace: if has_active {
+                // A parent that has to wait for another DAG of the same profile
+                // normally learns its workspace when it is promoted. In a
+                // project the answer does not depend on the moment, so it is
+                // recorded now: promotion happens inside the daemon, where no
+                // session's environment is available to ask.
+                shared_workspace: if has_active && self.project_root.is_none() {
                     None
                 } else {
                     self.read_admin_workspace()
@@ -1288,6 +1323,8 @@ pub struct McpDispatchServer {
     /// a card lands in the conversation that asked for it, not in every chat
     /// sharing the agent profile.
     chat_jid: Option<String>,
+    /// `SENCLAW_PROJECT_ROOT`, set when the session was created in a project.
+    project_root: Option<String>,
     agents_config_dir: Option<String>,
 }
 
@@ -1308,6 +1345,7 @@ impl McpDispatchServer {
             // Absent for a session that predates the variable, and for the
             // hand-run `senclaw dispatch-server`; both are survivable.
             chat_jid: std::env::var("SENCLAW_CHAT_JID").ok().filter(|j| !j.is_empty()),
+            project_root: crate::projects::project_root_from_env(),
             agents_config_dir: std::env::var("SENCLAW_AGENTS_CONFIG_DIR").ok(),
         }))
     }
@@ -1322,6 +1360,7 @@ impl McpDispatchServer {
         };
         DispatchServer::new(&self.state_path, &self.admin_folder, persona_resolver)
             .with_chat_jid(self.chat_jid.clone())
+            .with_project_root(self.project_root.clone())
     }
 }
 
@@ -1760,6 +1799,91 @@ mod fan_out_tests {
         assert_eq!(parent.chat_jid.as_deref(), Some("web:main:abc-123"));
         // The profile is still recorded — it is what serialises DAGs per admin.
         assert_eq!(parent.admin_folder, "main");
+    }
+
+    fn two_inputs() -> Vec<DispatchTaskInput> {
+        ["a", "b"]
+            .iter()
+            .map(|label| DispatchTaskInput {
+                label: (*label).into(),
+                agent_name: "persona:researcher".into(),
+                prompt: "look".into(),
+                depends_on: vec![],
+                checklist: vec![],
+                io: TaskIo::default(),
+                writes: vec![],
+                isolation: TaskIsolation::default(),
+            })
+            .collect()
+    }
+
+    /// The profile's workspace-state file describes whichever session of the
+    /// profile built its core last. A DAG started from a project chat must
+    /// not follow it.
+    #[test]
+    fn a_dag_from_a_project_chat_runs_in_the_projects_root_not_the_profiles_folder() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("dispatch-state.json");
+        std::fs::write(&path, "{}").unwrap();
+        std::fs::write(
+            tmp.path().join("workspace-state-main.json"),
+            r#"{"currentDir":"/another/session/dir"}"#,
+        )
+        .unwrap();
+        let make = |root: Option<&str>| {
+            let resolver: Box<dyn PersonaResolver> =
+                Box::new(BuiltinAwarePersonaResolver::new(None));
+            DispatchServer::new(&path, "main", Some(resolver))
+                .with_state_dir(tmp.path().to_path_buf())
+                .with_project_root(root.map(String::from))
+        };
+        let workspaces = || -> Vec<(String, Option<String>)> {
+            let state: DispatchState =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            state
+                .parents
+                .iter()
+                .map(|p| (p.status.clone(), p.shared_workspace.clone()))
+                .collect()
+        };
+
+        // Outside a project: the profile's file, as always.
+        assert!(!make(None).create_parent("g", two_inputs(), None).is_error);
+        assert_eq!(
+            workspaces(),
+            [(
+                "active".to_string(),
+                Some("/another/session/dir".to_string())
+            )]
+        );
+
+        // A project chat of the same profile: its root, and its parent
+        // waits behind the first one (same profile) with the root already
+        // recorded.
+        assert!(
+            !make(Some("/work/alpha"))
+                .create_parent("g", two_inputs(), None)
+                .is_error
+        );
+        assert_eq!(
+            workspaces()[1],
+            ("queued".to_string(), Some("/work/alpha".to_string()))
+        );
+
+        // A queued parent outside a project still has none until promoted.
+        assert!(!make(None).create_parent("g", two_inputs(), None).is_error);
+        assert_eq!(workspaces()[2], ("queued".to_string(), None));
+    }
+
+    #[test]
+    fn a_blank_project_root_is_no_project() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("dispatch-state.json");
+        std::fs::write(&path, "{}").unwrap();
+        for blank in [Some(String::new()), Some("  ".to_string()), None] {
+            let server = DispatchServer::new(&path, "main", None).with_project_root(blank);
+            assert_eq!(server.project_root, None);
+        }
     }
 
     /// An empty jid means "no chat", not a chat named "".

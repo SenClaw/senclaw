@@ -80,6 +80,12 @@ pub struct GroupBinding {
     pub llm_config_id: Option<String>,
     pub last_active: Option<String>,
     pub added_at: String,
+    /// The [`crate::projects::Project`] this session works in. Set when the
+    /// session is created and never changed afterwards: the working folder,
+    /// the MCP environment and the workspace-state file are all fixed from it
+    /// when the session's core is built. `None` = no project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 // ===== New entity model =====

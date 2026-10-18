@@ -124,6 +124,7 @@ pub(crate) fn row_to_group(row: &Row<'_>) -> Result<GroupBinding> {
         llm_config_id: row.get("llm_config_id")?,
         last_active: row.get("last_active")?,
         added_at: row.get("added_at")?,
+        project_id: row.get::<_, Option<String>>("project_id")?.filter(|p| !p.is_empty()),
     })
 }
 

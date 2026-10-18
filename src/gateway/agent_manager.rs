@@ -82,6 +82,7 @@ impl AgentManager {
             llm_config_id: None,
             last_active: None,
             added_at: now.to_string(),
+            project_id: None,
         };
         group_manager.register(db, config, &default_group);
 

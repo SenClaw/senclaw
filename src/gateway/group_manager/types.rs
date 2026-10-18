@@ -37,6 +37,15 @@ pub(super) struct GroupConfigEntry {
         rename = "llmConfigId"
     )]
     pub(super) llm_config_id: Option<String>,
+    /// The project the session was created in. Absent in a config written
+    /// before projects existed, and for every session outside a project.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "projectId",
+        alias = "project_id"
+    )]
+    pub(super) project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

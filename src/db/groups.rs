@@ -18,8 +18,9 @@ impl super::Db {
                 INSERT INTO groups
                   (jid, folder, name, channel, group_type, requires_trigger,
                    allowed_tools, allowed_paths, allowed_work_dirs,
-                   bot_token, max_messages, llm_config_id, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                   bot_token, max_messages, llm_config_id, last_active, added_at,
+                   project_id)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                 ON CONFLICT(jid) DO UPDATE SET
                   folder            = excluded.folder,
                   name              = excluded.name,
@@ -32,7 +33,11 @@ impl super::Db {
                   bot_token         = excluded.bot_token,
                   max_messages      = excluded.max_messages,
                   llm_config_id     = excluded.llm_config_id,
-                  last_active       = excluded.last_active
+                  last_active       = excluded.last_active,
+                  -- A session's project is fixed when it is created: a caller
+                  -- that builds its binding without one must not detach it.
+                  -- Only deleting the project clears it (`unlink_project_groups`).
+                  project_id        = COALESCE(excluded.project_id, groups.project_id)
                 "#,
                 params![
                     g.jid,
@@ -49,6 +54,7 @@ impl super::Db {
                     g.llm_config_id,
                     g.last_active,
                     g.added_at,
+                    g.project_id,
                 ],
             )?;
             Ok(())
@@ -73,6 +79,32 @@ impl super::Db {
                 .query_map([], |r| Ok(row_to_group(r)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+
+    /// The sessions created in a project, oldest first.
+    pub fn list_groups_in_project(&self, project_id: &str) -> Result<Vec<GroupBinding>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT * FROM groups WHERE project_id = ?1 ORDER BY added_at, jid",
+            )?;
+            let rows = stmt
+                .query_map(params![project_id], |r| Ok(row_to_group(r)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect::<Result<Vec<_>>>()
+        })
+    }
+
+    /// How many sessions each project has (projects with none are absent).
+    pub fn count_groups_per_project(&self) -> Result<std::collections::HashMap<String, u32>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT project_id, COUNT(*) FROM groups WHERE project_id IS NOT NULL GROUP BY project_id",
+            )?;
+            let rows = stmt
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?
+                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
+            Ok(rows)
         })
     }
 
@@ -123,8 +155,9 @@ impl super::Db {
                 INSERT INTO groups
                   (jid, folder, name, channel, requires_trigger,
                    allowed_tools, approved_tools, allowed_paths, allowed_work_dirs,
-                   bot_token, max_messages, llm_config_id, last_active, added_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                   bot_token, max_messages, llm_config_id, last_active, added_at,
+                   project_id)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                 "#,
                 params![
                     binding.jid,
@@ -141,6 +174,7 @@ impl super::Db {
                     binding.llm_config_id,
                     binding.last_active,
                     binding.added_at,
+                    binding.project_id,
                 ],
             )?;
             tx.commit()?;

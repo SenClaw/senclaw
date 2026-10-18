@@ -28,6 +28,7 @@ fn sample_group() -> GroupBinding {
         llm_config_id: Some("llm-openai-1".into()),
         last_active: None,
         added_at: "2026-04-28T00:00:00Z".into(),
+        project_id: None,
     }
 }
 
@@ -546,5 +547,206 @@ fn migration_moves_schedule_allowed_tools_pollution_to_approved() {
         chat.allowed_tools.as_deref(),
         Some(&["Read".into()][..]),
         "chat-group whitelist untouched"
+    );
+}
+
+// ===== Projects: the schema upgrade and the session's project =====
+
+const PRE_PROJECT_GROUPS: &str = r#"
+    CREATE TABLE groups (
+      jid TEXT PRIMARY KEY, folder TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+      channel TEXT NOT NULL DEFAULT 'telegram', group_type TEXT NOT NULL DEFAULT 'chat',
+      is_admin INTEGER NOT NULL DEFAULT 0, requires_trigger INTEGER NOT NULL DEFAULT 1,
+      allowed_tools TEXT, approved_tools TEXT, allowed_paths TEXT, allowed_work_dirs TEXT,
+      bot_token TEXT, max_messages INTEGER, llm_config_id TEXT,
+      last_active TEXT, added_at TEXT NOT NULL
+    );
+    INSERT INTO groups (jid, folder, name, channel, group_type, allowed_work_dirs, added_at)
+      VALUES ('web:main:old1', 'main', 'Old chat', '', 'chat', NULL, '2026-01-01T00:00:00Z');
+    INSERT INTO groups (jid, folder, name, channel, group_type, allowed_work_dirs, approved_tools, added_at)
+      VALUES ('web:main:old2', 'main', 'Old code', '', 'code', '["/work/old"]', '["Bash"]', '2026-01-02T00:00:00Z');
+"#;
+
+fn project_input(name: &str, root: &str) -> crate::projects::NewProject {
+    crate::projects::NewProject {
+        name: name.into(),
+        root: root.into(),
+        description: String::new(),
+        facts_write: crate::projects::FactsWrite::Project,
+        inherit_common: true,
+    }
+}
+
+#[test]
+fn a_pre_project_database_is_upgraded_in_place_and_keeps_every_session() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    {
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(PRE_PROJECT_GROUPS).unwrap();
+    }
+    let db = Db::open_at(tmp.path(), tmp.path(), &cfg()).unwrap();
+
+    // The sessions that were there are there, untouched, and in no project.
+    let old1 = db.get_group("web:main:old1").unwrap().unwrap();
+    let old2 = db.get_group("web:main:old2").unwrap().unwrap();
+    assert_eq!(
+        (old1.name.as_str(), old1.project_id.as_deref()),
+        ("Old chat", None)
+    );
+    assert_eq!(
+        old2.allowed_work_dirs.as_deref(),
+        Some(&["/work/old".to_string()][..])
+    );
+    assert_eq!(old2.project_id, None);
+    assert_eq!(
+        db.get_group_approved_tools("web:main:old2").unwrap(),
+        ["Bash"]
+    );
+
+    // The new table works, and an old session can be created into one afterwards.
+    let p = db
+        .create_project(project_input("Sen", "/work/sen"), 1)
+        .unwrap();
+    db.upsert_group(&GroupBinding {
+        jid: "web:main:new".into(),
+        project_id: Some(p.id.clone()),
+        ..old1.clone()
+    })
+    .unwrap();
+    assert_eq!(
+        db.get_group("web:main:new").unwrap().unwrap().project_id,
+        Some(p.id.clone())
+    );
+    assert_eq!(db.list_groups_in_project(&p.id).unwrap().len(), 1);
+
+    // Opening it again changes nothing (the migration is idempotent).
+    drop(db);
+    let db = Db::open_at(tmp.path(), tmp.path(), &cfg()).unwrap();
+    assert_eq!(db.get_project(&p.id).unwrap().unwrap().root, "/work/sen");
+    assert_eq!(
+        db.get_group("web:main:new").unwrap().unwrap().project_id,
+        Some(p.id)
+    );
+    assert_eq!(db.list_groups().unwrap().len(), 3);
+}
+
+#[test]
+fn the_legacy_unique_folder_rebuild_does_not_lose_the_new_column() {
+    // The oldest shape (`folder UNIQUE`) is rebuilt into a table with a fixed
+    // column list; the project column must be added after that, not before.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    {
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE groups (
+              jid TEXT PRIMARY KEY, folder TEXT UNIQUE NOT NULL, name TEXT NOT NULL DEFAULT '',
+              channel TEXT NOT NULL DEFAULT 'telegram', is_admin INTEGER NOT NULL DEFAULT 0,
+              requires_trigger INTEGER NOT NULL DEFAULT 1, allowed_tools TEXT, allowed_paths TEXT,
+              bot_token TEXT, max_messages INTEGER, last_active TEXT, added_at TEXT NOT NULL
+            );
+            INSERT INTO groups (jid, folder, name, added_at)
+              VALUES ('tg:group:9', 'legacy', 'Legacy', '2025-01-01T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+    }
+    let db = Db::open_at(tmp.path(), tmp.path(), &cfg()).unwrap();
+    let legacy = db.get_group("tg:group:9").unwrap().unwrap();
+    assert_eq!(
+        (legacy.folder.as_str(), legacy.project_id.as_deref()),
+        ("legacy", None)
+    );
+
+    let p = db
+        .create_project(project_input("Sen", "/work/sen"), 1)
+        .unwrap();
+    db.upsert_group(&GroupBinding {
+        jid: "web:legacy:1".into(),
+        folder: "legacy".into(), // the UNIQUE constraint is gone: a second session on the profile
+        channel: String::new(),
+        project_id: Some(p.id.clone()),
+        ..legacy
+    })
+    .unwrap();
+    assert_eq!(
+        db.get_group("web:legacy:1").unwrap().unwrap().project_id,
+        Some(p.id)
+    );
+}
+
+#[test]
+fn a_fresh_database_has_the_project_schema() {
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    db.with_conn(|c| {
+        let tables: Vec<String> = c
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(tables, ["projects"]);
+        let index: i64 = c.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_groups_project'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(index, 1);
+        // The column is constrained: a spelling the code does not know cannot be stored.
+        let bad = c.execute(
+            "INSERT INTO projects (id, name, root, facts_write, created_at, updated_at)
+             VALUES ('prj_00000000', 'x', '/x', 'sometimes', 1, 1)",
+            [],
+        );
+        assert!(bad.is_err());
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn saving_a_session_without_a_project_never_detaches_it() {
+    // Several code paths rebuild a binding from scratch and upsert it
+    // (scheduler self-heal, boot reconciliation, channel auto-registration).
+    // None of them may silently take a session out of its project.
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    let p = db
+        .create_project(project_input("Sen", "/work/sen"), 1)
+        .unwrap();
+    let mut s = sample_group();
+    s.jid = "web:main:1".into();
+    s.channel = String::new();
+    s.project_id = Some(p.id.clone());
+    db.upsert_group(&s).unwrap();
+
+    s.project_id = None;
+    s.name = "renamed".into();
+    db.upsert_group(&s).unwrap();
+    let got = db.get_group("web:main:1").unwrap().unwrap();
+    assert_eq!(
+        (got.name.as_str(), got.project_id.as_deref()),
+        ("renamed", Some(p.id.as_str()))
+    );
+
+    // Only deleting the project detaches (see `delete_project`).
+    db.delete_project(&p.id).unwrap();
+    assert_eq!(
+        db.get_group("web:main:1").unwrap().unwrap().project_id,
+        None
+    );
+}
+
+#[test]
+fn renaming_a_jid_keeps_the_project() {
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    let p = db
+        .create_project(project_input("Sen", "/work/sen"), 1)
+        .unwrap();
+    let mut s = sample_group();
+    s.project_id = Some(p.id.clone());
+    db.upsert_group(&s).unwrap();
+    let moved = db.rename_group_jid(&s.jid, "tg:group:2").unwrap().unwrap();
+    assert_eq!(moved.project_id, Some(p.id.clone()));
+    assert_eq!(
+        db.get_group("tg:group:2").unwrap().unwrap().project_id,
+        Some(p.id)
     );
 }

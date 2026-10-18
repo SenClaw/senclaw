@@ -589,6 +589,12 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn set_project_context(&self, jid: &str, block: Option<String>) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_project_context(block);
+        }
+    }
+
     fn set_turn_context(&self, jid: &str, block: Option<String>) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_turn_context(block);

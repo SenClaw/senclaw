@@ -540,6 +540,30 @@ pub struct CoreMcpParams<'a> {
     /// configuring dispatch also happens to satisfy the virtual-agent server.
     /// The caller says what it wants and the list is passed through verbatim.
     pub servers: &'a [&'a str],
+    /// The project's root folder, for a session created in a project. Put in
+    /// the children's environment ([`with_project_env`]) because they are
+    /// separate processes, started once per session, that do not open the
+    /// database.
+    pub project_root: Option<&'a str>,
+    /// The project's fact bank (`project:<id>`).
+    pub project_bank: Option<&'a str>,
+}
+
+/// Tell an MCP child which project its session belongs to. A session outside
+/// a project sets neither variable, so its environment is what it always was.
+pub fn with_project_env(
+    cfg: &mut McpServerConfig,
+    project_root: Option<&str>,
+    project_bank: Option<&str>,
+) {
+    if let Some(root) = project_root {
+        cfg.env
+            .insert(crate::projects::ENV_PROJECT_ROOT.into(), root.to_owned());
+    }
+    if let Some(bank) = project_bank {
+        cfg.env
+            .insert(crate::projects::ENV_PROJECT_BANK.into(), bank.to_owned());
+    }
 }
 
 /// The built-in servers `AgentPool` has always injected into a chat session.
@@ -635,6 +659,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         cfg.env.extend(part.env);
     }
     cfg.env.insert(CORE_SERVERS_ENV.into(), p.servers.join(","));
+    with_project_env(&mut cfg, p.project_root, p.project_bank);
     cfg
 }
 
@@ -671,6 +696,8 @@ mod tests {
             js_timeout_ms: 5_000,
             js_memory_mb: 128,
             servers: DEFAULT_CORE_SERVERS,
+            project_root: None,
+            project_bank: None,
         }
     }
 
@@ -720,5 +747,42 @@ mod tests {
         assert!(listed.contains("senclaw-workspace"), "{listed}");
         assert!(!listed.contains("senclaw-virtual"), "{listed}");
         assert_eq!(cfg.args, vec!["core-server".to_string()]);
+    }
+
+    /// The children are told the project at spawn; a session outside a
+    /// project gets neither variable, so its environment is unchanged.
+    #[test]
+    fn project_env_reaches_the_children_only_for_a_project_session() {
+        let allowed = vec!["/work/sen".to_string()];
+        let outside = core_mcp_config(sample_params(&allowed));
+        assert!(!outside.env.contains_key(crate::projects::ENV_PROJECT_ROOT));
+        assert!(!outside.env.contains_key(crate::projects::ENV_PROJECT_BANK));
+
+        let mut p = sample_params(&allowed);
+        p.project_root = Some("/work/sen");
+        p.project_bank = Some("project:prj_0a1b2c3d");
+        let inside = core_mcp_config(p);
+        assert_eq!(
+            inside.env.get("SENCLAW_PROJECT_ROOT").map(String::as_str),
+            Some("/work/sen")
+        );
+        assert_eq!(
+            inside.env.get("SENCLAW_PROJECT_BANK").map(String::as_str),
+            Some("project:prj_0a1b2c3d")
+        );
+        // Everything else is identical.
+        let mut rest = inside.env.clone();
+        rest.remove("SENCLAW_PROJECT_ROOT");
+        rest.remove("SENCLAW_PROJECT_BANK");
+        assert_eq!(rest, outside.env);
+
+        // The per-server path (bundling off) uses the same helper.
+        let mut dispatch = dispatch_mcp_config("/d.json", "main", "web:main:1", None);
+        with_project_env(&mut dispatch, Some("/work/sen"), None);
+        assert_eq!(
+            dispatch.env.get("SENCLAW_PROJECT_ROOT").map(String::as_str),
+            Some("/work/sen")
+        );
+        assert!(!dispatch.env.contains_key("SENCLAW_PROJECT_BANK"));
     }
 }

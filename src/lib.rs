@@ -42,6 +42,7 @@ pub mod mcp;
 pub mod memory;
 pub mod patterns;
 pub mod plugins;
+pub mod projects;
 pub mod providers;
 pub mod repo_map;
 pub mod runtime;
@@ -1112,6 +1113,7 @@ fn wire_app_channel_controls(
                         llm_config_id: None,
                         last_active: Some(now.clone()),
                         added_at: now,
+                        project_id: None,
                     };
                     gm.register(&db, &cfg, &binding);
                     app.set_active_session(&sender_id, &jid);

@@ -1788,6 +1788,7 @@ impl ZenEngine {
             project_docs_block.as_deref(),
             always_skills_block.as_deref(),
             opts.user_defaults.as_deref(),
+            opts.project_context.as_deref(),
             operating_rules.as_deref(),
             repo_map_block.as_deref(),
             edit_format_reminder.as_deref(),
@@ -2147,6 +2148,7 @@ impl ZenEngine {
         project_docs: Option<&str>,
         always_skills: Option<&str>,
         user_defaults: Option<&str>,
+        project_context: Option<&str>,
         operating_rules: Option<&str>,
         repo_map: Option<&str>,
         edit_format: Option<&str>,
@@ -2200,6 +2202,14 @@ impl ZenEngine {
             out.push_str(block);
         }
         if let Some(block) = edit_format {
+            out.push_str("\n\n");
+            out.push_str(block);
+        }
+        // What the person wrote about the project this session works in. Text
+        // they type, so it goes after everything the product wrote (the block
+        // itself says it cannot change the safety rules) — and still before
+        // `AGENTS.md`, which stays last.
+        if let Some(block) = project_context {
             out.push_str("\n\n");
             out.push_str(block);
         }
@@ -2697,6 +2707,13 @@ until you have carried out the skill's steps.\n\
     /// configured → the system prompt stays untouched.
     pub fn set_user_defaults(&self, block: Option<String>) {
         self.options.write().unwrap().user_defaults = block;
+    }
+
+    /// Hot-update the rendered `<project>` system-prompt block (set before
+    /// each turn from the project's context file). `None` = no project or no
+    /// context → the system prompt stays untouched.
+    pub fn set_project_context(&self, block: Option<String>) {
+        self.options.write().unwrap().project_context = block;
     }
 
     /// Set what was recalled for the turn about to start (`None` clears it).
@@ -3694,10 +3711,11 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert!(with.contains("## User defaults"));
         let without = ZenEngine::assemble_system_prompt(
-            "base", "/tmp", None, None, None, None, None, None, None, None, None, None,
+            "base", "/tmp", None, None, None, None, None, None, None, None, None, None, None,
         );
         assert!(!without.contains("## User defaults"));
     }
@@ -3769,6 +3787,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(&soul),
         );
         let base_at = out.find("BASE").unwrap();
@@ -3790,6 +3809,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some("<user_operating_rules>\nRULE_MARKER\n</user_operating_rules>"),
             None,
             None,
@@ -3803,10 +3823,103 @@ mod tests {
         );
     }
 
+    /// Every optional block of the prompt, for the order tests below.
+    fn prompt_with(project: Option<&str>, rules: Option<&str>) -> String {
+        ZenEngine::assemble_system_prompt(
+            "BASE_MARKER",
+            "/tmp",
+            Some("SKILLS_MARKER"),
+            Some("DEFERRED_MARKER"),
+            Some("PLAN_MARKER"),
+            Some("DOCS_MARKER"),
+            Some("ALWAYS_MARKER"),
+            Some("DEFAULTS_MARKER"),
+            project,
+            rules,
+            Some("REPOMAP_MARKER"),
+            Some("EDITFORMAT_MARKER"),
+            Some("SOUL_MARKER"),
+        )
+    }
+
+    #[test]
+    fn the_project_block_comes_after_the_products_blocks_and_before_agents_md() {
+        // AGENTS.md is the last thing in the prompt and stays so: it is text
+        // the owner types, and a project context is too, but the owner's own
+        // rules for every chat outrank a description of one project.
+        let project = "<project name=\"p\" root=\"/r\">\nPROJECT_MARKER\n</project>";
+        let rules = "<user_operating_rules>\nRULE_MARKER\n</user_operating_rules>";
+        let out = prompt_with(Some(project), Some(rules));
+        let at = |m: &str| out.find(m).unwrap_or_else(|| panic!("{m} missing"));
+        for earlier in [
+            "BASE_MARKER",
+            "SOUL_MARKER",
+            "SKILLS_MARKER",
+            "DEFERRED_MARKER",
+            "PLAN_MARKER",
+            "DOCS_MARKER",
+            "ALWAYS_MARKER",
+            "DEFAULTS_MARKER",
+            "REPOMAP_MARKER",
+            "EDITFORMAT_MARKER",
+        ] {
+            assert!(
+                at(earlier) < at("PROJECT_MARKER"),
+                "{earlier} must precede the project block"
+            );
+        }
+        assert!(at("PROJECT_MARKER") < at("RULE_MARKER"));
+        assert!(
+            out.ends_with(rules),
+            "AGENTS.md must still be the last block"
+        );
+        assert_eq!(out.matches("PROJECT_MARKER").count(), 1);
+    }
+
+    #[test]
+    fn without_a_project_the_prompt_is_byte_for_byte_what_it_was() {
+        // Nothing but the block differs, whatever else the prompt holds ...
+        let project = "<project name=\"p\" root=\"/r\">\nPROJECT_MARKER\n</project>";
+        let rules = "<user_operating_rules>\nRULE_MARKER\n</user_operating_rules>";
+        let without = prompt_with(None, Some(rules));
+        let with = prompt_with(Some(project), Some(rules));
+        assert_eq!(with.replacen(&format!("\n\n{project}"), "", 1), without);
+        assert!(!without.contains("<project"));
+
+        // ... and with nothing optional at all it is exactly the old shape.
+        let bare = ZenEngine::assemble_system_prompt(
+            "BASE", "/tmp", None, None, None, None, None, None, None, None, None, None, None,
+        );
+        assert_eq!(
+            bare,
+            format!(
+                "BASE\n\n# System\n{}",
+                ZenEngine::collect_system_context("/tmp")
+            )
+        );
+
+        // The option every engine starts with is "no project".
+        assert!(ZenCoreOptions::default().project_context.is_none());
+    }
+
+    #[test]
+    fn the_project_context_is_set_and_cleared_on_the_live_engine() {
+        let e = engine_with_skill_meta("pc1", "s", None, &[]);
+        assert!(e.options.read().unwrap().project_context.is_none());
+        e.set_project_context(Some("<project>x</project>".into()));
+        assert_eq!(
+            e.options.read().unwrap().project_context.as_deref(),
+            Some("<project>x</project>")
+        );
+        // The project goes away (deleted): the next turn clears it.
+        e.set_project_context(None);
+        assert!(e.options.read().unwrap().project_context.is_none());
+    }
+
     #[test]
     fn operating_rules_absent_leaves_prompt_untouched() {
         let without = ZenEngine::assemble_system_prompt(
-            "base", "/tmp", None, None, None, None, None, None, None, None, None, None,
+            "base", "/tmp", None, None, None, None, None, None, None, None, None, None, None,
         );
         assert!(!without.contains("user_operating_rules"));
     }

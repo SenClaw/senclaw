@@ -550,6 +550,7 @@ fn to_group_binding(br: &BindingWithRelations) -> GroupBinding {
         llm_config_id: None,
         last_active: br.binding.last_active.clone(),
         added_at: br.binding.created_at.clone(),
+        project_id: None,
     }
 }
 

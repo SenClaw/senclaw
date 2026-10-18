@@ -37,6 +37,9 @@ pub struct DispatchToolsConfig {
     pub state_path: PathBuf,
     pub admin_folder: String,
     pub agents_config_dir: Option<String>,
+    /// The root of the project the chat was created in (see
+    /// [`DispatchServer::with_project_root`]); `None` outside a project.
+    pub project_root: Option<String>,
 }
 
 impl DispatchToolsConfig {
@@ -52,6 +55,7 @@ impl DispatchToolsConfig {
             Some(Box::new(BuiltinAwarePersonaResolver::new(fs)) as Box<dyn PersonaResolver>)
         };
         DispatchServer::new(&self.state_path, &self.admin_folder, persona_resolver)
+            .with_project_root(self.project_root.clone())
     }
 }
 
@@ -587,6 +591,7 @@ mod tests {
             state_path: path,
             admin_folder: "test-agent".into(),
             agents_config_dir: None,
+            project_root: None,
         })
     }
 

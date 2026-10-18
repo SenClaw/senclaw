@@ -6554,6 +6554,215 @@ paths:
       - plugins
       x-handler: plugins_enable
       x-untyped: true
+  /api/projects:
+    get:
+      operationId: get_api_projects
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects list
+      tags:
+      - projects
+      x-handler: projects_list
+      x-untyped: true
+    post:
+      operationId: post_api_projects
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects create
+      tags:
+      - projects
+      x-handler: projects_create
+      x-untyped: true
+  /api/projects/validate-root:
+    post:
+      operationId: post_api_projects_validate_root
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects validate root
+      tags:
+      - projects
+      x-handler: projects_validate_root
+      x-untyped: true
+  /api/projects/{id}:
+    delete:
+      operationId: delete_api_projects_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects delete
+      tags:
+      - projects
+      x-handler: projects_delete
+      x-untyped: true
+    get:
+      operationId: get_api_projects_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects get
+      tags:
+      - projects
+      x-handler: projects_get
+      x-untyped: true
+    patch:
+      operationId: patch_api_projects_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects update
+      tags:
+      - projects
+      x-handler: projects_update
+      x-untyped: true
+  /api/projects/{id}/chats:
+    get:
+      operationId: get_api_projects_id_chats
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects chats
+      tags:
+      - projects
+      x-handler: projects_chats
+      x-untyped: true
+  /api/projects/{id}/context:
+    get:
+      operationId: get_api_projects_id_context
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects context get
+      tags:
+      - projects
+      x-handler: projects_context_get
+      x-untyped: true
+    put:
+      operationId: put_api_projects_id_context
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects context put
+      tags:
+      - projects
+      x-handler: projects_context_put
+      x-untyped: true
   /api/provider-catalog:
     get:
       operationId: get_api_provider_catalog
@@ -11001,6 +11210,7 @@ tags:
 - name: pairings
 - name: patterns
 - name: plugins
+- name: projects
 - name: provider-catalog
 - name: quicknotes
 - name: runtimes
@@ -11023,5 +11233,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 394
-x-untyped-operations: 484
+x-route-count: 399
+x-untyped-operations: 493

@@ -437,6 +437,7 @@ impl DefaultTaskExecutor {
                     llm_config_id: None,
                     last_active: Some(now.clone()),
                     added_at: now,
+                    project_id: None,
                 };
                 self.db.upsert_group(&binding)?;
                 binding

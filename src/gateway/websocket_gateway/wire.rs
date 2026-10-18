@@ -30,6 +30,9 @@ pub(crate) struct GroupInfo {
     /// group_messages. Powers the sidebar "recent activity" sort.
     #[serde(rename = "lastActivity", skip_serializing_if = "Option::is_none")]
     pub(crate) last_activity: Option<i64>,
+    /// The project the session was created in; absent outside one.
+    #[serde(rename = "projectId", skip_serializing_if = "Option::is_none")]
+    pub(crate) project_id: Option<String>,
 }
 
 pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
@@ -48,6 +51,7 @@ pub(crate) fn to_group_info(g: &crate::types::GroupBinding) -> GroupInfo {
         agent_id: None,
         channel_id: None,
         last_activity: None,
+        project_id: g.project_id.clone(),
     }
 }
 
