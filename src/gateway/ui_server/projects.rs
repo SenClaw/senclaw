@@ -16,6 +16,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, post};
+use axum::Extension;
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,6 +26,7 @@ use crate::db::Db;
 use crate::memory::cognitive::retrievers::build_fts_match;
 use crate::memory::engine::facts::store::{FactKind, Inserted, NewFact, Scope};
 use crate::memory::engine::facts::{self, defense, extract, FactEngine, FactStore};
+use crate::kanban::projects::ProjectBoards;
 use crate::projects::{
     self, check_root, ArchivedFilter, ContextWriteError, FactsWrite, NewProject, Project,
     ProjectPatch, ProjectStoreError, RootRules,
@@ -66,6 +68,7 @@ pub(crate) fn routes<S: Clone + Send + Sync + 'static>(ctx: ProjectsCtx) -> Rout
             get(projects_context_get).put(projects_context_put),
         )
         .route("/api/projects/:id/chats", get(projects_chats))
+        .route("/api/projects/:id/boards", get(projects_boards))
         .with_state(ctx.clone())
         .merge(facts_routes(ctx))
 }
@@ -384,6 +387,7 @@ async fn projects_delete(
     State(ctx): State<ProjectsCtx>,
     Path(id): Path<String>,
     Query(q): Query<DeleteQuery>,
+    boards: Option<Extension<ProjectBoards>>,
 ) -> ApiResult {
     let db = ctx.db()?;
     if q.purge != Some(true) {
@@ -403,7 +407,9 @@ async fn projects_delete(
     // to retry it from; this way the project is still there to purge again.
     load(&ctx, &id)?;
     let deleted_facts = purge_fact_bank(&ctx, &id).await?;
+    let root = db.get_project(&id).ok().flatten().map(|p| p.root);
     let detached = db.delete_project(&id)?;
+    release_boards(boards, &id, root.as_deref());
     let home = crate::util::paths::senclaw_home();
     for chat in &detached {
         // Their own workspace-state file was only meaningful inside the project.
@@ -742,6 +748,40 @@ async fn purge_fact_bank(ctx: &ProjectsCtx, id: &str) -> Result<usize, ApiError>
         .await
         .map_err(ApiError::internal)?
         .map_err(ApiError::internal)
+}
+
+// ===== Boards =====
+
+/// GET /api/projects/:id/boards — the kanban boards of the project, with the
+/// folder their workers run in.
+async fn projects_boards(
+    State(ctx): State<ProjectsCtx>,
+    Path(id): Path<String>,
+    boards: Option<Extension<ProjectBoards>>,
+) -> ApiResult {
+    let p = load(&ctx, &id)?;
+    let Some(Extension(boards)) = boards else {
+        return Err(ApiError::plain(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "kanban_unset",
+        ));
+    };
+    let rows = boards.list(&p.id).map_err(ApiError::internal)?;
+    Ok(Json(json!({ "boards": rows })))
+}
+
+/// A deleted project's boards leave it and keep running where they ran. The
+/// board store is a file of its own, so this is the daemon's job (there is no
+/// foreign key to cascade).
+fn release_boards(boards: Option<Extension<ProjectBoards>>, id: &str, root: Option<&str>) {
+    let Some(Extension(boards)) = boards else {
+        return;
+    };
+    match boards.release(id, root.unwrap_or_default(), chrono::Utc::now().timestamp()) {
+        Ok(n) if n > 0 => tracing::info!("[projects] {n} board(s) left the deleted project {id}"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("[projects] could not release the boards of {id}: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -1694,5 +1734,210 @@ mod tests {
             .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(f.store().count("project:prj_0a1b2c3d").unwrap(), 1);
+    }
+}
+
+#[cfg(test)]
+mod boards_tests {
+    use super::*;
+    use crate::kanban::projects::{sample_project, StaticDirectory};
+    use axum::body::Body;
+    use axum::http::{Method, Request};
+    use tower::ServiceExt;
+
+    struct Rig {
+        ctx: ProjectsCtx,
+        boards: ProjectBoards,
+        kanban: Arc<crate::kanban::Db>,
+        project: Project,
+        dir: tempfile::TempDir,
+    }
+
+    fn rig() -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::from_env();
+        config.paths.projects_dir = dir.path().join("data").join("projects");
+        let db = Arc::new(Db::open_in_memory(&config).unwrap());
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let root = std::fs::canonicalize(root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let project = db
+            .create_project(
+                projects::NewProject {
+                    name: "Sen".into(),
+                    root: root.clone(),
+                    description: String::new(),
+                    facts_write: FactsWrite::Project,
+                    inherit_common: true,
+                },
+                1,
+            )
+            .unwrap();
+        let kanban = Arc::new(crate::kanban::Db::open(&dir.path().join("kanban.db")).unwrap());
+        let directory: crate::kanban::projects::SharedDirectory =
+            Arc::new(StaticDirectory(vec![sample_project(
+                &project.id,
+                "Sen",
+                &root,
+            )]));
+        Rig {
+            ctx: ProjectsCtx {
+                db: Some(db),
+                config: Arc::new(config),
+            },
+            boards: ProjectBoards::new(Arc::clone(&kanban), Some(directory)),
+            kanban,
+            project,
+            dir,
+        }
+    }
+
+    impl Rig {
+        async fn call(&self, method: Method, uri: &str, with_boards: bool) -> (StatusCode, Value) {
+            let mut app: Router<()> = routes(self.ctx.clone());
+            if with_boards {
+                app = app.layer(Extension(self.boards.clone()));
+            }
+            let req = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn the_boards_of_a_project_come_with_the_folder_their_workers_run_in() {
+        let r = rig();
+        let id = &r.project.id;
+        let mine = r
+            .kanban
+            .create_board_in("Mine", "", true, None, Some(id), 5)
+            .unwrap();
+        let own = format!("{}/api", r.project.root);
+        r.kanban
+            .create_board_in("Api", "", true, Some(&own), Some(id), 4)
+            .unwrap();
+        r.kanban
+            .create_board_in("Other", "", true, None, Some("prj_ffffffff"), 3)
+            .unwrap();
+        r.kanban.create_board("Plain", "", true, None, 2).unwrap();
+
+        let (status, body) = r
+            .call(Method::GET, &format!("/api/projects/{id}/boards"), true)
+            .await;
+
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let boards = body["boards"].as_array().unwrap();
+        assert_eq!(boards.len(), 2);
+        assert_eq!(boards[0]["id"], mine);
+        assert_eq!(
+            boards[0]["effective_workspace_dir"],
+            r.project.root.as_str()
+        );
+        assert_eq!(boards[1]["effective_workspace_dir"], own.as_str());
+        assert!(boards.iter().all(|b| b["project_id"] == id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_project_is_404_and_a_daemon_without_a_board_store_says_so() {
+        let r = rig();
+        let (status, body) = r
+            .call(Method::GET, "/api/projects/prj_ffffffff/boards", true)
+            .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::NOT_FOUND, Some("project_not_found"))
+        );
+        let (status, body) = r
+            .call(
+                Method::GET,
+                &format!("/api/projects/{}/boards", r.project.id),
+                false,
+            )
+            .await;
+        assert_eq!(
+            (status, body["error"].as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, Some("kanban_unset"))
+        );
+    }
+
+    #[tokio::test]
+    async fn purging_a_project_frees_its_boards_to_run_where_they_ran_and_archiving_leaves_them() {
+        let r = rig();
+        let id = r.project.id.clone();
+        let bare = r
+            .kanban
+            .create_board_in("Bare", "", true, None, Some(&id), 1)
+            .unwrap();
+        let own = format!("{}/api", r.project.root);
+        let api = r
+            .kanban
+            .create_board_in("Api", "", true, Some(&own), Some(&id), 1)
+            .unwrap();
+        let other = r
+            .kanban
+            .create_board_in("Other", "", true, None, Some("prj_ffffffff"), 1)
+            .unwrap();
+
+        // Archiving hides the project but changes nothing about its boards.
+        let (status, _) = r
+            .call(Method::DELETE, &format!("/api/projects/{id}"), true)
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(r.kanban.boards_of_project(&id).unwrap().len(), 2);
+
+        let (status, body) = r
+            .call(
+                Method::DELETE,
+                &format!("/api/projects/{id}?purge=true"),
+                true,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let bare = r.kanban.board_meta(bare).unwrap().unwrap();
+        assert_eq!(bare.project_id, None);
+        assert_eq!(bare.workspace_dir.as_deref(), Some(r.project.root.as_str()));
+        let api = r.kanban.board_meta(api).unwrap().unwrap();
+        assert_eq!(
+            (api.project_id, api.workspace_dir.as_deref()),
+            (None, Some(own.as_str()))
+        );
+        let other = r.kanban.board_meta(other).unwrap().unwrap();
+        assert_eq!(other.project_id.as_deref(), Some("prj_ffffffff"));
+        // The folder itself is untouched.
+        assert!(std::path::Path::new(&r.project.root).is_dir());
+        drop(r.dir);
+    }
+
+    #[tokio::test]
+    async fn a_purge_without_a_board_store_still_deletes_the_project() {
+        let r = rig();
+        let id = r.project.id.clone();
+        let (status, _) = r
+            .call(
+                Method::DELETE,
+                &format!("/api/projects/{id}?purge=true"),
+                false,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = r
+            .call(Method::GET, &format!("/api/projects/{id}"), false)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

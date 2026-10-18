@@ -6689,6 +6689,29 @@ paths:
       - projects
       x-handler: projects_update
       x-untyped: true
+  /api/projects/{id}/boards:
+    get:
+      operationId: get_api_projects_id_boards
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Projects boards
+      tags:
+      - projects
+      x-handler: projects_boards
+      x-untyped: true
   /api/projects/{id}/chats:
     get:
       operationId: get_api_projects_id_chats
@@ -11312,5 +11335,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 401
-x-untyped-operations: 496
+x-route-count: 402
+x-untyped-operations: 497

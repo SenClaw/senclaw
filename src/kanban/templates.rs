@@ -212,7 +212,21 @@ impl Db {
         template: &ColumnTemplate,
         now: i64,
     ) -> Result<i64> {
-        let board_id = self.create_board(title, description, false, workspace_dir, now)?;
+        self.create_board_from_template_in(title, description, workspace_dir, None, template, now)
+    }
+
+    /// [`Db::create_board_from_template`] for a board in a project.
+    pub fn create_board_from_template_in(
+        &self,
+        title: &str,
+        description: &str,
+        workspace_dir: Option<&str>,
+        project_id: Option<&str>,
+        template: &ColumnTemplate,
+        now: i64,
+    ) -> Result<i64> {
+        let board_id =
+            self.create_board_in(title, description, false, workspace_dir, project_id, now)?;
         self.with_conn(|c| {
             for (i, tc) in template.columns.iter().enumerate() {
                 c.execute(

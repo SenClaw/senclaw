@@ -12,7 +12,9 @@ pub mod db;
 pub mod dispatch;
 pub mod llm;
 pub mod mcp;
+pub mod projects;
 pub mod templates;
 
-pub use api::{make_state, AppState};
+pub use api::{make_state, make_state_with, AppState};
 pub use db::Db;
+pub use projects::{ProjectDirectory, ProjectInfo};

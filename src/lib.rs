@@ -1864,7 +1864,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // daemon UI server (/api/kanban/*, wired where the UI router is built), the
     // native Flutter screen renders it, the `kanban-server` subcommand serves
     // its MCP to agents, and the in-process MCPDispatcher drives it directly.
-    let kanban_state = kanban::make_state();
+    // The board store keeps its own file and never opens the daemon's database:
+    // it asks this directory which project a board belongs to.
+    let project_directory: Arc<dyn kanban::ProjectDirectory> =
+        Arc::new(projects::DbProjectDirectory::new(
+            Arc::clone(&db),
+            cfg.paths.projects_dir.clone(),
+            projects::RootRules::from_config(&cfg),
+        ));
+    let kanban_state = kanban::make_state_with(Some(Arc::clone(&project_directory)));
 
     // Auto-launch + auto-register MCP servers declared by installed Space Apps
     // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
@@ -3093,10 +3101,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 env: Default::default(),
             };
             let provider: std::sync::Arc<dyn DispatchProvider> =
-                std::sync::Arc::new(kanban::dispatch::KanbanDispatchProvider::new(
-                    std::sync::Arc::clone(&kanban_state.db),
-                    worker_mcp,
-                ));
+                std::sync::Arc::new(
+                    kanban::dispatch::KanbanDispatchProvider::new(
+                        std::sync::Arc::clone(&kanban_state.db),
+                        worker_mcp,
+                    )
+                    .with_projects(std::sync::Arc::clone(&project_directory)),
+                );
             let sources: Vec<std::sync::Arc<dyn DispatchSource>> = vec![std::sync::Arc::new(
                 LocalDispatchSource::new("kanban", provider),
             )];
@@ -3477,6 +3488,11 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 kanban::api::api_router(std::sync::Arc::clone(&kanban_state)),
             )
             .merge(cowork_router)
+            // What the project routes need from the board store.
+            .layer(axum::Extension(kanban::projects::ProjectBoards::new(
+                std::sync::Arc::clone(&kanban_state.db),
+                Some(std::sync::Arc::clone(&project_directory)),
+            )))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&api_auth),
                 gateway::ui_server::auth::http_auth_mw,
