@@ -1646,3 +1646,5 @@ async fn real_extractor_keyword_only() {
 async fn real_extractor_with_vectors() {
     run_real_extractor("hashed-word vectors", true).await;
 }
+
+mod real_project;

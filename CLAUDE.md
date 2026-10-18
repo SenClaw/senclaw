@@ -79,6 +79,7 @@ Releases are tag-driven (`vX.Y.Z` → `.github/workflows/release.yml` publishes 
 - **`channels/`** — Telegram (teloxide), Feishu/Lark (REST + WS long-connection), WeChat (iLink long-polling) adapters. QQ was removed on 2026-09-12 (never ported past a stub)
 - **`mcp/`** — MCP servers exposed to agents: admin, dispatch, memory, schedule, send, virtual worker, workspace, local Wiki (git)
 - **`memory/`** — FTS5 full-text search + vector similarity (sqlite-vec, not yet wired in Rust). Chunking, embedding cache, query rewrite. Providers: OpenAI, OpenRouter, Ollama, local (a GGUF embedding model run by the llama.cpp runtime). `memory/engine/` is the write and read path for what the agent remembers (see "Memory engine")
+- **`projects/`** — A project: one root folder, a context file, a fact bank, and the sessions and kanban boards that belong to it (see "Projects")
 - **`scheduler/`** — Cron/interval/once task execution with five context modes: `isolated` (fresh session), `group` (shared chat context), `notify` (push-only), `script` (shell), `script-agent` (shell output fed to agent)
 - **`db/`** — rusqlite wrapper (Mutex-protected connection). Tables: `groups`, `channel_messages` (FIFO), `scheduled_tasks`, `task_run_logs`, `router_state`. Memory tables in `memory::schema`
 - **`wiki/`** — Git-backed knowledge base that converts agent outputs into structured, searchable entries
@@ -697,17 +698,17 @@ Rules for Claude:
   keep `hit.arm = "facts"`, as the fusion rule above requires; only the strategy name differs. `inherit_common=false` makes
   the four ordinary fact arms answer nothing, so only the project's own facts remain. A reflection window is per chat even
   when the bank is shared (`reflection::window_key`): the extractor reads one conversation at a time.
-- **A kanban worker reads its project's bank and leaves one line in it.** A card of a board in a project is started with a
-  `<memory_context>` block ahead of its title: `projects::worker_recall_query` reads the project's bank and nothing else (a
-  worker has no profile, so no agent-wide facts and `inherit_common` has no say; `facts_write` and archiving do not matter to a
-  read). The wait is bounded (`RECALL_BUDGET` in `kanban/dispatch.rs`, 3 s for all the cards of a tick together); an error, a
-  panic or a timeout is a log line and the card runs without the block. The block drops `format::DETAIL_HINT`: a worker has no
-  memory tools. When the worker closes a card itself with `kanban_complete` and a summary, `Kanban task "<title>" completed:
-  <summary>` is retained in the background into `projects::worker_fact_target` — the project's bank for `facts_write=project`,
-  nothing for `chat` (no chat to tag) or `off`. The summary is the card's own `complete` comment, not
-  `Outcome::Completed::summary`, which is only the first line of the worker's last answer; a blocked card, one left for
-  `finalize` to close, an empty summary, `Failed` and `TimedOut` retain nothing. The kanban module reaches both only through
-  `ProjectDirectory::{recall, retain}`, so it never imports the fact store.
+- **A kanban worker reads its project's bank, and leaves one line in it only when `SENCLAW_DISPATCH_CARD_FACTS=true` (default off).** A card of a board in a project
+  is started with a `<memory_context>` block ahead of its title: `projects::worker_recall_query` reads the project's bank and nothing else (a worker has no profile, so no
+  agent-wide facts and `inherit_common` has no say; `facts_write` and archiving do not matter to a read). The wait is bounded (`RECALL_BUDGET` in `kanban/dispatch.rs`,
+  3 s for all the cards of a tick together); an error, a panic or a timeout is a log line and the card runs without the block. The block drops `format::DETAIL_HINT`: a
+  worker has no memory tools. Keeping a finished card is decided in ONE place, `projects::worker_fact_target(project, enabled)`: with the switch on, when the worker closes
+  a card itself with `kanban_complete` and a summary, `Kanban task "<title>" completed: <summary>` is retained in the background into the project's bank for
+  `facts_write=project` (nothing for `chat` — no chat to tag — or `off`). The summary is the card's own `complete` comment, not `Outcome::Completed::summary`, which is only the
+  first line of the worker's last answer; a blocked card, one left for `finalize` to close, an empty summary, `Failed` and `TimedOut` retain nothing. It is off because on
+  gemma-4-e2b (28 summaries × 3 runs) every empty summary still became "Kanban task X completed" and 31–44% of what was kept was that or a copy of another fact; do not
+  flip the default without re-measuring (`memory::engine::eval::real_project`). The kanban module reaches both only through `ProjectDirectory::{recall, retain}`, so it
+  never imports the fact store.
 - **A fact a person typed (`source = 'manual'`) is never replaced by what a conversation says** — `FactStore::supersede`
   refuses it, whether the model named it in `replaces` or a slot would retire it. Adding one is `POST /api/projects/:id/facts`
   (no model, secrets refused, the same words already stored become the typed fact); changing one is delete + add.
@@ -726,6 +727,44 @@ Rules for Claude:
   reaches the block goes through `defang`.
 - **Run the eval after touching ranking or extraction**: `cargo test --lib memory::engine::eval -- --nocapture`. The old
   three-block flow survives only as `engine::legacy` (`#[cfg(test)]`), the baseline the eval measures against.
+
+## Projects (`src/projects/`)
+
+A **project** is a row in `senclaw.db` (`projects`) with one root folder, a context file (`<data home>/projects/<id>/CONTEXT.md`), a fact bank (`project:<id>`), and
+`groups.project_id` / `boards.project_id` pointing at it (sessions and boards are N:1). User guide, REST/WS table and the accepted limits:
+[docs/projects.md](docs/projects.md); design and the reports behind it: `plans/261018-1618-project-feature/`. Where a fact goes and what a question also reads
+are the project bullets under "Memory engine" — this section is the rest.
+
+Rules for Claude:
+
+- **A session's project is fixed when the session is created.** `register:group` takes `projectId`; `update:group` refuses to change, drop or add one
+  (`check_update_keeps_project`). A core is built once from the project (folder, `allowed_work_dirs`, MCP env, state file) and nothing rebuilds it:
+  `destroy_agent_full` is only reached on shutdown and leaves the old `core-server` running. "Move a chat to another project" is not a flag to flip.
+- **`GroupBinding.project_id` survives every upsert.** `upsert_group` is `COALESCE(excluded.project_id, groups.project_id)` because at least eight places rebuild
+  a binding from scratch (scheduler self-heal, boot reconcile from `config.json`, channels, cowork); only `Db::delete_project` detaches a session.
+- **The workspace-state file is named in ONE place, `projects::workspace_state_key(&binding)`**: the profile folder outside a project, `<folder>@<12 hex of sha256(jid)>`
+  inside one. Never format `workspace-state-{folder}` by hand. Before this, two code sessions of one profile saw each other's folder through `workspace_info`, relative
+  `datagen` paths and `doc_write`, and a DAG ran in the folder of whichever session had built its core last. Deleting a project session removes its own file; the
+  profile's file is shared and stays. Sessions outside a project still use it (accepted limit).
+- **A child process learns the project from its environment at spawn** (`SENCLAW_PROJECT_ROOT`, `SENCLAW_PROJECT_BANK`), never from the database later: the MCP
+  servers are separate processes started once per session. The dispatch and virtual servers read the root before any state file, and a **queued** DAG parent gets its
+  `shared_workspace` when it is created, because `activate_next_queued` runs inside the daemon where no session's environment exists.
+- **A root is checked again every time it is used** (`recheck_root`: each core build, each card claim): the folder can be renamed, deleted or replaced by a link after
+  the project was saved. A failing root refuses the core or blocks the card — it never falls back to another folder or to HOME. Refused: `/`, `$HOME` and anything
+  that contains it, `~/.senclaw`, `profiles/`, `projects/`, and a canonical root another project already has. Nothing ever writes inside a root.
+- **The context is read from disk on every turn, and only a person writes it.** The `<project>` block enters `assemble_system_prompt` immediately **before**
+  `operating_rules`, so AGENTS.md stays last; a project with no context leaves the prompt byte-identical to no project (tests pin both). It is cut at 8,000 characters and
+  `</project` is defanged. **No agent tool writes the context, and none writes a project fact by hand** (`source = 'manual'` comes from REST only): a file or store the
+  agent can edit carries whatever a web page said into every later turn.
+- **Kanban reaches a project only through `kanban::ProjectDirectory`** (wired in `run_daemon`; `None` for the stdio `kanban-server`, which therefore has no project
+  context). A worker gets the context by *appending to `guidance`* in `claim_ready`, never through `OneShotOptions.custom_rules`: nothing reads `custom_rules` (a
+  workflow's guidance and the background runner's `continuity_context` write to it as well, and are ignored the same way).
+- **Archive hides, purge releases.** Archived: sessions, boards, facts and context stay and keep working. Purge deletes the bank first and the row last (a failure
+  leaves a project to purge again), detaches the sessions (history kept, their state files removed), gives the boards `project_id = NULL` and `workspace_dir = old
+  root`, and removes `CONTEXT.md`.
+- **Accepted limits, not bugs to fix in passing** ([docs/projects.md](docs/projects.md) §8): the DAG queue and Stop are per profile; a running core keeps its old root
+  after a root edit or purge; two chats or workers can edit one tree; project `code` sessions show in `/api/code/sessions`; personal facts said in a project chat stay in
+  its bank; extraction was measured only on gemma-4-e2b, not on the user's e4b (report `test-261019-0112-project-p5-measure.md`) — on e2b a changed value does not retire the old fact, and a worker never loads the deferred kanban tools with `ToolSearch`, so it cannot call `kanban_complete`.
 
 ## Waiting on long jobs: watch mode (`src/scheduler/watch.rs`)
 

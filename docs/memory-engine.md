@@ -33,7 +33,7 @@ tại FPT." (triplet giữ *ai–gì–gì* và mất *vì sao / khi nào*). Cod
 | Quét secret | [`defense.rs`](../src/memory/engine/facts/defense.rs) | key/token/private key/thẻ (Luhn) → `[REDACTED:<loại>]`. Email, số điện thoại, tên **không** bị xoá |
 | Trích xuất | [`extract.rs`](../src/memory/engine/facts/extract.rs) | prompt lấy từ Hindsight (chọn lọc, ngày tuyệt đối, giải đại từ, `world` vs `experience`) + hướng dẫn tiếng Việt; JSON phẳng 4 trường cho model nhỏ; parser chịu được fence/prose/mảng trần, đọc **giá trị JSON hoàn chỉnh đầu tiên** (thừa `}` ở cuối thì bỏ qua) và bù `]`/`}` model quên đóng (ở cuối, hoặc trước dấu đóng của vòng ngoài khi `]` của mảng bị rơi) — trừ khi câu trả lời dừng giữa một chuỗi (câu bị cắt nửa chừng không được lưu). Một phần tử hỏng trong mảng (khoá lặp `{"text{"text":…`) chỉ làm mất chính nó: mảng không đọc được thì từng phần tử được parse riêng, phần tử hỏng bị bỏ và ghi một cảnh báo `kept`/`dropped`; câu trả lời đó **không** tính vào `failed_chunks` (chỉ câu không đọc được phần tử nào, hoặc mảng không được đóng vì bị cắt, mới tính) |
 | Retain | [`retain.rs`](../src/memory/engine/facts/retain.rs), [`restated.rs`](../src/memory/engine/facts/restated.rs) | mọi lỗi chỉ đếm và log (`RetainReport`), không bao giờ ném; `restated.rs` nhận ra fact model chỉ nhắc lại (xem dưới) |
-| Nguồn | [`reflection.rs`](../src/agent/agent_pool/reflection.rs), handler `compact:exec` trong `pool.rs` | `retain_text(config, &FactTarget { bank, origin }, text, source)` với `source` = `reflection` \| `compaction`; đích do `projects::fact_target` chọn (bank của profile gắn với chat, hoặc `project:<id>` không gắn chat) |
+| Nguồn | [`reflection.rs`](../src/agent/agent_pool/reflection.rs), handler `compact:exec` trong `pool.rs` | `retain_text(config, &FactTarget { bank, origin }, text, source)` với `source` = `reflection` \| `compaction` \| `kanban` (summary của card, xem "Project"); đích do `projects::fact_target` chọn (bank của profile gắn với chat, hoặc `project:<id>` không gắn chat) |
 
 Model trích xuất lấy từ slot `active_cognitive_id` (rơi về model chat đang dùng). Mỗi cửa sổ = **một** lần gọi.
 
@@ -119,6 +119,30 @@ bỏ qua. [`format.rs`](../src/memory/engine/format.rs): khối đánh số, m�
 
 **`MEMORY.md` không phải arm.** Nó là ngữ cảnh ghim (chỉ dẫn thường trực), **bật mặc định** (`SENCLAW_PRE_RETRIEVAL=false` để tắt): mỗi lượt đi nguyên văn trong khối `<memory>` cùng ngữ cảnh của lượt, cắt ở 8.000 ký tự (kèm dòng báo "đọc file để xem phần còn lại") để một file phình to không ăn hết ngữ cảnh mỗi lượt.
 
+## Project: bank thứ hai
+
+Chat tạo trong một **project** ([`projects.md`](projects.md)) có thêm một bank fact `project:<id>` ngoài bank của profile. Đích **ghi** do `facts_write` của project, được quyết ở **một** chỗ —
+`projects::fact_target` —, mọi nơi ghi (cửa sổ reflection, compaction, worker kanban) đi qua nó dưới dạng `FactTarget { bank, origin }`:
+
+| Chat | Bank | `origin` |
+|---|---|---|
+| ngoài project, hoặc project có `facts_write=chat` | bank của profile | jid của chat (như trước) |
+| trong project, `facts_write=project` (mặc định) | `project:<id>` | rỗng ⇒ mọi chat của project cùng đọc, xác nhận và thay thế fact của nhau |
+| trong project, `facts_write=off` | không ghi | — |
+
+**Đọc**: `RecallQuery.project` do `projects::recall_scope` dựng mỗi lượt. Bốn arm `ProjectFacts` chạy đúng bốn chiến lược trên bank project (`Scope::Agent`, `folder` đổi thành bank) và **không trả gì** khi câu hỏi không đến từ project;
+nhãn arm vẫn là `facts` (luật fusion). `inherit_common=false` làm bốn arm thường trả rỗng nên chỉ còn fact project. Cửa sổ reflection vẫn **theo từng chat** dù bank chung: extractor đọc một hội thoại mỗi lần.
+
+**Worker kanban** của board gắn project không có profile và không có chat: đầu mỗi card nó nhận khối `<memory_context>` chỉ gồm bank project (`projects::worker_recall_query`, không fact chung, không dòng gợi ý
+`memory_recall` vì worker không có tool đó), chờ tối đa 3 giây cho cả tick. Lưu summary của card thành fact là **tuỳ chọn, mặc định tắt** (`SENCLAW_DISPATCH_CARD_FACTS=true`, `projects::worker_fact_target(project, enabled)` là chỗ duy nhất quyết). Khi bật và worker tự `kanban_complete` kèm summary,
+`Kanban task "<tiêu đề>" completed: <summary>` (cắt 4.000 byte) được retain nền vào bank project với `source=kanban`. Summary là comment `complete` của chính worker — **không** phải dòng đầu câu trả lời cuối — và card để dispatcher tự đóng, bị block, hết giờ hay summary rỗng thì không retain gì.
+
+Fact người gõ (`source=manual`) không bao giờ bị hội thoại thay (`supersede` từ chối cả `replaces` lẫn slot). Xoá bank theo lô 500 hàng, nhả khoá và nghỉ 10 ms giữa lô — một `DELETE` đơn là bậc hai vì trigger FTS (20.000 fact ≈ 18–24 s chặn mọi truy vấn).
+
+**Đã đo bằng extractor kịch bản**: đường ống, cách ly và đổi ý xuyên chat (eval: 10 ca `projects` + 4 ca `worker`, cả hai chế độ embedding; 22 câu cũ không tụt; arm project p95 ≤ 52 ms trên bank 5.000 fact có vector).
+**Đã đo trên model thật nhỏ** (gemma-4-e2b qua sen-mlx, **không phải** e4b của người dùng, 3 lần mỗi phép đo; [`projects.md`](projects.md) mục 9): 41–50% fact lưu vào bank project từ cửa sổ hỗn hợp là cá nhân/lẫn; fact cũ **không** bị thay khi đổi ý (3/3); 28 summary card cho 36–48 fact, 31–44% là rác (câu "đã hoàn thành" trống rỗng, bản chép lại fact của card khác bằng tiếng khác hoặc gán nhầm card) — nên mặc định tắt. Model chép lại `KNOWN FACTS` thành fact mới mỗi khi có thể: `restated` không bắt được bản dịch sang tiếng khác.
+**Chưa đo trên e4b thật.**
+
 ## Memory, profile và context cập nhật thế nào
 
 | | Chứa gì | **Ghi** khi nào, bởi ai | **Đọc** khi nào | Sống bao lâu |
@@ -127,6 +151,8 @@ bỏ qua. [`format.rs`](../src/memory/engine/format.rs): khối đánh số, m�
 | **Note curated** + `MEMORY.md` | quyết định, ghi chú có chủ đích | agent gọi `memory_save` hoặc người sửa tay. **Không còn tự sinh từ compaction** | note: mỗi lượt nếu `memoryRecall`; `MEMORY.md`: nguyên văn (mặc định bật, cắt 8.000 ký tự) | bền (file) |
 | **Đồ thị tri thức** | tài liệu upload, `cog_add`, SOUL của agent | upload / `cog_add` / ingest SOUL. **Không còn từ chat** | arm `cognitive` nếu `preCognitive` | bền, mờ dần theo decay |
 | **Profile** `USER.md` | người dùng là ai + chỉ dẫn thường trực (field, directive) | agent gọi `profile_update` khi người dùng nêu sự thật bền / sở thích; Settings UI. **Engine không tự ghi** | **một lần mỗi phiên** trong ngữ cảnh lượt đầu, lọc tier (chat nhóm chỉ thấy public) | bền (file); directive cũ bị `superseded` |
+| **Kho fact của project** | sự thật rút ra từ các chat của một project; fact người gõ tay | cùng đường retain với kho fact nhưng vào bank `project:<id>`, không gắn chat, khi `facts_write=project` (mặc định); người gõ qua `POST /api/projects/:id/facts` (không model, `source=manual`) | **mỗi lượt** của chat trong project (thêm bốn arm trên bank này, chung ngân sách 600 từ) và **đầu mỗi card** của board gắn project (chỉ bank này) | bền; xoá bằng `DELETE /api/projects/:id/facts/:factId` hoặc purge project |
+| **Fact từ card kanban** (mặc định **tắt**: `SENCLAW_DISPATCH_CARD_FACTS=true`) | một dòng `Kanban task "<tiêu đề>" completed: <summary>` qua extractor | khi bật: worker tự `kanban_complete` kèm summary, board có project, `facts_write=project`; nền, `source=kanban`, không chờ | như kho fact của project | bền |
 | **Lịch sử hội thoại** | các lượt của phiên | thêm mỗi lượt; ở 75% cửa sổ thì LLM tóm tắt và thay lịch sử bằng tóm tắt | mọi lần gọi model | trong bộ nhớ của phiên; tin nhắn gốc cũng nằm trong DB |
 | **Ngữ cảnh của lượt** (recall) | `<memory_context>` (+ `<memory>`) | **tính lại mỗi lượt** từ câu hỏi mới | gắn vào mỗi lần gọi model *trong lượt đó* | **không lưu vào lịch sử** |
 
@@ -160,6 +186,7 @@ chat nhóm chỉ-đọc, ghi tự động từ hội thoại nhiều người l�
 
 - `GET /api/memory/facts?bank=<folder>&q=<từ khoá>&limit=&history=` — mới nhất trước, hoặc khớp từ khoá; `limit` 1–200; `history=true` thêm cả fact đã bị thay (kèm `supersededBy`). Mỗi fact có `proofCount`.
 - `GET /api/memory/facts/banks` — các agent đang có fact: `{bank, current, replaced, lastMentionedAt}`, agent được nhắc gần nhất trước (để giao diện có danh sách chọn).
+  Bank của project (`project:<id>`) cũng nằm trong danh sách; xem, nhập tay và xoá fact của chúng qua `/api/projects/:id/facts` ([`projects.md`](projects.md) mục 4).
 - `DELETE /api/memory/facts/:id?bank=<folder>` — quên một fact. Sai `bank` thì 404, không xoá được fact của agent khác.
 - **Giao diện**: tab **Facts** trong trang Knowledge — web ([`FactsView.tsx`](../../web-app/src/components/cognitive/FactsView.tsx), `lib/memoryFactsApi.ts`) và desktop (`lib/features/cognitive/facts_panel.dart`): chọn agent, tìm từ khoá, bật "hiện fact đã bị thay", quên một fact (có hỏi lại). Ngày hiển thị theo độ chính xác đã lưu (`2026`, `2026-03`, `2026-03-09`; đọc theo UTC), `×n` là số lần được nhắc.
 - Log `[facts] retained from …` ghi `stored`, `reinforced`, `folded`, `replaces_claimed`, `superseded`, `failed_chunks`: `replaces_claimed=0` nghĩa là model không nêu fact nào bị thay, còn `claimed > superseded` nghĩa là retain từ chối (số lạ hoặc khác chủ đề).
@@ -224,6 +251,15 @@ bị chấm `LEAKED` dù câu chữ khác cụm trong fixture ("thích sử dụ
 Mỗi câu hỏi in `answered` / `MISSED` / `LEAKED` kèm ngữ cảnh đã tiêm khi trượt. Một dòng `summary` gom lại. Chấm chuỗi như cũ, kèm thêm số câu đúng
 **khi bỏ dấu tiếng Việt** ("xóa" ≠ "xoá" là cách đặt dấu, không phải quên). Chỉ hai khẳng định: ít nhất một cuộc gọi tới được model, và secret không bao giờ nằm trong
 prompt gửi đi. Số đo trên một model 2B: [`plans/reports/eval-261017-0005-memory-real-extractor.md`](../plans/reports/eval-261017-0005-memory-real-extractor.md).
+
+Cho project có thêm hai test `#[ignore]` trong `eval/real_project.rs` (dữ liệu: [`evals/memory/project-measure.json`](../evals/memory/project-measure.json)), cùng biến môi trường và cách chạy:
+`memory::engine::eval::real_project`.
+- `real_extractor_personal_facts_in_a_project_chat`: 12 cửa sổ của một chat project (5 về dự án, 4 cá nhân, 3 lẫn). In từng fact được lưu vào bank project kèm nhãn `project`/`personal`/`both`/`other`
+  (theo marker), rồi hỏi 7 câu cá nhân và 5 câu dự án từ chat đó, từ chat khác của project và từ chat **ngoài** project, so với cùng câu trả lời của model được lưu theo kiểu trước khi có project
+  (bank profile gắn chat). Đo R4 / quyết định #2.
+- `real_extractor_card_summaries`: 28 summary kiểu worker viết (tốt, chung chung "Done.", có số liệu, đường dẫn, dài, ngắn, tiếng Việt, câu hỏi, đổi giá trị, có secret, gần trùng) qua `retain` y như dispatcher.
+  In fact sinh ra của từng card (`useful` nếu chứa marker của card, `JUNK?` nếu không hoặc card vốn không có gì đáng lưu), bank cuối, và 7 câu hỏi "worker kế tiếp được nghe gì". Đo quyết định #3.
+Hai test chỉ in và không chấm: người chạy đọc output. Số đo: `plans/reports/test-*-project-p5-measure.md`.
 
 ## Bẫy
 

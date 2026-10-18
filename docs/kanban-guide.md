@@ -11,7 +11,10 @@ Dữ liệu nằm trong SQLite riêng `~/.senclaw/space-apps/kanban/kanban.db`,
 ## 1. Khái niệm
 
 **Board → Columns → Cards.** Mỗi board có thể gắn một **Workspace folder** —
-thư mục làm việc của agent, file output sẽ rơi vào đây.
+thư mục làm việc của agent, file output sẽ rơi vào đây — hoặc thuộc về một
+**Project** (xem [`projects.md`](projects.md)): khi đó thư mục là root của
+project, worker nhận thêm context và fact của project, và card làm xong để lại
+fact cho các card sau.
 
 **6 cột mặc định** (workflow "Hermes" — template Standard):
 
@@ -43,6 +46,24 @@ folder** (nút Browse…). Ba template có sẵn:
 | **Advanced (review + WIP)** | 8 cột: thêm Backlog, Review; WIP limit trên Ready/In Progress/Review | Muốn có chặng review + cảnh báo quá tải |
 | **Simple (classic)** | To Do → In Progress → Done | Bảng tay thuần — **không có cột Ready ⇒ agent không bao giờ chạy board này** |
 
+### Board của một project
+
+`POST /api/kanban/boards` nhận thêm `project_id` (project phải tồn tại và chưa
+lưu trữ; sai ⇒ 404/400, không tạo gì). Board có project thì **ô Workspace
+directory không còn là chỗ chọn thư mục**: thư mục chạy card (`effective_workspace_dir`
+trong `GET /boards` và `/board`) tính theo thứ tự
+
+1. `workspace_dir` của board, nếu có — phải là đường tuyệt đối, không chứa `..`,
+   nằm trong root của project (sai ⇒ 400);
+2. root của project;
+3. (board không có project) thư mục scratch riêng của card, như trước.
+
+Lưu trữ project **không** gỡ board khỏi project. Xoá hẳn (purge) thì board mất
+`project_id` và `workspace_dir` được chốt bằng root cũ, nên card vẫn chạy ở đó.
+Root bị xoá hay đổi tên lúc card được nhặt ⇒ card vào **Blocked** với comment
+`gave_up: project "<tên>" cannot be used: …` (không bao giờ chạy ở thư mục khác).
+Danh sách board của một project: `GET /api/projects/:id/boards`.
+
 ### AI board
 
 Bấm **AI board** → nhập **Goal** (ví dụ *"Plan a customer workshop in 6 weeks"*,
@@ -54,6 +75,9 @@ viết tiếng Việt thì board sinh ra cũng tiếng Việt) → **Generate**:
 
 Gọi **LLM đang active** của SenClaw (phải cấu hình model trước — Settings → LLM).
 Chạy đồng bộ: dialog chờ đến khi xong rồi mở board; lỗi hiện "AI failed: …".
+Board AI sinh cho một project (`project_id` trong `/generate`) và **Break down**
+của card trên board project được thêm **context của project** (cắt ở 2.000 ký
+tự) vào prompt để card sinh ra hợp dự án; khung chat của board thì không.
 
 ### AI Task (chỉ desktop, trong board đang mở)
 
@@ -79,11 +103,39 @@ Bật/tắt có hiệu lực ngay tick kế tiếp, áp dụng cho **mọi board
    định: **3 worker toàn hệ thống**, **1 việc/assignee** (card không gán
    assignee chỉ chịu giới hạn tổng).
 3. **Chạy**: card chuyển sang **In Progress**; agent nhận prompt = tiêu đề +
-   mô tả card, làm việc trong **Workspace folder** của board (không có thì dùng
-   thư mục scratch riêng của card); card có assignee thì chạy bằng persona đó.
+   mô tả card, làm việc trong **Workspace folder** của board (board của project:
+   root của project; không có gì thì dùng thư mục scratch riêng của card); card có assignee thì chạy bằng persona đó.
    Agent được yêu cầu xem chi tiết card trước và **bắt buộc chốt** bằng
    `kanban_complete` hoặc `kanban_block`; thay đổi code thì phải block với lý do
    `review-required: …` để người duyệt.
+
+### Worker của board gắn project nhận gì
+
+Cùng chu trình trên, khác ở những gì worker được đưa:
+
+- **System prompt**: chỉ dẫn card (như cũ) **rồi** khối `<project name=… root=…>` là
+  context của project (cắt 8.000 ký tự, đọc lại từ đĩa mỗi lần nhặt card). Nối vào
+  chỉ dẫn, không thay nó.
+- **Prompt**: khối `<memory_context>` gồm fact của **bank project và không gì
+  khác** (không fact chung của agent, không fact project khác; vẫn đọc khi
+  project đã lưu trữ hoặc `facts_write` là `chat`/`off`), rồi tiêu đề và mô tả
+  card. Không có fact nào để nói thì prompt y như board thường. Recall chờ tối đa
+  3 giây cho cả một tick — quá hạn hay lỗi thì card chạy không có khối đó.
+- **Khi xong — mặc định KHÔNG lưu gì.** Lưu fact từ summary của card là tuỳ chọn, bật bằng
+  `SENCLAW_DISPATCH_CARD_FACTS=true` (toàn daemon, đọc lúc khởi động). Khi bật, nếu
+  `facts_write` của project là `project` và **worker tự gọi** `kanban_complete` kèm summary
+  không rỗng, daemon lưu nền một fact `Kanban task "<tiêu đề>" completed: <summary>` (tối đa
+  4.000 byte, `source=kanban`, không gắn chat) để card sau nghe được; không lưu khi card bị
+  `kanban_block`, khi dispatcher tự đóng ("auto-closed"), khi summary rỗng, khi `gave_up`/hết
+  giờ, khi `facts_write` là `chat`/`off`, hay khi board không có project. Lưu hỏng không làm
+  hỏng card. Mặc định tắt vì trên model nhỏ (gemma-4-e2b, 28 summary × 3 lần) mọi summary rỗng
+  ("Done.") vẫn thành fact "Kanban task X đã hoàn thành" và 31–44% fact lưu được là rác
+  ([`projects.md`](projects.md) mục 9).
+
+Fact do người gõ vào project **thắng** fact do card nói sau: nó không bị thay, và
+recall gộp hai câu gần giống làm một nên có thể chỉ thấy giá trị cũ. Worker thật chưa đo với model biết nạp tool: gemma-4-e2b không gọi `ToolSearch` nên không
+bao giờ gọi được `kanban_complete` (tool kanban nằm ngoài roster) — card của nó do dispatcher
+tự đóng ([`projects.md`](projects.md) mục 9).
 
 ### Kết cục của một run
 
@@ -109,7 +161,8 @@ khi bị nhặt.
 `SENCLAW_DISPATCH_ENABLED` (mặc định false) · `SENCLAW_DISPATCH_INTERVAL_SECS`
 (30, sàn 5) · `SENCLAW_DISPATCH_MAX_CONCURRENT` (3) ·
 `SENCLAW_DISPATCH_PER_ASSIGNEE` (1) · `SENCLAW_DISPATCH_MAX_TURNS` (40) ·
-`SENCLAW_DISPATCH_TIMEOUT_SECS` (600).
+`SENCLAW_DISPATCH_TIMEOUT_SECS` (600) ·
+`SENCLAW_DISPATCH_CARD_FACTS` (false: lưu summary card của board gắn project thành fact).
 
 ## 4. Thao tác trên board
 
@@ -168,14 +221,15 @@ MCP server: **`senclaw-kanban`** (stdio, lệnh `senclaw kanban-server`), tool �
 Mount tại `/api/kanban/*` trên daemon (port UI 18788):
 
 ```
-GET  /api/kanban/boards            POST /api/kanban/boards            # list / create {title, template_id?, workspace_dir?}
-GET  /api/kanban/board?id=         POST /api/kanban/board/rename|delete
+GET  /api/kanban/boards            POST /api/kanban/boards            # list / create {title, template_id?, workspace_dir?, project_id?}
+GET  /api/kanban/board?id=         POST /api/kanban/board/rename|delete   # board trả thêm project_id, effective_workspace_dir
+GET  /api/projects/:id/boards                                          # board của một project
 GET  /api/kanban/templates         POST /api/kanban/templates(/delete)
 POST /api/kanban/column/add|update|delete|reorder
 GET  /api/kanban/card?id=          POST /api/kanban/card/add|update|move|delete
 POST /api/kanban/card/complete|block|unblock|comment
 POST /api/kanban/link/add|remove
-POST /api/kanban/generate          # AI board {goal, template_id?, board_id?}
+POST /api/kanban/generate          # AI board {goal, template_id?, board_id?, project_id?}
 POST /api/kanban/breakdown         # AI subtasks {card_id}
 GET  /api/kanban/activity?board_id=  # {running[], recent[]}
 GET  /api/kanban/assignees?board_id=
@@ -203,6 +257,23 @@ UI nào dùng.)
    trực tiếp A↔B, chưa chặn vòng gián tiếp.
 8. AI board/breakdown cần **LLM đã cấu hình** trong SenClaw; model trả JSON hỏng
    sẽ báo "AI failed: could not parse board JSON…".
+9. **Lỗi có sẵn, chưa sửa — card bị `kanban_block` có thể vẫn sang Done.** Worker gọi
+   `kanban_block` rồi kết thúc lượt êm thì dispatcher coi là hoàn thành và đẩy card sang
+   Done kèm comment `dispatcher|complete` (nhánh `Completed` của `finalize` chỉ kiểm
+   `role != "done"`, nhánh `Failed`/`TimedOut` kiểm cả `blocked`). Thấy khi chạy worker
+   kịch bản trên daemon cô lập; chưa thấy với model thật. Lưu fact của project không
+   dựa vào đường này (nó nhìn vị trí card **trước** khi dispatcher đối soát).
+10. **Hai lỗi có sẵn của AI board** (`/generate`, `/breakdown`; `/chat` và `/models` đi
+    cùng đường nên nhiều khả năng cũng vậy): (a) dưới app-token mode `strict` (mặc định)
+    bị 401 `app_token_required` vì client kanban không gửi `x-senclaw-app-token`;
+    (b) base URL mặc định của client là `http://127.0.0.1:18788` (`SENCLAW_BASE_URL`), nên
+    một daemon chạy cổng khác gọi nhầm sang daemon ở cổng 18788. Sửa ở nhánh
+    `fix/kanban-llm-loopback` (`b568796`, cắt từ `main`, **chưa gộp**): base URL = cổng UI
+    của chính daemon và gửi token của kanban. Bản chưa có bản sửa: daemon thử nghiệm phải đặt
+    `SENCLAW_BASE_URL=http://127.0.0.1:<cổng UI>` và `SENCLAW_APP_TOKEN_MODE=off`.
+11. Board của project: các hạn chế (hai worker sửa cùng cây, đổi root không dựng lại core
+    đang chạy, `kanban-server` stdio không có context project…) nằm ở
+    [`projects.md`](projects.md) mục 8.
 
 ## 9. Tham chiếu code
 
@@ -210,7 +281,8 @@ Engine: [`src/kanban/`](../src/kanban/) — DB/workflow: [`db.rs`](../src/kanban
 REST: [`api.rs`](../src/kanban/api.rs) · dispatcher: [`dispatch.rs`](../src/kanban/dispatch.rs)
 + [`src/agent/mcp_dispatch/mod.rs`](../src/agent/mcp_dispatch/mod.rs) ·
 AI: [`llm.rs`](../src/kanban/llm.rs) · MCP: [`mcp.rs`](../src/kanban/mcp.rs) ·
-templates: [`templates.rs`](../src/kanban/templates.rs).
+templates: [`templates.rs`](../src/kanban/templates.rs) ·
+project: [`projects.rs`](../src/kanban/projects.rs) (trait `ProjectDirectory`, thư mục hiệu lực).
 UI desktop: [`desktop_app/lib/features/kanban/`](../desktop_app/lib/features/kanban/) ·
 UI web: [`web/src/pages/KanbanPage.tsx`](../web/src/pages/KanbanPage.tsx) ·
 cấu hình dispatcher: [`src/config.rs`](../src/config.rs) (`SENCLAW_DISPATCH_*`).

@@ -53,7 +53,13 @@ pub fn recall_scope(project: Option<&Project>) -> Option<ProjectRecall> {
 /// hold one, so the project's own bank is the only place there is — and only
 /// for a project that keeps its conversations' facts there. `chat` and `off`
 /// both say the person wants nothing kept in the project's bank.
-pub fn worker_fact_target(project: &Project) -> Option<FactTarget> {
+///
+/// `enabled` is `DispatchConfig::card_facts`, which is off unless someone turns
+/// it on: this is the one place that decides, so a card keeps nothing without it.
+pub fn worker_fact_target(project: &Project, enabled: bool) -> Option<FactTarget> {
+    if !enabled {
+        return None;
+    }
     match project.facts_write {
         FactsWrite::Project => fact_target(Some(project), "", "", false),
         FactsWrite::Chat | FactsWrite::Off => None,
@@ -143,7 +149,7 @@ mod tests {
     #[test]
     fn a_worker_keeps_what_it_finished_in_the_projects_bank_and_only_when_the_project_keeps_facts_there(
     ) {
-        let t = worker_fact_target(&project(FactsWrite::Project, true)).unwrap();
+        let t = worker_fact_target(&project(FactsWrite::Project, true), true).unwrap();
         assert_eq!(
             (t.bank.as_str(), t.origin.as_str()),
             ("project:prj_0a1b2c3d", "")
@@ -160,8 +166,19 @@ mod tests {
         );
         // `chat` would put a worker's facts in a profile bank it does not have,
         // tagged with a chat it does not have.
-        assert_eq!(worker_fact_target(&project(FactsWrite::Chat, true)), None);
-        assert_eq!(worker_fact_target(&project(FactsWrite::Off, true)), None);
+        assert_eq!(
+            worker_fact_target(&project(FactsWrite::Chat, true), true),
+            None
+        );
+        assert_eq!(
+            worker_fact_target(&project(FactsWrite::Off, true), true),
+            None
+        );
+        // Whatever the project says, a card keeps nothing unless that was turned on.
+        assert_eq!(
+            worker_fact_target(&project(FactsWrite::Project, true), false),
+            None
+        );
     }
 
     #[test]

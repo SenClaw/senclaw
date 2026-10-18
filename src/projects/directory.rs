@@ -59,7 +59,7 @@ impl DbProjectDirectory {
             return None;
         }
         match self.db.get_project(id) {
-            Ok(project) => worker_fact_target(&project?),
+            Ok(project) => worker_fact_target(&project?, self.config.dispatch.card_facts),
             Err(e) => {
                 tracing::warn!("[projects] cannot read project {id}: {e}");
                 None
@@ -156,6 +156,17 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
+        fixture_with(Config::from_env())
+    }
+
+    /// A directory whose daemon was told to keep what workers finish.
+    fn fixture_keeping_card_facts() -> Fixture {
+        let mut cfg = Config::from_env();
+        cfg.dispatch.card_facts = true;
+        fixture_with(cfg)
+    }
+
+    fn fixture_with(config: Config) -> Fixture {
         let home = tempfile::tempdir().unwrap();
         let projects = home.path().join("data").join("projects");
         let db = Arc::new(Db::open_in_memory(&Config::from_env()).unwrap());
@@ -166,12 +177,7 @@ mod tests {
             projects_dir: projects.clone(),
         };
         Fixture {
-            dir: DbProjectDirectory::new(
-                Arc::clone(&db),
-                projects.clone(),
-                rules,
-                Config::from_env(),
-            ),
+            dir: DbProjectDirectory::new(Arc::clone(&db), projects.clone(), rules, config),
             db,
             home,
             projects,
@@ -410,7 +416,7 @@ mod tests {
 
     #[test]
     fn what_a_worker_finishes_is_kept_only_where_the_project_keeps_its_facts() {
-        let f = fixture();
+        let f = fixture_keeping_card_facts();
         let (keeps, _) = make_keeping(&f, "keeps", FactsWrite::Project);
         let (chat, _) = make_keeping(&f, "chat", FactsWrite::Chat);
         let (off, _) = make_keeping(&f, "off", FactsWrite::Off);
@@ -447,5 +453,19 @@ mod tests {
         )
         .unwrap();
         assert!(f.dir.retain_target(&chat).is_some());
+    }
+
+    #[test]
+    fn a_card_keeps_nothing_unless_the_daemon_was_told_to_keep_what_workers_finish() {
+        let mut cfg = Config::from_env();
+        cfg.dispatch.card_facts = false;
+        let f = fixture_with(cfg);
+        let (keeps, _) = make_keeping(&f, "keeps", FactsWrite::Project);
+        assert_eq!(f.dir.retain_target(&keeps), None);
+
+        // The same project, with the switch on, does keep it.
+        let on = fixture_keeping_card_facts();
+        let (keeps, _) = make_keeping(&on, "keeps", FactsWrite::Project);
+        assert!(on.dir.retain_target(&keeps).is_some());
     }
 }

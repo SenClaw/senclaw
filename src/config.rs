@@ -540,6 +540,12 @@ pub struct DispatchConfig {
     pub max_agent_turns: usize,
     /// Per-item run timeout (`SENCLAW_DISPATCH_TIMEOUT_SECS`).
     pub default_timeout_secs: u64,
+    /// Keep what a worker says when it closes a card of a project's board as a
+    /// fact of that project (`SENCLAW_DISPATCH_CARD_FACTS`, default off). On a
+    /// small local model nearly every summary, however empty ("Done."), became a
+    /// fact ("Kanban task X completed"), and about a third of what was kept was
+    /// that or a copy of another fact, so it is something a person turns on.
+    pub card_facts: bool,
 }
 
 fn env_or(key: &str, fallback: &str) -> String {
@@ -863,6 +869,7 @@ impl Config {
                 kanban_url: env_or("SENCLAW_DISPATCH_KANBAN_URL", "http://127.0.0.1:4400"),
                 max_agent_turns: env_int("SENCLAW_DISPATCH_MAX_TURNS", 40),
                 default_timeout_secs: env_int("SENCLAW_DISPATCH_TIMEOUT_SECS", 600),
+                card_facts: env_bool("SENCLAW_DISPATCH_CARD_FACTS", false),
             },
             background: BackgroundConfig {
                 enabled: env_bool("SENCLAW_BACKGROUND_ENABLED", true),
