@@ -104,14 +104,23 @@ pub fn scope_instructions(binding: &GroupBinding) -> String {
     )
 }
 
-/// `senclaw kanban-server` (the board's own DB; no chat scope).
-pub fn kanban_server() -> McpServerConfig {
-    McpServerConfig::new(KANBAN_NAME, "kanban-server")
+/// `senclaw kanban-server` (the board's own DB; no chat scope). `ui_port` is the
+/// daemon's, which the child's model-backed tools call back into.
+pub fn kanban_server(ui_port: u16) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new(KANBAN_NAME, "kanban-server");
+    cfg.env.extend(crate::kanban::llm::child_env(ui_port));
+    cfg
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_kanban_child_is_pointed_at_this_daemon() {
+        let cfg = kanban_server(38788);
+        assert_eq!(cfg.env["SENCLAW_BASE_URL"], "http://127.0.0.1:38788");
+    }
 
     #[test]
     fn scope_names_folder_and_jid() {

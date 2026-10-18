@@ -1170,6 +1170,18 @@ Rules for Claude:
 - **Never drop the `sca_` prefix check** in `presented_token` — the daemon's own
   API token arrives through the same `Authorization: Bearer` header.
 - `/env` must never carry the token: it feeds the app's *browser* UI.
+- **The built-in kanban board is not an installed app, yet its model calls go
+  through the daemon's own `/bridge` as app `kanban`.** `kanban::llm::client()`
+  aims at `util::internal_auth::daemon_base_url()` (this daemon's port) and
+  presents the token `run_daemon` mints for id `kanban`
+  (`kanban::llm::provision_app_token`). Never `SpaceClient::from_env()` there:
+  its default is 18788, which is *another daemon* whenever the port differs
+  (an isolated test run sent its LLM calls to the user's real one), and it
+  carries no token, so strict mode 401s every `/generate`, `/breakdown` and
+  `/chat`. A `kanban-server` child gets both through `kanban::llm::child_env`.
+  The daemon token (`header_for`) does not satisfy the app gate. Under
+  `SENCLAW_AUTH_MODE=always` the SDK client still sends no daemon token — it has
+  no hook for one.
 
 Model in [`src/apps/token.rs`](src/apps/token.rs), enforcement in
 [`src/gateway/ui_server/app_auth.rs`](src/gateway/ui_server/app_auth.rs). Full
