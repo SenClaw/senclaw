@@ -68,12 +68,21 @@ async fn rpc(State(tools): State<Arc<Vec<McpToolDef>>>, Json(req): Json<Value>) 
 
 /// A tool with a schema, as an app reports it.
 pub(crate) fn tool(name: &str, description: &str) -> McpToolDef {
-    McpToolDef {
-        name: name.into(),
-        description: Some(description.into()),
-        input_schema: Some(json!({
+    tool_with_schema(
+        name,
+        description,
+        Some(json!({
             "type": "object",
             "properties": { "path": { "type": "string" } },
         })),
+    )
+}
+
+/// A tool declaring exactly `schema` (`None`: the app reports no parameters).
+pub(crate) fn tool_with_schema(name: &str, description: &str, schema: Option<Value>) -> McpToolDef {
+    McpToolDef {
+        name: name.into(),
+        description: Some(description.into()),
+        input_schema: schema,
     }
 }

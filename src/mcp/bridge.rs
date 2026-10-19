@@ -20,7 +20,8 @@ pub struct McpBridgeTool {
     pub display_name: String,
     /// Human-readable description.
     pub desc: String,
-    /// JSON Schema for input parameters (may be Null).
+    /// JSON Schema for input parameters, as the server reported it (`Null`
+    /// when it reported none).
     pub schema: Value,
     /// Reference to the manager for call dispatch.
     pub manager: Arc<McpManager>,
@@ -254,5 +255,121 @@ mod always_loaded_tests {
         assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__senclaw-browser__browser_search"));
         // Only the search: the other browser tools stay behind ToolSearch.
         assert!(!ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__core__browser_task"));
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use std::sync::Arc;
+
+    use serde_json::{json, Value};
+
+    use super::McpBridgeTool;
+    use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpToolDef, McpTransportType};
+    use crate::mcp::manager::mock_server::{self, tool_with_schema};
+    use crate::mcp::manager::McpManager;
+    use crate::zen_core::Tool;
+
+    /// What an app may declare, short of nothing: a draft-07 header, a property
+    /// reached through `$ref`, a nullable type, a boolean subschema, a pattern
+    /// with a Unicode property escape and `additionalProperties: false`.
+    fn awkward_schema() -> Value {
+        json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "name": { "type": "string", "pattern": r"^[^\p{Cc}]{1,200}$", "minLength": 1 },
+                "mode": { "type": ["string", "null"], "enum": ["append", "replace"] },
+                "rows": { "type": "array", "items": { "$ref": "#/$defs/Row" } },
+                "extra": true,
+            },
+            "required": ["name"],
+            "additionalProperties": false,
+            "$defs": { "Row": { "type": "object", "properties": { "id": { "type": "integer" } } } },
+        })
+    }
+
+    async fn roster_of(dir: &tempfile::TempDir, tools: Vec<McpToolDef>) -> Vec<Arc<dyn Tool>> {
+        let work = dir.path().join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        let manager = Arc::new(McpManager::new(work, dir.path().to_path_buf()));
+        let stopped = mock_server::reserve().await;
+        manager
+            .add_or_update_offline(
+                ExternalMcpServerConfig {
+                    name: "lakehouse-mcp".into(),
+                    transport: McpTransportType::Http,
+                    description: None,
+                    enabled: true,
+                    use_tools: None,
+                    command: None,
+                    args: vec![],
+                    env: Default::default(),
+                    url: Some(stopped.url.clone()),
+                    headers: Default::default(),
+                },
+                McpScopeType::Project,
+                tools,
+            )
+            .await
+            .unwrap();
+        McpBridgeTool::from_manager(&manager).await
+    }
+
+    #[tokio::test]
+    async fn a_roster_entry_hands_the_apps_schema_to_the_agent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let schema = json!({
+            "type": "object",
+            "properties": { "sql": { "type": "string" } },
+            "required": ["sql"],
+        });
+        let roster = roster_of(
+            &dir,
+            vec![tool_with_schema("lake_query", "Run SQL", Some(schema.clone()))],
+        )
+        .await;
+
+        let entry = roster
+            .iter()
+            .find(|t| t.name() == "mcp__lakehouse-mcp__lake_query")
+            .expect("the app's tool is in the roster");
+        assert_eq!(entry.input_schema(), schema);
+    }
+
+    #[tokio::test]
+    async fn what_an_app_declares_is_accepted_by_every_providers_tool_format() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let roster = roster_of(
+            &dir,
+            vec![tool_with_schema("lake_load", "Load rows", Some(awkward_schema()))],
+        )
+        .await;
+        let param = |v: &Value, at: &str| v.pointer(at).cloned().unwrap_or(Value::Null);
+
+        // OpenAI-compatible: the boolean subschema becomes an object schema
+        // (Gemini behind a proxy rejects `true`), everything else is as sent.
+        let openai = crate::zen_core::query_llm::build_openai_tools(&roster);
+        let p = &openai[0]["function"]["parameters"];
+        assert_eq!(param(p, "/properties/extra"), json!({ "type": "object" }), "{p}");
+        assert_eq!(param(p, "/required"), json!(["name"]));
+        assert!(param(p, "/properties/name/pattern").is_string(), "{p}");
+
+        // Codex: its backend cannot parse `\p{..}`, so that pattern goes and the
+        // rest of the property stays.
+        let codex = crate::providers::adapters::codex::responses_tools(&roster);
+        let p = &codex[0]["parameters"];
+        assert!(!p.to_string().contains(r"\\p{"), "pattern left in: {p}");
+        assert_eq!(param(p, "/properties/name/minLength"), json!(1), "{p}");
+
+        // Gemini: a proto schema — no `$ref`/`$defs`/`$schema`, a scalar type,
+        // and `required` naming only properties that remain.
+        let gemini = crate::providers::adapters::antigravity::gemini_tools(&roster);
+        let p = &gemini[0]["parameters"];
+        for gone in ["$schema", "$defs", "additionalProperties"] {
+            assert!(p.get(gone).is_none(), "`{gone}` left in: {p}");
+        }
+        assert_eq!(param(p, "/properties/mode/type"), json!("string"), "{p}");
+        assert_eq!(param(p, "/required"), json!(["name"]), "{p}");
     }
 }

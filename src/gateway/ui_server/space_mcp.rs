@@ -1479,6 +1479,34 @@ mod tests {
         assert!(read_tool_cache(tempfile::tempdir().unwrap().path()).is_empty());
     }
 
+    #[test]
+    fn the_tool_cache_keeps_each_tools_parameter_schema() {
+        // What a sleeping app tells the model about its arguments comes from
+        // here, including from caches written before the roster used it: the
+        // key on disk is `inputSchema`, as `tools/list` spells it.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join(".senclaw");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("mcp-tools.json"),
+            r#"[{"name":"lake_query","description":"Run SQL",
+                 "inputSchema":{"type":"object","properties":{"sql":{"type":"string"}},"required":["sql"]}},
+                {"name":"lake_list"}]"#,
+        )
+        .unwrap();
+
+        let tools = read_tool_cache(dir.path());
+        assert_eq!(
+            tools[0].input_schema.as_ref().unwrap()["required"],
+            serde_json::json!(["sql"])
+        );
+        assert!(tools[1].input_schema.is_none());
+
+        // And rewriting the cache loses none of it.
+        write_tool_cache(dir.path(), &tools);
+        assert_eq!(read_tool_cache(dir.path())[0].input_schema, tools[0].input_schema);
+    }
+
     /// A real listener holding a real port, with a working directory we choose —
     /// the two facts `reclaim_app_port` decides on.
     async fn spawn_listener(cwd: &Path, port: u16) -> tokio::process::Child {

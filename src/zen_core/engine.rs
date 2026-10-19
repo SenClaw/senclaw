@@ -4436,4 +4436,87 @@ mod tests {
         );
         assert!(answer.contains("lake_import_file"), "got: {answer}");
     }
+
+    #[tokio::test]
+    async fn a_loaded_app_tool_reaches_the_model_with_its_parameters() {
+        use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpTransportType};
+        use crate::mcp::manager::mock_server::{self, tool_with_schema};
+
+        // Lakehouse asleep, as in the test above — but what matters here is what
+        // the model is told about the tool's arguments, which used to be nothing.
+        let dir = tempfile::TempDir::new().unwrap();
+        let work = dir.path().join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        let manager = Arc::new(crate::mcp::manager::McpManager::new(
+            work,
+            dir.path().to_path_buf(),
+        ));
+        let stopped = mock_server::reserve().await;
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "dataset": { "type": "string", "description": "Dataset to query" },
+                "sql": { "type": "string" },
+            },
+            "required": ["dataset", "sql"],
+        });
+        manager
+            .add_or_update_offline(
+                ExternalMcpServerConfig {
+                    name: "lakehouse-mcp".into(),
+                    transport: McpTransportType::Http,
+                    description: None,
+                    enabled: true,
+                    use_tools: None,
+                    command: None,
+                    args: vec![],
+                    env: Default::default(),
+                    url: Some(stopped.url.clone()),
+                    headers: Default::default(),
+                },
+                McpScopeType::Project,
+                vec![tool_with_schema("lake_query", "Run SQL over a dataset", Some(schema.clone()))],
+            )
+            .await
+            .unwrap();
+        let engine = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: "chat-sees-parameters".into(),
+                ..Default::default()
+            },
+            Some(manager),
+        );
+        engine.refresh_mcp_tools().await;
+
+        // Deferred: until it is loaded, the schema costs the request nothing.
+        let name = "mcp__lakehouse-mcp__lake_query";
+        assert!(
+            !engine.tools_for_main_agent().iter().any(|t| t.name() == name),
+            "an app's tool must stay behind ToolSearch until it is loaded"
+        );
+
+        let search = engine
+            .available_tools()
+            .into_iter()
+            .find(|t| t.name() == "ToolSearch")
+            .expect("ToolSearch is always loaded");
+        let out = search
+            .call(serde_json::json!({ "query": format!("select:{name}") }), &tool_context())
+            .await
+            .unwrap();
+        let Some(ToolOutput::Result { data, .. }) = out.into_iter().next() else {
+            panic!("expected a result");
+        };
+        assert_eq!(data["matches"][0]["name"], name);
+        assert_eq!(data["matches"][0]["input_schema"], schema, "ToolSearch payload: {data}");
+
+        // The next request declares the tool with those arguments.
+        let turn_tools = engine.tools_for_main_agent();
+        let declared = crate::zen_core::query_llm::build_openai_tools(&turn_tools);
+        let lake = declared
+            .iter()
+            .find(|d| d["function"]["name"] == name)
+            .expect("the loaded tool is declared on the next turn");
+        assert_eq!(lake["function"]["parameters"], schema);
+    }
 }

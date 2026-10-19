@@ -450,3 +450,136 @@ async fn a_failed_connect_keeps_an_on_demand_apps_cached_tools() {
     );
     assert_eq!(roster(&mgr).await, vec!["mcp__lakehouse-mcp__lake_query".to_string()]);
 }
+
+// ---- the parameter schema of an external tool ---------------------------
+//
+// The roster used to declare every external tool with no schema at all, so a
+// model had to guess a Lakehouse tool's argument names from its description or
+// from the error its first attempt earned. The schema is stored per tool (live
+// from `tools/list`, or from the app's on-disk cache while it sleeps); these
+// pin that it reaches the roster entry the agent is given.
+
+use super::mock_server::tool_with_schema;
+use serde_json::{json, Value};
+
+fn sql_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "sql": { "type": "string", "description": "SQL to run over the lake" },
+            "limit": { "type": "integer" },
+        },
+        "required": ["sql"],
+    })
+}
+
+/// Roster entries by full name, each with the schema it is declared with.
+async fn schemas(mgr: &McpManager) -> std::collections::BTreeMap<String, Value> {
+    mgr.get_external_tools_full()
+        .await
+        .into_iter()
+        .map(|t| (t.name, t.input_schema))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_sleeping_apps_roster_entries_carry_the_schema_from_its_cache() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let stopped = mock_server::reserve().await;
+
+    mgr.add_or_update_offline(
+        http_config("lakehouse-mcp", &stopped.url),
+        McpScopeType::Project,
+        vec![
+            tool_with_schema("lake_query", "Run SQL", Some(sql_schema())),
+            tool_with_schema("lake_list", "List datasets", None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let declared = schemas(&mgr).await;
+    assert_eq!(declared["mcp__lakehouse-mcp__lake_query"], sql_schema());
+    // An app that reports no parameters still has no schema: the providers'
+    // `object_parameters` turns that into "takes nothing".
+    assert_eq!(declared["mcp__lakehouse-mcp__lake_list"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_connected_servers_roster_entries_carry_the_schema_it_listed() {
+    // The live path: `tools/list` over the wire → `McpToolInfo` → the stored
+    // `McpToolDef` → the roster. Nothing along it may reshape the schema.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let reserved = mock_server::reserve().await;
+    let url = reserved.url.clone();
+    let _running = reserved.serve(vec![tool_with_schema(
+        "lake_query",
+        "Run SQL",
+        Some(sql_schema()),
+    )]);
+
+    mgr.add_or_update(http_config("lakehouse-mcp", &url), McpScopeType::Project)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        schemas(&mgr).await["mcp__lakehouse-mcp__lake_query"],
+        sql_schema()
+    );
+}
+
+#[tokio::test]
+async fn an_on_demand_apps_schema_survives_the_idle_reaper() {
+    // `disconnect_server` keeps an on-demand app's tools; the schema is part of
+    // them, or a chat opened a minute after use would see names with no
+    // arguments again.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let reserved = mock_server::reserve().await;
+    let url = reserved.url.clone();
+    let _running = reserved.serve(vec![tool_with_schema(
+        "lake_query",
+        "Run SQL",
+        Some(sql_schema()),
+    )]);
+
+    mgr.add_or_update_on_demand(http_config("lakehouse-mcp", &url), McpScopeType::Project)
+        .await
+        .unwrap();
+    mgr.disconnect_server("lakehouse-mcp").await.unwrap();
+
+    assert_eq!(
+        mgr.get_server_info("lakehouse-mcp").await.status,
+        McpServerStatus::Disconnected
+    );
+    assert_eq!(
+        schemas(&mgr).await["mcp__lakehouse-mcp__lake_query"],
+        sql_schema()
+    );
+}
+
+#[tokio::test]
+async fn the_use_tools_allowlist_narrows_the_roster_and_keeps_each_schema() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let stopped = mock_server::reserve().await;
+    let mut config = http_config("lakehouse-mcp", &stopped.url);
+    config.use_tools = Some(vec!["lake_query".to_string()]);
+
+    mgr.add_or_update_offline(
+        config,
+        McpScopeType::Project,
+        vec![
+            tool_with_schema("lake_query", "Run SQL", Some(sql_schema())),
+            tool_with_schema("lake_drop", "Drop a dataset", Some(sql_schema())),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let declared = schemas(&mgr).await;
+    assert_eq!(declared.len(), 1, "got: {:?}", declared.keys());
+    assert_eq!(declared["mcp__lakehouse-mcp__lake_query"], sql_schema());
+}

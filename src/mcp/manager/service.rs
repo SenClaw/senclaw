@@ -931,7 +931,12 @@ impl McpManager {
                     tools.push(McpToolInfo {
                         name: prefixed_name,
                         description: t.description.clone().unwrap_or_default(),
-                        input_schema: serde_json::Value::Null,
+                        // What the app reported (live, or from its cache while
+                        // it sleeps). Without it the model is told the tool
+                        // takes no arguments and guesses their names. An app
+                        // that reports none stays `Null`; the providers turn
+                        // that into an empty object schema.
+                        input_schema: t.input_schema.clone().unwrap_or(serde_json::Value::Null),
                     });
                 }
             }
@@ -939,9 +944,8 @@ impl McpManager {
         tools
     }
 
-    /// Get the full `McpToolInfo` list including proper input schemas
-    /// for the agent tool roster. External tools have `input_schema: Null`
-    /// until we bridge them properly (step 7).
+    /// The roster the agent is given: [`Self::get_external_tools`], each tool
+    /// with the parameter schema its server reported.
     pub async fn get_external_tools_full(&self) -> Vec<McpToolInfo> {
         self.get_external_tools().await
     }
