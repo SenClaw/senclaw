@@ -405,3 +405,34 @@ này.
   còn ghi `running` sẽ hiện là `interrupted`.
 - Mỗi lần gọi LLM có trần 600 s. Huỷ job ngắt cuộc gọi đang chạy ngay lập tức.
 - Các pipeline sinh dữ liệu chạy tuần tự trong một job: mỗi job một luồng gọi LLM.
+
+## Bộ test end-to-end
+
+Test trong `src/datagen/` chạy từng pipeline với một model giả. Phần bên trên (REST, bảng job, phân quyền theo chat,
+file job để lại trên đĩa, model thật) được kiểm bằng [`scripts/datagen-e2e/run.py`](../scripts/datagen-e2e/run.py): Python
+thuần, không cài thêm gì.
+
+Nó dựng một daemon riêng (HOME, `SENCLAW_HOME` và cwd tạm, hai cổng trống, không bao giờ 18788 / 18789 / 18790; trên macOS
+bọc thêm lớp chặn kết nối tới ba cổng đó), gọi REST, rồi tắt daemon.
+
+```bash
+python3 scripts/datagen-e2e/run.py --binary target/release/senclaw                  # nhóm offline, không cần model
+python3 scripts/datagen-e2e/run.py --binary <senclaw> \
+    --llm-url http://192.168.0.93:1234/v1 --llm-model google/gemma-4-e4b           # thêm nhóm llm (~4 phút)
+python3 scripts/datagen-e2e/run.py --list                                          # liệt kê case
+python3 scripts/datagen-e2e/run.py --self-test                                     # kiểm chính các hàm kiểm tra, không cần daemon
+```
+
+- **`offline`**: catalog, import (bundled và file nhúng, kèm hash, license, quyền 0700/0600), phân trang, xem trước, từ
+  chối URL trỏ về chính daemon, mã lỗi 400 / 404 / 409 / 422, phân quyền theo chat, xoá dataset, model chết (job `failed`
+  có lý do), trần 2 job và huỷ job đang chờ một model treo. Model chết và model treo là hai cổng giả, nên không cần LLM.
+- **`llm`** (cần `--llm-url`, bỏ qua nếu thiếu): kiểm các điều bất biến mà một model không tất định không thể phá: trích
+  dẫn `doc_qa` có thật trong tài liệu và từ ít nhất hai câu, đáp án `reasoning_traces` khớp đáp án tham chiếu, đáp án
+  `executable_qa` đúng bằng stdout của chương trình được lưu (suite tự chạy lại), `seedsFrom` / `problemsFrom`, huỷ job giữ
+  lại bản ghi đã ghi.
+- `executable_qa` cần sandbox của hệ điều hành mà sandbox không lồng được, nên case đó chạy trên daemon thứ hai không có
+  lớp chặn cổng (chỉ gọi REST, không có chat). Cuối lượt, suite kiểm không daemon nào giữ kết nối tới cổng thật.
+- Case gắn `xfail` ghi một lỗi đã biết (hiện có: registry báo `done` khoảng 4 ms trước khi `manifest.json` được ghi xong).
+  Nó báo `XFAIL` khi còn lỗi và `XPASS` khi đã sửa; `--strict-xfail` biến `XPASS` thành thất bại để người sửa gỡ cờ.
+- `--self-test` đưa vào các bản ghi bị làm hỏng có chủ ý (câu trích bịa, đáp án sai, điểm thấp, code bị sửa, nhãn lạ…) và
+  yêu cầu từng cái bị bắt: một kiểm tra không thể fail thì không chứng minh gì.
