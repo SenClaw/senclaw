@@ -259,6 +259,13 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect::<String>() + "…"
 }
 
+/// The IDE's inline "Tab" completion models (`tab_flash_lite_preview`, …). The
+/// listing returns them beside the chat models without marking them internal,
+/// and they are no use in a chat picker.
+fn is_tab_completion_model(id: &str) -> bool {
+    id.trim().starts_with("tab_")
+}
+
 /// Google's Code Assist listings come in two shapes.
 ///
 /// `models` is either an array of objects, or an object keyed by model id
@@ -277,7 +284,7 @@ pub fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
                 let id = first_str(m, &["id", "model", "modelId", "name"])?;
                 // `name` may be a `models/<id>` resource path.
                 let id = id.rsplit('/').next()?.trim().to_string();
-                if id.is_empty() {
+                if id.is_empty() || is_tab_completion_model(&id) {
                     return None;
                 }
                 let name = first_str(m, &["displayName", "name"])
@@ -293,7 +300,7 @@ pub fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
         let mut out: Vec<DiscoveredModel> = map
             .iter()
             .filter(|(_, info)| info.get("isInternal").and_then(|v| v.as_bool()) != Some(true))
-            .filter(|(id, _)| !id.trim().is_empty())
+            .filter(|(id, _)| !id.trim().is_empty() && !is_tab_completion_model(id))
             .map(|(id, info)| DiscoveredModel {
                 id: id.trim().to_string(),
                 name: first_str(info, &["displayName", "name"])
@@ -464,6 +471,24 @@ mod tests {
             ]
         });
         assert_eq!(parse_google_models(&array).len(), 1);
+    }
+
+    #[test]
+    fn tab_completion_models_are_not_offered_as_chat_models() {
+        let map = serde_json::json!({ "models": {
+            "gemini-3.8-flash-high": { "displayName": "Gemini 3.8 Flash (High)" },
+            "tab_flash_lite_preview": {},
+            "tab_jump_flash_lite_preview": {},
+        }});
+        let ids: Vec<String> = parse_google_models(&map).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["gemini-3.8-flash-high"]);
+
+        let array = serde_json::json!({ "models": [
+            { "id": "gemini-3-flash", "displayName": "Gemini 3 Flash" },
+            { "id": "tab_flash_lite_preview" },
+        ]});
+        let ids: Vec<String> = parse_google_models(&array).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["gemini-3-flash"]);
     }
 
     #[test]

@@ -212,6 +212,19 @@ pub(crate) async fn oauth_account_models(
     }))
 }
 
+/// A reply that says the model has been retired.
+///
+/// A retired Antigravity model does not 404; its answer to any prompt is the
+/// notice, e.g. "Gemini 3.5 Flash is no longer available. Please switch to
+/// Gemini 3.7 Flash…". Deliberately narrow: only this phrase, so an ordinary
+/// answer that happens to mention a product is never read as a failure.
+pub(crate) fn retirement_notice(reply: &str) -> Option<&str> {
+    reply
+        .to_ascii_lowercase()
+        .contains("is no longer available")
+        .then_some(reply.trim())
+}
+
 /// Body for probing a model before committing to it.
 #[derive(Deserialize)]
 pub(crate) struct TestModelBody {
@@ -310,12 +323,24 @@ pub(crate) async fn oauth_test_model(
                 })
                 .collect::<Vec<_>>()
                 .join(" ");
-            serde_json::json!({
-                "ok": true,
-                "model": model_name,
-                "latencyMs": elapsed_ms,
-                "reply": reply.chars().take(120).collect::<String>(),
-            })
+            match retirement_notice(&reply) {
+                // The backend answered, but with a goodbye rather than a
+                // completion: Google serves a retired Antigravity model's reply
+                // as ordinary text. Counting that as a pass is how a dead model
+                // ends up in the picker looking healthy.
+                Some(notice) => serde_json::json!({
+                    "ok": false,
+                    "model": model_name,
+                    "latencyMs": elapsed_ms,
+                    "error": truncate_error(notice),
+                }),
+                None => serde_json::json!({
+                    "ok": true,
+                    "model": model_name,
+                    "latencyMs": elapsed_ms,
+                    "reply": reply.chars().take(120).collect::<String>(),
+                }),
+            }
         }
         // A failed probe is a result, not a server error — the UI shows the
         // provider's own message so the user can tell "not entitled" from
@@ -428,6 +453,20 @@ pub(crate) async fn oauth_bind_config(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_retirement_notice_is_not_a_working_model() {
+        let notice = "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in the latest version of Antigravity.";
+        assert_eq!(super::retirement_notice(notice), Some(notice));
+        assert!(super::retirement_notice("  GEMINI 3.5 FLASH IS NO LONGER AVAILABLE.").is_some());
+    }
+
+    #[test]
+    fn an_ordinary_reply_is_left_alone() {
+        for reply in ["ok", "", "Reply with the single word: ok", "The feature is available now."] {
+            assert!(super::retirement_notice(reply).is_none(), "{reply:?}");
+        }
+    }
+
     use super::*;
 
     #[tokio::test]
