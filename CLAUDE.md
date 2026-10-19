@@ -1070,6 +1070,22 @@ Rules for Claude:
   `spawn_poller`, `run_supervisor`, `spawn_janitor`); an app that gains one must
   be declared `background` or `cargo test` goes red.
 - **Adding a background loop to an app means editing its manifest too.**
+- **A session app's tools stay in the roster while it sleeps, and that lives in `McpManager`, not in the launcher.**
+  `get_external_tools` lists a server when it is `Connected` *or* `on_demand && enabled` (`add_or_update_offline`
+  and `add_or_update_on_demand` set the flag; `run_and_register` uses the latter for a session app), and
+  `disconnect_server` keeps an on-demand server's tools — the reaper and the person's Stop both call it. A chat takes
+  its roster once, when its engine is created, so a regression reads as `ToolSearch select:` answering "Nothing from
+  `<app>-mcp` is registered in this session" in a chat opened while the app is stopped, with `space_app_mcp_list`
+  still saying registered. Pinned by `mcp::manager::tests` and
+  `zen_core::engine::tests::a_chat_started_while_a_session_app_sleeps_can_load_and_call_its_tool`.
+- **A roster entry carries the parameter schema its app reported.** `get_external_tools` copies `McpToolDef.input_schema`
+  (live `tools/list`, or `<app>/.senclaw/mcp-tools.json` while the app sleeps) into `McpToolInfo`, and `McpBridgeTool`
+  hands it to every provider's tool format and to `ToolSearch`. It was hardcoded `Null` for a while, so the model saw all
+  ~980 installed app tools as taking no arguments and guessed their names. An app that reports none stays `Null`
+  (`object_parameters` makes that an empty object). The schema reaches a request only once the tool is loaded
+  (`select:` / a skill) — app tools are deferred — so do not add app tools to `ALWAYS_LOADED_MCP_TOOLS` for convenience:
+  the installed apps' schemas total ~220 KB. Pinned by `mcp::manager::tests`, `mcp::bridge::schema_tests` and
+  `zen_core::engine::tests::a_loaded_app_tool_reaches_the_model_with_its_parameters`.
 
 Manifest also carries `requires` (what the machine must have: `node`, `python`,
 `bin`, `env`, `os` — checked at install *and* before every launch, a hard miss

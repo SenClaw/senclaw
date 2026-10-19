@@ -140,6 +140,28 @@ impl McpManager {
         config: ExternalMcpServerConfig,
         scope: McpScopeType,
     ) -> Result<McpServerInfo> {
+        self.register(config, scope, false).await
+    }
+
+    /// [`Self::add_or_update`] for a session-mode Space App: the server is
+    /// marked on-demand, so its tools stay in the roster while the app is
+    /// stopped (idle reaper, the person's Stop, a failed start) and the first
+    /// call reconnects it. Tools it listed before are kept until a connection
+    /// reports new ones.
+    pub async fn add_or_update_on_demand(
+        &self,
+        config: ExternalMcpServerConfig,
+        scope: McpScopeType,
+    ) -> Result<McpServerInfo> {
+        self.register(config, scope, true).await
+    }
+
+    async fn register(
+        &self,
+        config: ExternalMcpServerConfig,
+        scope: McpScopeType,
+        on_demand: bool,
+    ) -> Result<McpServerInfo> {
         // Validate
         config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
@@ -152,7 +174,13 @@ impl McpManager {
 
         // Insert new state
         let mut external = self.external.write().await;
-        let state = ExternalServerState::new(config.clone(), scope);
+        let mut state = ExternalServerState::new(config.clone(), scope);
+        if on_demand {
+            state.on_demand = true;
+            if let Some(previous) = external.get(&config.name) {
+                state.tools = previous.tools.clone();
+            }
+        }
         external.insert(config.name.clone(), state);
         drop(external);
 
@@ -194,6 +222,7 @@ impl McpManager {
         let mut state = ExternalServerState::new(config.clone(), scope);
         let n = cached_tools.len();
         state.tools = cached_tools;
+        state.on_demand = true;
         external.insert(config.name.clone(), state);
         drop(external);
         info!(
@@ -815,7 +844,13 @@ impl McpManager {
                 let mut external = self.external.write().await;
                 if let Some(s) = external.get_mut(name) {
                     s.client = Some(client);
-                    s.tools = tool_defs;
+                    // An on-demand app that answers `tools/list` with nothing
+                    // (still warming up) must not erase what it reported last
+                    // time: the same rule that keeps an empty list from
+                    // overwriting the on-disk cache.
+                    if !(s.on_demand && tool_defs.is_empty()) {
+                        s.tools = tool_defs;
+                    }
                     s.status = McpServerStatus::Connected;
                     s.error = None;
                     info!(
@@ -848,7 +883,13 @@ impl McpManager {
                 match client.disconnect().await {
                     Ok(()) => {
                         state.status = McpServerStatus::Disconnected;
-                        state.tools.clear();
+                        // An on-demand app is expected to be disconnected, and
+                        // its tools are what get it called — and so started —
+                        // again. Everything else has nothing to offer once the
+                        // connection is gone.
+                        if !state.on_demand {
+                            state.tools.clear();
+                        }
                         info!("MCP external {name} disconnected");
                     }
                     Err(e) => {
@@ -865,11 +906,19 @@ impl McpManager {
     // ---- tool access ----
 
     /// Get all external MCP tools as `McpToolInfo` with `mcp__` prefix.
+    ///
+    /// A connected server contributes its tools. So does an enabled on-demand
+    /// server (a session-mode Space App) whatever its connection state: it
+    /// sleeps most of the time, and a roster that dropped its tools would never
+    /// get it called, so it would never wake. The list is the one it reported
+    /// last (see [`Self::add_or_update_offline`]).
     pub async fn get_external_tools(&self) -> Vec<McpToolInfo> {
         let external = self.external.read().await;
         let mut tools = Vec::new();
         for state in external.values() {
-            if state.status != McpServerStatus::Connected {
+            let offered = state.status == McpServerStatus::Connected
+                || (state.on_demand && state.config.enabled);
+            if !offered {
                 continue;
             }
             for t in &state.tools {
@@ -882,7 +931,12 @@ impl McpManager {
                     tools.push(McpToolInfo {
                         name: prefixed_name,
                         description: t.description.clone().unwrap_or_default(),
-                        input_schema: serde_json::Value::Null,
+                        // What the app reported (live, or from its cache while
+                        // it sleeps). Without it the model is told the tool
+                        // takes no arguments and guesses their names. An app
+                        // that reports none stays `Null`; the providers turn
+                        // that into an empty object schema.
+                        input_schema: t.input_schema.clone().unwrap_or(serde_json::Value::Null),
                     });
                 }
             }
@@ -890,9 +944,8 @@ impl McpManager {
         tools
     }
 
-    /// Get the full `McpToolInfo` list including proper input schemas
-    /// for the agent tool roster. External tools have `input_schema: Null`
-    /// until we bridge them properly (step 7).
+    /// The roster the agent is given: [`Self::get_external_tools`], each tool
+    /// with the parameter schema its server reported.
     pub async fn get_external_tools_full(&self) -> Vec<McpToolInfo> {
         self.get_external_tools().await
     }

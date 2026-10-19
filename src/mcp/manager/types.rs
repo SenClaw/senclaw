@@ -18,6 +18,13 @@ pub(crate) struct ExternalServerState {
     pub(crate) tools: Vec<McpToolDef>,
     pub(crate) status: McpServerStatus,
     pub(crate) error: Option<String>,
+    /// A session-mode Space App: its process runs only while something uses it,
+    /// so "not connected" is its resting state and the next call is what wakes
+    /// it. `tools` is then the last list the app reported, and it stays in the
+    /// agent roster while the app sleeps — see [`McpManager::get_external_tools`].
+    ///
+    /// [`McpManager::get_external_tools`]: super::service::McpManager::get_external_tools
+    pub(crate) on_demand: bool,
 }
 
 impl ExternalServerState {
@@ -29,6 +36,7 @@ impl ExternalServerState {
             tools: Vec::new(),
             status: McpServerStatus::Disconnected,
             error: None,
+            on_demand: false,
         }
     }
 
