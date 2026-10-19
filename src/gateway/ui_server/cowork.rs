@@ -362,6 +362,7 @@ pub(crate) async fn create_team(
         llm_config_id: None,
         last_active: None,
         added_at: now,
+        project_id: None,
     };
     s.group_manager
         .as_ref()
@@ -660,6 +661,7 @@ pub(crate) async fn update_team(
             llm_config_id: None,
             last_active: None,
             added_at: local_iso_string_now(),
+            project_id: None,
         };
         gm.register(&db, &s.config, &binding);
     }
@@ -866,6 +868,7 @@ pub(crate) async fn create_from_template(
         llm_config_id: None,
         last_active: None,
         added_at: now,
+        project_id: None,
     };
     if let Some(gm) = s.group_manager.as_ref() {
         gm.register(&db, &s.config, &binding);

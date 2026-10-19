@@ -1154,7 +1154,15 @@ impl DispatchBridge {
             candidates.sort_by(|a, b| a.created_at.cmp(&b.created_at));
             if let Some(next) = candidates.into_iter().next() {
                 next.status = "active".into();
-                if !workspace.is_empty() {
+                // A parent created in a project already knows where it runs
+                // (its project's root); the profile's workspace-state file
+                // describes whichever session wrote it last and must not
+                // replace that.
+                let already_known = next
+                    .shared_workspace
+                    .as_deref()
+                    .is_some_and(|w| !w.is_empty());
+                if !workspace.is_empty() && !already_known {
                     next.shared_workspace = Some(workspace.clone());
                 }
                 activated_id = Some(next.id.clone());

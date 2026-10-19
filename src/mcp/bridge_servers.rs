@@ -42,10 +42,26 @@ pub fn resolve_group(db: &crate::db::Db, jid: Option<&str>) -> Option<GroupBindi
 }
 
 /// `senclaw core-server` scoped to `binding`, hosting [`BRIDGE_CORE_SERVERS`].
-pub fn core_server(cfg: &Config, binding: &GroupBinding) -> McpServerConfig {
+///
+/// `project` is the binding's project when it has one: the external agent
+/// then works where the session does — in the project's root, with the
+/// session's own workspace-state file.
+pub fn core_server(
+    cfg: &Config,
+    binding: &GroupBinding,
+    project: Option<&crate::projects::Project>,
+) -> McpServerConfig {
     let home = crate::util::paths::senclaw_home();
-    let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
-    let workspace = crate::util::paths::senclaw_data_home().join("workspace").join(&binding.folder);
+    let state_file = home.join(crate::projects::workspace_state_file_name(
+        &crate::projects::workspace_state_key(binding),
+    ));
+    let workspace = match project {
+        Some(p) => std::path::PathBuf::from(&p.root),
+        None => crate::util::paths::senclaw_data_home().join("workspace").join(&binding.folder),
+    };
+    let project_root = project.map(|p| p.root.clone());
+    let project_bank = project.map(|p| crate::projects::project_bank(&p.id));
+    let project_dirs = project.map(|p| vec![p.root.clone()]);
     let s = |p: &std::path::Path| p.to_string_lossy().to_string();
     let (db, state, ws) = (s(&cfg.paths.db_path), s(&state_file), s(&workspace));
     let (profiles, user_profile) = (s(&cfg.paths.profiles_dir), s(&cfg.paths.user_profile_path));
@@ -66,7 +82,7 @@ pub fn core_server(cfg: &Config, binding: &GroupBinding) -> McpServerConfig {
         chat_jid: &binding.jid,
         workspace_state_file: &state,
         default_workspace: &ws,
-        allowed_work_dirs: binding.allowed_work_dirs.as_deref(),
+        allowed_work_dirs: project_dirs.as_deref().or(binding.allowed_work_dirs.as_deref()),
         profiles_dir: &profiles,
         memory_folder: &binding.folder,
         embedding_provider: Some(cfg.memory.embedding_provider.as_str()),
@@ -88,6 +104,8 @@ pub fn core_server(cfg: &Config, binding: &GroupBinding) -> McpServerConfig {
         js_timeout_ms: 5_000,
         js_memory_mb: 128,
         servers: BRIDGE_CORE_SERVERS,
+        project_root: project_root.as_deref(),
+        project_bank: project_bank.as_deref(),
     });
     c.name = CORE_NAME.into();
     c

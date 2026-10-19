@@ -38,6 +38,20 @@ pub struct RecallQuery {
     /// phrase like "yesterday" resolves against it. A field rather than a
     /// clock read so a test is deterministic.
     pub now: i64,
+    /// The project this chat was created in, when it was. Its own facts are
+    /// read in addition to the agent's, and `include_common` says whether the
+    /// agent-wide ones still are.
+    pub project: Option<ProjectRecall>,
+}
+
+/// What recall needs to know about the project a chat belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecall {
+    /// The project's fact bank (`project:<id>`).
+    pub bank: String,
+    /// Whether the facts that belong to the whole agent (`folder`, no chat)
+    /// are shown here too. Off, only the project's own facts are.
+    pub include_common: bool,
 }
 
 /// A fused, scored, token-counted result.

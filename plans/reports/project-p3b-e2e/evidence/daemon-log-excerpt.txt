@@ -1,0 +1,5 @@
+2026-10-18T17:27:42.250748Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from kanban stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_chunks=0
+2026-10-18T17:27:42.251257Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from kanban stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_chunks=0
+2026-10-18T17:27:47.226929Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from kanban stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_chunks=0
+2026-10-18T17:27:57.231681Z  WARN senclaw::memory::engine::facts::retain: [facts] extraction call failed error=chat completion HTTP 500 Internal Server Error: {"error":"the extraction model is down"}
+2026-10-18T17:28:17.237922Z  INFO senclaw::memory::engine::facts::retain: [facts] retained from kanban stored=1 reinforced=0 folded=0 replaces_claimed=0 superseded=0 superseded_by_slot=0 failed_chunks=0

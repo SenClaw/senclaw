@@ -1,0 +1,290 @@
+{
+  "about": "Inputs for the project measurements that need a real extraction model (src/memory/engine/eval/real_project.rs, all #[ignore]). `windows` are conversation windows of one project chat, some about the project, some about the person, some both; every stored fact is classified by the markers listed here, and the printout is read by hand besides. `personal_questions` and `project_questions` are asked afterwards. `cards` are summaries of the kind a kanban worker writes when it closes a card, retained the way the dispatcher retains them; `card_questions` are asked the way the next worker of the project would ask. Markers are matched folded (case and diacritics ignored).",
+  "project": "prj_0000000a",
+  "folder": "main",
+  "now": "2026-10-19",
+  "chat": "web:sao-kim-1",
+  "sibling_chat": "web:sao-kim-2",
+  "outside_chat": "web:other",
+  "windows": [
+    {
+      "id": "p1-stack",
+      "kind": "project",
+      "text": "User: backend của dự án Sao Kim viết bằng Go, chạy ở cổng 8420\nAssistant: Đã ghi nhận: Sao Kim dùng Go, cổng 8420.",
+      "project_markers": ["8420", "Go"],
+      "personal_markers": []
+    },
+    {
+      "id": "p2-database",
+      "kind": "project",
+      "text": "User: database của Sao Kim là Postgres 16, bản sao đọc nằm ở máy replica-02\nAssistant: Ok, Postgres 16 và replica-02.",
+      "project_markers": ["Postgres 16", "replica-02"],
+      "personal_markers": []
+    },
+    {
+      "id": "p3-release",
+      "kind": "project",
+      "text": "User: Sao Kim deploy bằng GitHub Actions, workflow tên release.yml, chạy mỗi khi gắn tag v*\nAssistant: Rõ, release.yml chạy khi có tag v*.",
+      "project_markers": ["release.yml"],
+      "personal_markers": []
+    },
+    {
+      "id": "p4-deadline",
+      "kind": "project",
+      "text": "User: hạn bàn giao đợt một của Sao Kim là 15/11, tính năng giỏ hàng phải chốt trước 5/11\nAssistant: Đã ghi: bàn giao đợt một 15/11, giỏ hàng chốt trước 5/11.",
+      "project_markers": ["15/11", "giỏ hàng"],
+      "personal_markers": []
+    },
+    {
+      "id": "p5-port-changed",
+      "kind": "project",
+      "text": "User: à khoan, cổng backend Sao Kim đổi sang 8431 rồi, 8420 bỏ\nAssistant: Ok, cổng backend là 8431 từ giờ.",
+      "project_markers": ["8431"],
+      "personal_markers": []
+    },
+    {
+      "id": "s1-name-city",
+      "kind": "personal",
+      "text": "User: tôi tên là Minh, đang sống ở Đà Nẵng\nAssistant: Chào Minh!",
+      "project_markers": [],
+      "personal_markers": ["Minh", "Đà Nẵng"]
+    },
+    {
+      "id": "s2-coffee",
+      "kind": "personal",
+      "text": "User: tôi hay uống cà phê muối mỗi sáng, không bỏ đường\nAssistant: Nghe hay đấy.",
+      "project_markers": [],
+      "personal_markers": ["cà phê muối"]
+    },
+    {
+      "id": "s3-cat",
+      "kind": "personal",
+      "text": "User: con mèo nhà tôi tên Mướp, năm nay ba tuổi\nAssistant: Dễ thương quá.",
+      "project_markers": [],
+      "personal_markers": ["Mướp"]
+    },
+    {
+      "id": "s4-run",
+      "kind": "personal",
+      "text": "User: cuối tuần tôi thường chạy bộ dọc bãi biển Mỹ Khê, khoảng 8 cây\nAssistant: Tập đều đấy.",
+      "project_markers": [],
+      "personal_markers": ["Mỹ Khê", "chạy bộ"]
+    },
+    {
+      "id": "m1-remote-timeout",
+      "kind": "mixed",
+      "text": "User: tôi đang làm remote từ Đà Nẵng, hôm nay sửa lỗi timeout ở cổng thanh toán của Sao Kim, nguyên nhân là pool kết nối chỉ có 10\nAssistant: Bạn tăng pool lên bao nhiêu?\nUser: tăng lên 40 là hết",
+      "project_markers": ["timeout", "pool"],
+      "personal_markers": ["Đà Nẵng"]
+    },
+    {
+      "id": "m2-wife-review",
+      "kind": "mixed",
+      "text": "User: vợ tôi tên Lan sắp sinh em bé, nên tôi muốn dời buổi review kiến trúc Sao Kim sang thứ Năm\nAssistant: Chúc mừng hai bạn, mình đã ghi lại việc dời buổi review.",
+      "project_markers": ["review kiến trúc", "thứ Năm"],
+      "personal_markers": ["Lan", "sinh"]
+    },
+    {
+      "id": "m3-allergy-kickoff",
+      "kind": "mixed",
+      "text": "User: tôi dị ứng tôm, nên đừng đặt bữa trưa có tôm cho buổi họp khởi động Sao Kim ngày 3/11\nAssistant: Rõ, họp khởi động ngày 3/11 và không đặt tôm.",
+      "project_markers": ["họp khởi động", "3/11"],
+      "personal_markers": ["dị ứng tôm"]
+    }
+  ],
+  "personal_questions": [
+    { "id": "who", "text": "Tên tôi là gì?", "must_include": ["Minh"] },
+    { "id": "city", "text": "Tôi đang sống ở đâu?", "must_include": ["Đà Nẵng"] },
+    { "id": "coffee", "text": "Tôi uống cà phê kiểu gì?", "must_include": ["cà phê muối"] },
+    { "id": "cat", "text": "Con mèo nhà tôi tên gì?", "must_include": ["Mướp"] },
+    { "id": "run", "text": "Cuối tuần tôi hay chạy bộ ở đâu?", "must_include": ["Mỹ Khê"] },
+    { "id": "wife", "text": "Vợ tôi tên gì?", "must_include": ["Lan"] },
+    { "id": "allergy", "text": "Tôi bị dị ứng món gì?", "must_include": ["tôm"] }
+  ],
+  "project_questions": [
+    { "id": "port-now", "text": "Backend Sao Kim chạy ở cổng nào?", "must_include": ["8431"], "must_exclude": ["8420"] },
+    { "id": "database", "text": "Sao Kim dùng database gì?", "must_include": ["Postgres 16"] },
+    { "id": "deploy", "text": "Sao Kim deploy bằng gì?", "must_include": ["release.yml"] },
+    { "id": "deadline", "text": "Hạn bàn giao đợt một của Sao Kim là khi nào?", "must_include": ["15/11"] },
+    { "id": "timeout", "text": "Lỗi timeout ở cổng thanh toán Sao Kim do đâu?", "must_include": ["pool"] }
+  ],
+  "cards": [
+    {
+      "id": "c01", "class": "good", "expect": "facts",
+      "title": "Add rate limiting to /login",
+      "summary": "Added a token-bucket limiter (5 requests per minute per IP) in src/middleware/rate_limit.rs and applied it to the /login route. New tests in tests/rate_limit_test.rs pass; the full suite is green.",
+      "worth": ["5 requests", "rate_limit.rs"]
+    },
+    {
+      "id": "c02", "class": "numbers", "expect": "facts",
+      "title": "Migrate users table to UUID keys",
+      "summary": "Wrote migration 0042_users_uuid.sql and backfilled 18,204 rows on staging in about 3 seconds. The rollback steps are in docs/migrations.md.",
+      "worth": ["0042", "18,204", "docs/migrations.md"]
+    },
+    {
+      "id": "c03", "class": "numbers", "expect": "facts",
+      "title": "Benchmark the search endpoint",
+      "summary": "Benchmarked GET /search over 10,000 requests: p50 42 ms, p95 180 ms, p99 410 ms. The slow path is the unindexed LIKE on products.name; adding a trigram index should fix it.",
+      "worth": ["p95", "180", "trigram"]
+    },
+    {
+      "id": "c04", "class": "path", "expect": "maybe",
+      "title": "Document the architecture",
+      "summary": "Created docs/architecture.md and moved the diagrams to docs/img/. Updated the links in README.md.",
+      "worth": ["docs/architecture.md", "docs/img"]
+    },
+    {
+      "id": "c05", "class": "good", "expect": "facts",
+      "title": "Fix the flaky checkout test",
+      "summary": "The checkout_flow test failed about 1 run in 8 because it asserted on wall-clock time. Replaced the sleep with a fake clock in tests/helpers/clock.py; 50 consecutive runs passed.",
+      "worth": ["fake clock", "clock.py", "checkout_flow"]
+    },
+    {
+      "id": "c06", "class": "good", "expect": "facts",
+      "title": "Pick a job queue library",
+      "summary": "Compared Sidekiq, BullMQ and Celery for the job queue. Chose BullMQ because the API is already Node and Redis is deployed; Sidekiq needs Ruby and Celery needs a broker we do not run.",
+      "worth": ["BullMQ"]
+    },
+    {
+      "id": "c07", "class": "generic", "expect": "none",
+      "title": "Update the changelog",
+      "summary": "Done.",
+      "worth": []
+    },
+    {
+      "id": "c08", "class": "generic", "expect": "none",
+      "title": "Review PR 212",
+      "summary": "Completed the task as requested.",
+      "worth": []
+    },
+    {
+      "id": "c09", "class": "generic", "expect": "none",
+      "title": "Check the staging deploy",
+      "summary": "All good, nothing else to report.",
+      "worth": []
+    },
+    {
+      "id": "c10", "class": "generic", "expect": "none",
+      "title": "Rename the config key",
+      "summary": "Finished.",
+      "worth": []
+    },
+    {
+      "id": "c11", "class": "generic", "expect": "none",
+      "title": "Clean up the logs folder",
+      "summary": "Task completed successfully.",
+      "worth": []
+    },
+    {
+      "id": "c12", "class": "short", "expect": "maybe",
+      "title": "Bump axios",
+      "summary": "Bumped axios to 1.7.2.",
+      "worth": ["axios", "1.7.2"]
+    },
+    {
+      "id": "c13", "class": "short", "expect": "facts",
+      "title": "Which port for the metrics exporter",
+      "summary": "Port is 9464.",
+      "worth": ["9464"]
+    },
+    {
+      "id": "c14", "class": "short", "expect": "none",
+      "title": "Fix README typo",
+      "summary": "Fixed a typo in README.md.",
+      "worth": []
+    },
+    {
+      "id": "c15", "class": "long", "expect": "facts",
+      "title": "Investigate the memory growth in the worker",
+      "summary": "Took heap snapshots of the worker at start, after 1 hour and after 6 hours. The growth comes from a Map in src/cache/users.ts that is keyed by user id and never evicted: 1.4 million entries after 6 hours. Replaced it with an LRU capped at 5,000 entries (src/cache/lru.ts). After the change the process plateaus at 410 MB instead of reaching 2.1 GB, and the hit rate stayed at 93%. I also looked at the logging buffer, the Redis client and the websocket handlers and none of them leak, so there is nothing to do there. The staging box has 4 GB of RAM, which is why the old version was killed by the OOM killer every night around 03:00. Next step, if someone wants it: expose the cache size as a metric.",
+      "worth": ["LRU", "5,000", "410 MB", "03:00"]
+    },
+    {
+      "id": "c16", "class": "long", "expect": "facts",
+      "title": "Set up CI for the mobile app",
+      "summary": "CI for the mobile app now runs on GitHub Actions on a macos-14 runner. Pods are cached by Podfile.lock hash, which cut the install step from 6 minutes to 40 seconds; a full run takes 11 minutes. Code signing goes through fastlane match with the certificates in the private repo mobile-certs. Every tag that matches v*.*.* uploads a build to TestFlight. Two things to know: the first run after a cache miss can time out on the simulator boot, re-running fixes it, and the free tier of minutes is not enough for more than about 40 runs a month.",
+      "worth": ["fastlane", "TestFlight", "11 minutes", "macos-14"]
+    },
+    {
+      "id": "c17", "class": "vi-long", "expect": "facts",
+      "title": "Chuẩn hoá định dạng ngày giờ",
+      "summary": "Đã chuyển toàn bộ ngày giờ trong API sang ISO 8601 UTC. Các trường created_at và updated_at của 14 endpoint đã đổi; client cũ vẫn đọc được vì giữ trường cũ thêm 30 ngày (xoá sau 2026-11-20).",
+      "worth": ["ISO 8601", "14", "2026-11-20"]
+    },
+    {
+      "id": "c18", "class": "vi-short", "expect": "facts",
+      "title": "Đổi cổng dev",
+      "summary": "Đã đổi cổng dev từ 3000 sang 3100 vì trùng với Grafana.",
+      "worth": ["3100", "Grafana"]
+    },
+    {
+      "id": "c19", "class": "vi-generic", "expect": "none",
+      "title": "Dọn thư mục tạm",
+      "summary": "Xong rồi.",
+      "worth": []
+    },
+    {
+      "id": "c20", "class": "question", "expect": "none",
+      "title": "Choose the pagination style",
+      "summary": "Which approach do you prefer: cursor-based or offset-based pagination? I did not change anything yet.",
+      "worth": []
+    },
+    {
+      "id": "c21", "class": "negative", "expect": "maybe",
+      "title": "Reproduce the upload bug",
+      "summary": "Could not reproduce the bug with files up to 200 MB on staging; no code changes made. Needs the exact file from the customer.",
+      "worth": ["200 MB"]
+    },
+    {
+      "id": "c22", "class": "change-1", "expect": "facts",
+      "title": "Raise the default page size",
+      "summary": "Changed the default page size from 20 to 50 in api/pagination.py and updated the OpenAPI docs.",
+      "worth": ["50", "pagination.py"]
+    },
+    {
+      "id": "c23", "class": "duplicate", "expect": "facts",
+      "title": "Raise the default page size (second pass)",
+      "summary": "Default page size is now 50 (was 20), changed in api/pagination.py; OpenAPI regenerated.",
+      "worth": ["50"]
+    },
+    {
+      "id": "c24", "class": "change-2", "expect": "facts",
+      "title": "Lower the default page size",
+      "summary": "Reverted the default page size to 25 after the mobile team complained about the payload size.",
+      "worth": ["25"]
+    },
+    {
+      "id": "c25", "class": "secret", "expect": "facts",
+      "title": "Rotate the payments API key",
+      "summary": "Rotated the payments API key; the new key is sk_live_51Habcdefghijklmnop1234567890 and it is stored in the 1Password vault Infra.",
+      "worth": ["1Password", "Infra"]
+    },
+    {
+      "id": "c26", "class": "people", "expect": "maybe",
+      "title": "Summarise the standup notes",
+      "summary": "Summarised the standup: Lan is out on Friday, Tuấn is blocked on the SSO ticket, nothing else notable.",
+      "worth": ["SSO"]
+    },
+    {
+      "id": "c27", "class": "good", "expect": "facts",
+      "title": "Write the release notes for 3.4",
+      "summary": "Wrote the release notes for 3.4 covering 9 fixes and 2 features, published to docs/releases/3.4.md.",
+      "worth": ["3.4", "9 fixes"]
+    },
+    {
+      "id": "c28", "class": "short", "expect": "maybe",
+      "title": "Tidy imports",
+      "summary": "Ran the formatter over src/ and removed 31 unused imports.",
+      "worth": ["31"]
+    }
+  ],
+  "card_questions": [
+    { "id": "page-size", "text": "What is the default page size of the API?", "must_include": ["25"], "must_exclude": ["to 50"] },
+    { "id": "queue", "text": "Which job queue library did the project choose?", "must_include": ["BullMQ"] },
+    { "id": "metrics-port", "text": "Which port does the metrics exporter use?", "must_include": ["9464"] },
+    { "id": "search-bench", "text": "What did the benchmark of the search endpoint show?", "must_include": ["trigram"] },
+    { "id": "mobile-ci", "text": "How is CI for the mobile app set up?", "must_include": ["fastlane"] },
+    { "id": "memory", "text": "What caused the memory growth in the worker?", "must_include": ["LRU"] },
+    { "id": "dev-port", "text": "Which port does the dev server use now?", "must_include": ["3100"] }
+  ]
+}

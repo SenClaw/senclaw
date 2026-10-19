@@ -688,6 +688,33 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // Projects: a folder root plus the context written about it. A session
+    // points at one through `groups.project_id`. After the legacy rebuild
+    // above on purpose — that rebuild copies a fixed column list.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS projects (
+          id             TEXT PRIMARY KEY,
+          name           TEXT NOT NULL,
+          root           TEXT NOT NULL UNIQUE,
+          description    TEXT NOT NULL DEFAULT '',
+          facts_write    TEXT NOT NULL DEFAULT 'project'
+                         CHECK (facts_write IN ('project','chat','off')),
+          inherit_common INTEGER NOT NULL DEFAULT 1,
+          created_at     INTEGER NOT NULL,
+          updated_at     INTEGER NOT NULL,
+          archived_at    INTEGER
+        );
+        "#,
+    )?;
+    if !column_names(conn, "groups")?.iter().any(|c| c == "project_id") {
+        conn.execute("ALTER TABLE groups ADD COLUMN project_id TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_groups_project ON groups(project_id)",
+        [],
+    )?;
+
     let task_cols = column_names(conn, "scheduled_tasks")?;
     if !task_cols.iter().any(|c| c == "script_path") {
         conn.execute(

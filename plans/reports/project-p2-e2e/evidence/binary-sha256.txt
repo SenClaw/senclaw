@@ -1,0 +1,1 @@
+52c7c3e48fd5308898e5058c6368ce64fd8e34479bb0c8b16a0ec6d01ffe1fd0  /private/tmp/claude-501/-Users-benji-Projects-SenClaw/25a16ca1-87e9-4506-b7cd-2978c805a907/scratchpad/p2-target/debug/senclaw

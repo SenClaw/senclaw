@@ -31,13 +31,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::pool::should_reflect;
+use crate::memory::engine::facts::FactTarget;
 
 #[derive(Default)]
 struct Window {
-    /// The agent folder the facts will belong to.
-    folder: String,
-    /// The chat they will be tagged with; empty when chats share one window.
-    chat: String,
+    /// The bank the facts will be stored in and the chat they will be tagged
+    /// with (empty when chats share one window, and for a project's bank).
+    target: FactTarget,
     /// Transcript lines ("speaker: text").
     parts: Vec<String>,
     chars: usize,
@@ -56,8 +56,15 @@ fn windows() -> &'static Mutex<HashMap<String, Window>> {
 /// Which window a turn goes to: one per chat, so a window never mixes what
 /// different chats of the same agent said and every fact can say where it came
 /// from. With per-chat scoping off the agent's chats share one window.
-fn window_key(folder: &str, chat_jid: &str, by_chat: bool) -> String {
-    if by_chat {
+///
+/// A project's bank (`bank` is not the agent's `folder`) is shared by its chats
+/// but not by their windows: the extractor reads one conversation at a time,
+/// and the facts it states need not say which of two interleaved speakers said
+/// them.
+fn window_key(folder: &str, chat_jid: &str, by_chat: bool, bank: &str) -> String {
+    if bank != folder {
+        format!("{bank}\u{1f}{chat_jid}")
+    } else if by_chat {
         format!("{folder}\u{1f}{chat_jid}")
     } else {
         folder.to_string()
@@ -69,7 +76,17 @@ fn window_key(folder: &str, chat_jid: &str, by_chat: bool) -> String {
 /// on a spawned task, never on the caller's path. Callers gate on the
 /// `memory.cognitive_reflection` toggle; the size and idle knobs come from
 /// `cognitive.reflect_*`.
-pub(crate) fn reflect_push(group_folder: &str, chat_jid: &str, speaker: &str, text: &str) {
+///
+/// `target` is where the facts of this window will be stored. The caller
+/// decides it from the chat's project (`projects::fact_target`) and does not
+/// push at all when the project says nothing is to be kept.
+pub(crate) fn reflect_push(
+    group_folder: &str,
+    chat_jid: &str,
+    target: &FactTarget,
+    speaker: &str,
+    text: &str,
+) {
     // Outside a tokio runtime (unit tests, shutdown) there is nowhere to
     // run the flush — drop silently, reflection is best-effort by design.
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
@@ -94,17 +111,12 @@ pub(crate) fn reflect_push(group_folder: &str, chat_jid: &str, speaker: &str, te
     };
 
     let by_chat = cfg.memory.engine_facts_by_chat && !chat_jid.is_empty();
-    let key = window_key(group_folder, chat_jid, by_chat);
+    let key = window_key(group_folder, chat_jid, by_chat, &target.bank);
     let (size_flush, generation) = {
         let mut map = windows().lock().unwrap();
         let w = map.entry(key.clone()).or_default();
-        if w.folder.is_empty() {
-            w.folder = group_folder.to_string();
-            w.chat = if by_chat {
-                chat_jid.to_string()
-            } else {
-                String::new()
-            };
+        if w.target.bank.is_empty() {
+            w.target = target.clone();
         }
         w.chars += line.chars().count() + 1;
         w.parts.push(line);
@@ -148,7 +160,7 @@ async fn flush_window(key: &str, generation: u64, forced: bool, cooldown: Durati
         }
     }
 
-    let (text, folder, chat) = {
+    let (text, target) = {
         let mut map = windows().lock().unwrap();
         let Some(w) = map.get_mut(key) else { return };
         if !forced && w.generation != generation {
@@ -161,23 +173,21 @@ async fn flush_window(key: &str, generation: u64, forced: bool, cooldown: Durati
         w.chars = 0;
         (
             w.parts.drain(..).collect::<Vec<_>>().join("\n"),
-            w.folder.clone(),
-            w.chat.clone(),
+            w.target.clone(),
         )
     };
-    reflect_window_text(text, folder, chat).await;
+    reflect_window_text(text, target).await;
 }
 
 /// Retain one flushed conversation window as facts, if it has enough
 /// substance: not a lone unanswered question, and long enough overall. The
 /// secret scrub happens inside `retain`, before the text reaches the model.
-async fn reflect_window_text(text: String, group_folder: String, chat_jid: String) {
+async fn reflect_window_text(text: String, target: FactTarget) {
     let cfg = crate::config::Config::from_env();
     if !should_reflect(&text, cfg.cognitive.reflect_min_chars, usize::MAX) {
         return;
     }
-    crate::memory::engine::facts::retain_text(&cfg, &group_folder, &chat_jid, &text, "reflection")
-        .await;
+    crate::memory::engine::facts::retain_text(&cfg, &target, &text, "reflection").await;
 }
 
 #[cfg(test)]
@@ -186,13 +196,19 @@ mod tests {
 
     const CHAT: &str = "web:reflection-test";
 
+    /// The agent's own bank, tagged with the chat: the default target.
+    fn chat_target(folder: &str, chat: &str) -> FactTarget {
+        FactTarget::chat(folder, chat, true)
+    }
+
     fn drain(folder: &str) -> Option<(String, u64)> {
         let mut map = windows().lock().unwrap();
-        map.get_mut(&window_key(folder, CHAT, true)).map(|w| {
-            let text = w.parts.drain(..).collect::<Vec<_>>().join("\n");
-            w.chars = 0;
-            (text, w.generation)
-        })
+        map.get_mut(&window_key(folder, CHAT, true, folder))
+            .map(|w| {
+                let text = w.parts.drain(..).collect::<Vec<_>>().join("\n");
+                w.chars = 0;
+                (text, w.generation)
+            })
     }
 
     /// Pushes buffer as speaker-prefixed transcript lines; envelope text
@@ -202,11 +218,25 @@ mod tests {
     #[tokio::test]
     async fn push_buffers_turns_as_transcript() {
         let folder = "test-buffering-folder";
-        reflect_push(folder, CHAT, "User", "SemaClaw deadline khi nào vậy nhỉ?");
-        reflect_push(folder, CHAT, "Assistant", "Theo kế hoạch là tháng 8.");
+        let target = chat_target(folder, CHAT);
         reflect_push(
             folder,
             CHAT,
+            &target,
+            "User",
+            "SemaClaw deadline khi nào vậy nhỉ?",
+        );
+        reflect_push(
+            folder,
+            CHAT,
+            &target,
+            "Assistant",
+            "Theo kế hoạch là tháng 8.",
+        );
+        reflect_push(
+            folder,
+            CHAT,
+            &target,
             "User",
             r#"<message sender="an">đồng ý nhé</message>"#,
         );
@@ -223,18 +253,35 @@ mod tests {
     #[test]
     fn chats_of_one_agent_get_their_own_window_unless_scoping_is_off() {
         assert_ne!(
-            window_key("main", "web:a", true),
-            window_key("main", "web:b", true),
+            window_key("main", "web:a", true, "main"),
+            window_key("main", "web:b", true, "main"),
             "a window must not mix what different chats said"
         );
         assert_ne!(
-            window_key("main", "web:a", true),
-            window_key("other", "web:a", true)
+            window_key("main", "web:a", true, "main"),
+            window_key("other", "web:a", true, "other")
         );
         assert_eq!(
-            window_key("main", "web:a", false),
-            window_key("main", "web:b", false),
+            window_key("main", "web:a", false, "main"),
+            window_key("main", "web:b", false, "main"),
             "with scoping off the agent's chats share one window"
+        );
+    }
+
+    #[test]
+    fn the_chats_of_a_project_share_a_bank_but_not_a_window() {
+        let bank = "project:prj_0a1b2c3d";
+        // Scoping off does not merge them: the switch is about the agent's pool.
+        for by_chat in [true, false] {
+            assert_ne!(
+                window_key("main", "web:a", by_chat, bank),
+                window_key("main", "web:b", by_chat, bank)
+            );
+        }
+        assert_ne!(
+            window_key("main", "web:a", true, bank),
+            window_key("main", "web:a", true, "main"),
+            "the same chat writing to the project and to its agent has two windows"
         );
     }
 
@@ -244,28 +291,30 @@ mod tests {
         reflect_push(
             folder,
             "web:one",
+            &chat_target(folder, "web:one"),
             "User",
             "Lan works at Orion, said in chat one",
         );
         reflect_push(
             folder,
             "web:two",
+            &chat_target(folder, "web:two"),
             "User",
             "Sen lives in Hue, said in chat two",
         );
         let map = windows().lock().unwrap();
         let one = map
-            .get(&window_key(folder, "web:one", true))
+            .get(&window_key(folder, "web:one", true, folder))
             .expect("chat one window");
         let two = map
-            .get(&window_key(folder, "web:two", true))
+            .get(&window_key(folder, "web:two", true, folder))
             .expect("chat two window");
         assert_eq!(
-            (one.folder.as_str(), one.chat.as_str()),
+            (one.target.bank.as_str(), one.target.origin.as_str()),
             (folder, "web:one")
         );
         assert_eq!(
-            (two.folder.as_str(), two.chat.as_str()),
+            (two.target.bank.as_str(), two.target.origin.as_str()),
             (folder, "web:two")
         );
         assert!(one.parts.concat().contains("Orion") && !one.parts.concat().contains("Hue"));
@@ -275,11 +324,48 @@ mod tests {
     #[tokio::test]
     async fn empty_and_whitespace_turns_are_ignored() {
         let folder = "test-empty-folder";
-        reflect_push(folder, CHAT, "User", "   ");
-        reflect_push(folder, CHAT, "User", "");
+        let target = chat_target(folder, CHAT);
+        reflect_push(folder, CHAT, &target, "User", "   ");
+        reflect_push(folder, CHAT, &target, "User", "");
         assert!(
             drain(folder).map(|(t, _)| t.is_empty()).unwrap_or(true),
             "nothing should be buffered"
         );
+    }
+
+    #[tokio::test]
+    async fn the_chats_of_a_project_are_buffered_apart_and_flush_into_the_projects_bank() {
+        let folder = "test-project-windows-folder";
+        let target = FactTarget::project("project:prj_0a1b2c3d");
+        reflect_push(
+            folder,
+            "web:one",
+            &target,
+            "User",
+            "The deploy moved to Friday, said in chat one",
+        );
+        reflect_push(
+            folder,
+            "web:two",
+            &target,
+            "User",
+            "The staging host is called orion, said in chat two",
+        );
+        let map = windows().lock().unwrap();
+        let one = map
+            .get(&window_key(folder, "web:one", true, &target.bank))
+            .expect("chat one window");
+        let two = map
+            .get(&window_key(folder, "web:two", true, &target.bank))
+            .expect("chat two window");
+        for w in [one, two] {
+            assert_eq!(
+                (w.target.bank.as_str(), w.target.origin.as_str()),
+                ("project:prj_0a1b2c3d", ""),
+                "stored in the project, tagged with no chat"
+            );
+        }
+        assert!(one.parts.concat().contains("Friday") && !one.parts.concat().contains("orion"));
+        assert!(two.parts.concat().contains("orion") && !two.parts.concat().contains("Friday"));
     }
 }

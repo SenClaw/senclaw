@@ -6,7 +6,8 @@
 //! has the vector arm as well; this is the deliberate, ask-for-it version.)
 //!
 //! Both tools are scoped to the agent's own folder: an agent cannot see or
-//! delete another agent's facts.
+//! delete another agent's facts. A chat in a project also reaches the project's
+//! bank, which its server learns from the environment, never from a parameter.
 
 use chrono::NaiveDate;
 
@@ -42,6 +43,46 @@ pub fn lookup(
     };
     if let Some(window) = window {
         for f in store.in_window(bank, window, limit, scope)? {
+            if found.len() >= limit {
+                break;
+            }
+            if !found.iter().any(|g| g.id == f.id) {
+                found.push(f);
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The project a chat belongs to, as the fact tools see it.
+#[derive(Debug, Clone, Copy)]
+pub struct ProjectView<'a> {
+    /// The project's fact bank (`project:<id>`).
+    pub bank: &'a str,
+    /// Whether the agent's own facts are still shown beside the project's.
+    pub include_common: bool,
+}
+
+/// [`lookup`] for a chat that may be in a project: the project's facts first —
+/// the chat is working on them — then the agent's, unless the project hides
+/// them, up to `limit` in all. Every fact of the project is visible to every
+/// chat in it.
+pub fn lookup_for_chat(
+    store: &FactStore,
+    bank: &str,
+    project: Option<ProjectView<'_>>,
+    query: &str,
+    today: NaiveDate,
+    limit: usize,
+    scope: Scope<'_>,
+) -> anyhow::Result<Vec<StoredFact>> {
+    let Some(project) = project else {
+        return lookup(store, bank, query, today, limit, scope);
+    };
+    let limit = limit.clamp(1, MAX_LIMIT);
+    let mut found = lookup(store, project.bank, query, today, limit, Scope::Agent)?;
+    if project.include_common {
+        for f in lookup(store, bank, query, today, limit, scope)? {
             if found.len() >= limit {
                 break;
             }
@@ -99,6 +140,22 @@ pub fn forget(store: &FactStore, bank: &str, id: &str, scope: Scope<'_>) -> Stri
             id.trim()
         ),
         Err(e) => format!("Error: {e}"),
+    }
+}
+
+/// [`forget`] for a chat that may be in a project: the agent's own fact first,
+/// then — when that is not the answer — the project's.
+pub fn forget_for_chat(
+    store: &FactStore,
+    bank: &str,
+    project_bank: Option<&str>,
+    id: &str,
+    scope: Scope<'_>,
+) -> String {
+    let own = forget(store, bank, id, scope);
+    match project_bank {
+        Some(pb) if own.starts_with("No fact with id") => forget(store, pb, id, Scope::Agent),
+        _ => own,
     }
 }
 
@@ -307,5 +364,84 @@ mod tests {
             "another agent's fact is untouched"
         );
         assert!(forget(&s, "main", "nope", Scope::Agent).contains("memory_search_facts"));
+    }
+
+    const PROJECT: &str = "project:prj_0a1b2c3d";
+
+    fn view(include_common: bool) -> Option<ProjectView<'static>> {
+        Some(ProjectView {
+            bank: PROJECT,
+            include_common,
+        })
+    }
+
+    #[test]
+    fn a_chat_in_a_project_finds_the_projects_facts_first_and_then_the_agents() {
+        let s = store();
+        add_in(&s, PROJECT, "", "The deploy is on Friday");
+        add_in(&s, "main", "", "Sen will deploy from the laptop");
+        add_in(&s, "main", "web:a", "Sen will deploy the blog on Monday");
+        add_in(&s, "main", "web:b", "Sen will deploy the wiki on Tuesday");
+        let a = Scope::Chat("web:a");
+
+        let got = lookup_for_chat(&s, "main", view(true), "deploy", today(), 10, a).unwrap();
+        assert_eq!(
+            texts(&got)[0],
+            "The deploy is on Friday",
+            "the project's facts come first"
+        );
+        // The agent's facts follow, through this chat's scope: so not web:b's.
+        let mut rest = texts(&got)[1..].to_vec();
+        rest.sort_unstable();
+        assert_eq!(
+            rest,
+            [
+                "Sen will deploy from the laptop",
+                "Sen will deploy the blog on Monday"
+            ]
+        );
+        // The same question from outside any project never sees the project.
+        let outside = lookup_for_chat(&s, "main", None, "deploy", today(), 10, a).unwrap();
+        assert!(!texts(&outside).contains(&"The deploy is on Friday"));
+        // Inheriting nothing leaves only the project's own.
+        let own = lookup_for_chat(&s, "main", view(false), "deploy", today(), 10, a).unwrap();
+        assert_eq!(texts(&own), ["The deploy is on Friday"]);
+        // A listing, no query, is the same union.
+        let all = lookup_for_chat(&s, "main", view(true), "", today(), 10, a).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn the_project_cannot_crowd_out_the_limit_and_nothing_repeats() {
+        let s = store();
+        for i in 0..5 {
+            add_in(&s, PROJECT, "", &format!("project fact number {i}"));
+        }
+        add_in(&s, "main", "", "agent fact");
+        let got = lookup_for_chat(&s, "main", view(true), "", today(), 3, Scope::Agent).unwrap();
+        assert_eq!(got.len(), 3, "the limit holds across both banks");
+        let mut ids: Vec<_> = got.iter().map(|f| f.id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn a_chat_in_a_project_can_forget_the_projects_facts_but_not_other_projects() {
+        let s = store();
+        let mine = add_in(&s, PROJECT, "", "The deploy is on Friday");
+        let other = add_in(&s, "project:prj_ffffffff", "", "Another project's fact");
+        let a = Scope::Chat("web:a");
+
+        let refused = forget_for_chat(&s, "main", Some(PROJECT), &other, a);
+        assert!(refused.starts_with("No fact with id"), "{refused}");
+        assert_eq!(s.count("project:prj_ffffffff").unwrap(), 1);
+        // Outside a project the project's fact is out of reach.
+        let outside = forget_for_chat(&s, "main", None, &mine, a);
+        assert!(outside.starts_with("No fact with id"), "{outside}");
+        assert_eq!(s.count(PROJECT).unwrap(), 1);
+
+        assert!(forget_for_chat(&s, "main", Some(PROJECT), &mine, a).starts_with("Forgot"));
+        assert_eq!(s.count(PROJECT).unwrap(), 0);
     }
 }

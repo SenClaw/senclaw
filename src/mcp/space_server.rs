@@ -1735,6 +1735,7 @@ impl SpaceServer {
                 .filter(|s| !s.is_empty()),
             last_active: Some(now.clone()),
             added_at: now,
+            project_id: None,
         }) {
             return ToolResult::err(format!("create chat session: {e}"));
         }
@@ -1933,6 +1934,7 @@ impl SpaceServer {
                     llm_config_id: None,
                     last_active: Some(now.clone()),
                     added_at: now,
+                    project_id: None,
                 }) {
                     return ToolResult::err(format!("recreate chat session: {e}"));
                 }

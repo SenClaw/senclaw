@@ -1094,6 +1094,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_fact_a_person_typed_is_not_replaced_by_a_conversation_that_says_otherwise() {
+        let e = engine(false);
+        // The owner wrote it down, with the attribute a conversation could change.
+        let typed = e
+            .store
+            .insert_manual(
+                "main",
+                &NewFact {
+                    text: "Người dùng thích dùng React cho frontend.".into(),
+                    kind: super::super::store::FactKind::World,
+                    occurred: None,
+                    mentioned_at: NOW - 10,
+                    entities: vec!["user".into(), "react".into()],
+                    embedding: None,
+                    model: None,
+                    source: String::new(),
+                    origin: String::new(),
+                    slot: super::super::slots::read("user", "favorite frontend"),
+                },
+            )
+            .unwrap();
+        let Inserted::New(typed) = typed else {
+            panic!("{typed:?}")
+        };
+
+        // The model names it (`F1`) and gives the same attribute a new value.
+        let llm = Scripted::ok(
+            r#"{"facts":[{"text":"Người dùng đã chuyển sang Vue và không còn dùng React.","kind":"world","entities":["user","Vue","React"],"replaces":["F1"],"subject":"user","predicate":"favorite_frontend"}]}"#,
+        );
+        let report = retain(
+            &e,
+            &llm,
+            Mode::Redact,
+            &req("User: tôi chuyển sang Vue rồi, không dùng React nữa"),
+        )
+        .await;
+        assert_eq!(report.stored, 1, "what was said is kept");
+        assert_eq!(report.replaces_claimed, 1);
+        assert_eq!(
+            (report.superseded, report.superseded_by_slot),
+            (0, 0),
+            "but it retires nothing the owner typed"
+        );
+        let typed = e.store.get(&typed).unwrap().unwrap();
+        assert_eq!(typed.superseded_by, None);
+        assert_eq!(typed.source, "manual");
+        assert_eq!(
+            e.store
+                .recent("main", 10, false, Scope::Agent)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
     async fn a_replacement_the_model_got_wrong_is_ignored() {
         let e = engine(false);
         retain(
@@ -1403,6 +1459,7 @@ mod tests {
             superseded_by: None,
             origin: String::new(),
             slot: None,
+            source: String::new(),
         };
         assert!((temporal_weight(0, &at(0)) - 1.0).abs() < 1e-6);
         assert!((temporal_weight(0, &at(12 * 3600)) - 0.5).abs() < 1e-6);

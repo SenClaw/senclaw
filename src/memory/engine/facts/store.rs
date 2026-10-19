@@ -27,6 +27,22 @@ use sha2::{Digest, Sha256};
 use crate::db::Db;
 use crate::memory::tokenizer::tokenize_optimized;
 
+/// `source` of a fact a person typed. It is never replaced by anything
+/// extracted from a conversation (see [`FactStore::supersede`]).
+pub const SOURCE_MANUAL: &str = "manual";
+
+/// Facts deleted per statement when a whole bank is removed. One statement over
+/// a large bank holds the single connection for as long as the FTS and
+/// restore triggers take over every row (20 000 facts took 18 s), so a bank
+/// goes in slices and the connection is free in between.
+pub const DELETE_BATCH: usize = 500;
+
+/// How long the connection is left alone after a slice. Letting go of a
+/// `std::sync::Mutex` is not enough: the thread that just did gets it straight
+/// back before a waiter has woken, and the waiter starves to the end of the
+/// deletion (measured: a read waited the whole 21 s of a 20 000-fact purge).
+const DELETE_PAUSE: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// An entity shared by more facts than this is a hub ("user"): following it
 /// links everything to everything and says nothing, so graph expansion skips it.
 pub const HUB_ENTITY_FACTS: usize = 500;
@@ -252,6 +268,9 @@ pub struct StoredFact {
     pub origin: String,
     /// Which attribute of whom it states, when known.
     pub slot: Option<Slot>,
+    /// Where it came from: `reflection`, `compaction`, `kanban`, `upload`, or
+    /// [`SOURCE_MANUAL`] for a fact a person typed.
+    pub source: String,
 }
 
 impl StoredFact {
@@ -386,7 +405,7 @@ impl Ord for Scored {
     }
 }
 
-const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at, f.proof_count, f.superseded_by, f.origin, f.slot_subject, f.slot_predicate";
+const FACT_COLUMNS: &str = "f.id, f.kind, f.text, f.occurred_start, f.occurred_end, f.mentioned_at, f.proof_count, f.superseded_by, f.origin, f.slot_subject, f.slot_predicate, f.source";
 
 fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
@@ -485,6 +504,10 @@ impl FactStore {
     /// Mark `old` as replaced by `new`. Returns whether anything changed: a fact
     /// already replaced, one that does not exist, or a fact "replacing" itself
     /// is left alone. The replaced fact stays in the store.
+    ///
+    /// A fact a person typed ([`SOURCE_MANUAL`]) is never replaced: what a
+    /// conversation seems to say does not outrank what the owner wrote down. To
+    /// change one, delete it and add another.
     pub fn supersede(&self, bank: &str, old: &str, new: &str, at: i64) -> Result<bool> {
         if old == new {
             return Ok(false);
@@ -492,11 +515,65 @@ impl FactStore {
         self.db.with_conn(|c| {
             Ok(c.execute(
                 "UPDATE mem_facts SET superseded_by = ?1, superseded_at = ?2 \
-                 WHERE id = ?3 AND bank = ?4 AND superseded_by IS NULL \
+                 WHERE id = ?3 AND bank = ?4 AND superseded_by IS NULL AND source != ?5 \
                    AND EXISTS (SELECT 1 FROM mem_facts WHERE id = ?1 AND bank = ?4)",
-                params![new, at, old, bank],
+                params![new, at, old, bank, SOURCE_MANUAL],
             )? > 0)
         })
+    }
+
+    /// Store a fact a person typed. The same words already in the bank (said by
+    /// a conversation, say) become that fact: it is kept as typed from now on.
+    /// `f.source` is overwritten with [`SOURCE_MANUAL`].
+    pub fn insert_manual(&self, bank: &str, f: &NewFact) -> Result<Inserted> {
+        let mut f = f.clone();
+        f.source = SOURCE_MANUAL.to_string();
+        let inserted = self.insert(bank, &f)?;
+        if let Inserted::Existing(id) = &inserted {
+            self.db.with_conn(|c| {
+                c.execute(
+                    "UPDATE mem_facts SET source = ?1 WHERE id = ?2",
+                    params![SOURCE_MANUAL, id],
+                )?;
+                Ok(())
+            })?;
+        }
+        Ok(inserted)
+    }
+
+    /// Delete every fact of `bank`, [`DELETE_BATCH`] at a time, taking the
+    /// connection once per slice and leaving it alone for a moment after each
+    /// ([`DELETE_PAUSE`]) so other queries run in between. Entities, links and
+    /// the text index go with their fact. Returns how many facts went. Blocks
+    /// for as long as that takes: call it off the async runtime.
+    pub fn delete_bank(&self, bank: &str) -> Result<usize> {
+        self.delete_bank_in(bank, DELETE_BATCH, |_| {})
+    }
+
+    /// [`delete_bank`](Self::delete_bank) with the slice size chosen, and told
+    /// the size of each slice once the connection has been given back.
+    fn delete_bank_in(
+        &self,
+        bank: &str,
+        slice: usize,
+        mut after_slice: impl FnMut(usize),
+    ) -> Result<usize> {
+        let mut total = 0;
+        loop {
+            let n = self.db.with_conn(|c| {
+                Ok(c.execute(
+                    "DELETE FROM mem_facts WHERE id IN \
+                       (SELECT id FROM mem_facts WHERE bank = ?1 LIMIT ?2)",
+                    params![bank, slice as i64],
+                )?)
+            })?;
+            if n == 0 {
+                return Ok(total);
+            }
+            total += n;
+            after_slice(n);
+            std::thread::sleep(DELETE_PAUSE);
+        }
     }
 
     pub fn delete(&self, id: &str) -> Result<bool> {
@@ -878,6 +955,7 @@ fn row_to_fact(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredFact> {
             (Some(subject), Some(predicate)) => Some(Slot { subject, predicate }),
             _ => None,
         },
+        source: r.get(11)?,
     })
 }
 
@@ -953,6 +1031,202 @@ mod tests {
             Inserted::New(id) => id,
             other => panic!("expected a new fact, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_fact_a_person_typed_is_never_replaced_by_what_a_conversation_says() {
+        let s = store();
+        let typed = new_id(
+            s.insert_manual("project:p", &fact("The deploy is on Thursday", &["deploy"]))
+                .unwrap(),
+        );
+        let said = new_id(
+            s.insert(
+                "project:p",
+                &fact("The deploy moved to Friday", &["deploy"]),
+            )
+            .unwrap(),
+        );
+        assert_eq!(s.get(&typed).unwrap().unwrap().source, SOURCE_MANUAL);
+        assert!(
+            !s.supersede("project:p", &typed, &said, 5).unwrap(),
+            "a typed fact stays"
+        );
+        assert_eq!(s.get(&typed).unwrap().unwrap().superseded_by, None);
+        // What a conversation said is still replaced as before.
+        let later = new_id(
+            s.insert(
+                "project:p",
+                &fact("The deploy moved to Monday", &["deploy"]),
+            )
+            .unwrap(),
+        );
+        assert!(s.supersede("project:p", &said, &later, 6).unwrap());
+    }
+
+    #[test]
+    fn typing_what_a_conversation_already_said_keeps_it_as_typed() {
+        let s = store();
+        let said = new_id(
+            s.insert("project:p", &fact("Sen prefers dark mode", &[]))
+                .unwrap(),
+        );
+        assert_eq!(s.get(&said).unwrap().unwrap().source, "test");
+        let again = s
+            .insert_manual("project:p", &fact("sen prefers  DARK mode", &[]))
+            .unwrap();
+        assert_eq!(again, Inserted::Existing(said.clone()));
+        assert_eq!(s.get(&said).unwrap().unwrap().source, SOURCE_MANUAL);
+        assert_eq!(s.count("project:p").unwrap(), 1);
+    }
+
+    #[test]
+    fn a_bank_is_deleted_in_slices_with_the_connection_free_in_between() {
+        let s = store();
+        let keep = new_id(
+            s.insert("other", &fact("Another bank's fact", &["keep"]))
+                .unwrap(),
+        );
+        let mut ids = Vec::new();
+        for i in 0..120 {
+            let id = new_id(
+                s.insert(
+                    "project:p",
+                    &fact(&format!("Project fact number {i}"), &["shared"]),
+                )
+                .unwrap(),
+            );
+            ids.push(id);
+        }
+        // Links in both directions, and into the bank that stays.
+        s.add_link(&ids[0], &ids[1], LinkType::Semantic, 0.9)
+            .unwrap();
+        s.add_link(&keep, &ids[2], LinkType::Temporal, 0.5).unwrap();
+
+        let mut slices = Vec::new();
+        let probe = s.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // A hung connection would hang this test, so it runs on a thread that
+        // is waited for with a deadline.
+        let worker = {
+            let s = s.clone();
+            std::thread::spawn(move || {
+                let r = s.delete_bank_in("project:p", 50, |n| {
+                    // The connection is free: another query runs between slices.
+                    assert_eq!(probe.count("other").unwrap(), 1);
+                    tx.send(n).unwrap();
+                });
+                tx.send(usize::MAX).unwrap();
+                r
+            })
+        };
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+                Ok(usize::MAX) => break,
+                Ok(n) => slices.push(n),
+                Err(e) => panic!("the deletion stalled: {e}"),
+            }
+        }
+        assert_eq!(worker.join().unwrap().unwrap(), 120);
+        assert_eq!(
+            slices,
+            [50, 50, 20],
+            "no statement deletes more than a slice"
+        );
+
+        assert_eq!(s.count("project:p").unwrap(), 0);
+        assert_eq!(s.count("other").unwrap(), 1, "another bank is untouched");
+        // Nothing of the deleted facts lingers: text index, entities, links.
+        assert!(s
+            .search_keyword("project:p", "project", None, 10, Scope::Agent)
+            .unwrap()
+            .is_empty());
+        s.db.with_conn(|c| {
+            for table in ["mem_facts_fts", "mem_fact_entities", "mem_links"] {
+                let n: i64 =
+                    c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+                let want = if table == "mem_facts_fts" || table == "mem_fact_entities" {
+                    1
+                } else {
+                    0
+                };
+                assert_eq!(n, want, "{table}");
+            }
+            Ok(())
+        })
+        .unwrap();
+        // Deleting an empty or absent bank is fine.
+        assert_eq!(s.delete_bank("project:p").unwrap(), 0);
+        assert_eq!(s.delete_bank("nobody").unwrap(), 0);
+    }
+
+    /// The property the slices exist for: a reader that arrives while a bank is
+    /// being deleted is served between two slices, not after the last one.
+    #[test]
+    fn a_reader_that_arrives_during_a_deletion_is_served_before_it_ends() {
+        let s = store();
+        s.db.with_conn_mut(|c| {
+            let tx = c.transaction()?;
+            for i in 0..3_000 {
+                tx.execute(
+                    "INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash) \
+                     VALUES (?1, 'project:big', 'world', 'x', 1, 1, ?1)",
+                    params![format!("f{i}")],
+                )?;
+                tx.execute(
+                    "INSERT INTO mem_facts_fts (fact_id, text) VALUES (?1, 'x')",
+                    params![format!("f{i}")],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let done = Arc::new(AtomicUsize::new(0));
+        let served_after = Arc::new(AtomicUsize::new(usize::MAX));
+        let mut reader = None;
+        s.delete_bank_in("project:big", 100, |_| {
+            // The reader arrives as the first slice ends, and notes how many
+            // slices had finished by the time it got the connection.
+            if done.fetch_add(1, SeqCst) == 0 {
+                let (s, done, served_after) =
+                    (s.clone(), Arc::clone(&done), Arc::clone(&served_after));
+                reader = Some(std::thread::spawn(move || {
+                    s.count("project:big").unwrap();
+                    served_after.store(done.load(SeqCst), SeqCst);
+                }));
+            }
+        })
+        .unwrap();
+        reader.unwrap().join().unwrap();
+        let served = served_after.load(SeqCst);
+        assert!(
+            served < 10,
+            "30 slices in all; the reader was served after slice {served}, i.e. it waited out the deletion"
+        );
+    }
+
+    #[test]
+    fn deleting_a_bank_by_the_default_slice_takes_more_than_one_pass_for_a_big_one() {
+        let s = store();
+        let n = DELETE_BATCH + 37;
+        s.db.with_conn_mut(|c| {
+            let tx = c.transaction()?;
+            for i in 0..n {
+                tx.execute(
+                    "INSERT INTO mem_facts (id, bank, kind, text, mentioned_at, created_at, content_hash) \
+                     VALUES (?1, 'project:big', 'world', 'x', 1, 1, ?1)",
+                    params![format!("f{i}")],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(s.delete_bank("project:big").unwrap(), n);
+        assert_eq!(s.count("project:big").unwrap(), 0);
     }
 
     #[test]

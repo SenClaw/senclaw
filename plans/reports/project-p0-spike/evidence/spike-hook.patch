@@ -1,0 +1,33 @@
+diff --git a/src/agent/agent_pool/pool.rs b/src/agent/agent_pool/pool.rs
+index 5c80d9c..90892d0 100644
+--- a/src/agent/agent_pool/pool.rs
++++ b/src/agent/agent_pool/pool.rs
+@@ -2810,6 +2810,28 @@ impl AgentPool {
+     ///
+     /// Event handlers forward to [`AgentEventSink`] and update internal state.
+     pub fn bind_events(self: &Arc<Self>, binding: &GroupBinding) {
++        // SPIKE-ONLY (never committed): lets the P0 harness call destroy_agent_full(jid)
++        // on a live daemon by writing the jid into $SENCLAW_HOME/spike-destroy-full.
++        {
++            static SPIKE_ONCE: std::sync::Once = std::sync::Once::new();
++            let pool = Arc::clone(self);
++            SPIKE_ONCE.call_once(move || {
++                tokio::spawn(async move {
++                    loop {
++                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
++                        let home = pool.senclaw_home.lock().unwrap().clone();
++                        let trigger = home.join("spike-destroy-full");
++                        if let Ok(raw) = std::fs::read_to_string(&trigger) {
++                            let _ = std::fs::remove_file(&trigger);
++                            let jid = raw.trim().to_string();
++                            tracing::warn!("[SPIKE] destroy_agent_full({jid})");
++                            pool.destroy_agent_full(&jid).await;
++                            tracing::warn!("[SPIKE] destroy_agent_full({jid}) returned");
++                        }
++                    }
++                });
++            });
++        }
+         let _jid = binding.jid.clone();
+         let _folder = binding.folder.clone();
+         let _name = binding.name.clone();

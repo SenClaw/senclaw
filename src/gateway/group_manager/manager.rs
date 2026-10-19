@@ -48,6 +48,17 @@ impl GroupManager {
     }
 
     pub fn unregister(&self, db: &Db, config: &Config, jid: &str) {
+        // A session in a project owns a workspace-state file of its own, which
+        // nothing else would ever remove. The profile's shared file stays.
+        if let Ok(Some(g)) = db.get_group(jid) {
+            if g.project_id.is_some() {
+                crate::projects::remove_session_state_file(
+                    &crate::util::paths::senclaw_home(),
+                    &g.folder,
+                    &g.jid,
+                );
+            }
+        }
         let _ = db.delete_group(jid);
         remove_group_from_config(&config.paths.global_config_path, jid);
         self.fire_changed();
@@ -80,6 +91,9 @@ impl GroupManager {
             llm_config_id: merge_opt_opt(updates.llm_config_id, existing.llm_config_id),
             last_active: existing.last_active,
             added_at: existing.added_at,
+            // Fixed when the session is created; `GroupBindingUpdate` has no
+            // field for it.
+            project_id: existing.project_id,
         };
         db.upsert_group(&updated)?;
         save_group_to_config(&config.paths.global_config_path, &updated);
@@ -270,6 +284,7 @@ pub fn ensure_wechat_admin_group(
             .as_ref()
             .map(|e| e.added_at.clone())
             .unwrap_or_else(|| now.clone()),
+        project_id: None,
     };
 
     gm.register(db, config, &binding);
@@ -325,6 +340,7 @@ pub fn ensure_app_group(db: &Db, gm: &GroupManager, config: &Config, chat_jid: &
             .as_ref()
             .map(|e| e.added_at.clone())
             .unwrap_or_else(|| now.clone()),
+        project_id: None,
     };
 
     gm.register(db, config, &binding);

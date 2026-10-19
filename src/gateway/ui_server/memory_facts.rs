@@ -57,7 +57,7 @@ fn internal(e: anyhow::Error) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn wire(f: &StoredFact) -> serde_json::Value {
+pub(super) fn wire(f: &StoredFact) -> serde_json::Value {
     serde_json::json!({
         "id": f.id,
         "kind": f.kind.as_str(),
@@ -70,6 +70,8 @@ fn wire(f: &StoredFact) -> serde_json::Value {
         "supersededBy": f.superseded_by,
         // The chat it was said in; empty for the whole agent.
         "origin": f.origin,
+        // `manual` for a fact a person typed; otherwise what extracted it.
+        "source": f.source,
         // Which attribute of whom it states, when the extractor said (a new
         // value for a single-valued one replaces the old by rule).
         "slot": f.slot.as_ref().map(|s| serde_json::json!({

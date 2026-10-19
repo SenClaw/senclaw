@@ -1,0 +1,9 @@
+secret fact: refused by the daemon and shown in Vietnamese
+facts after the two adds: total=1
+session web:main:mve6bop8-be3vk0 registered; allowedWorkDirs → /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/work/alpha
+update:group projectId=<other> → session still in Alpha (1 chat)
+register:group into an archived project → "the project is archived and takes no new sessions"
+forget via /api/memory/facts/:id?bank=project:… → project facts total=0
+purge of Alpha took 277 ms (incl. UI polling)
+after purge the session stays (projectId=null)
+after purge the board has project_id=null workspace_dir=/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/work/alpha

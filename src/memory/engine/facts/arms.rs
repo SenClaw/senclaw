@@ -10,6 +10,11 @@
 //!
 //! They share one identity (`arm = "facts"`, `key = fact id`) so fusion sees a
 //! fact found by two of them as one fact with two votes.
+//!
+//! A question asked from a project is also put to the project's own bank, by the
+//! same four strategies ([`ProjectFacts`]). Those hits carry the same label —
+//! they are facts from the same kind of store — and their ids never collide with
+//! the agent's, so the votes stay each fact's own.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,6 +64,13 @@ fn to_hit(f: &StoredFact) -> Hit {
 
 fn hits(facts: &[StoredFact]) -> Vec<Hit> {
     facts.iter().map(to_hit).collect()
+}
+
+/// A question asked from a project that has switched the agent-wide facts off:
+/// the four arms over the agent's bank answer nothing, and only the project's
+/// bank is read.
+fn hides_common(q: &RecallQuery) -> bool {
+    q.project.as_ref().is_some_and(|p| !p.include_common)
 }
 
 /// Which facts this question may see.
@@ -114,6 +126,9 @@ impl RecallArm for SemanticArm {
         "facts_semantic"
     }
     async fn search(&self, q: &RecallQuery) -> Result<Vec<Hit>> {
+        if hides_common(q) {
+            return Ok(Vec::new());
+        }
         Ok(hits(&semantic(&self.0, q, q.limit).await?))
     }
 }
@@ -128,6 +143,9 @@ impl RecallArm for KeywordArm {
         "facts_keyword"
     }
     async fn search(&self, q: &RecallQuery) -> Result<Vec<Hit>> {
+        if hides_common(q) {
+            return Ok(Vec::new());
+        }
         Ok(hits(&keyword(&self.0, q, None, q.limit)?))
     }
 }
@@ -150,6 +168,9 @@ impl RecallArm for GraphArm {
     }
 
     async fn search(&self, q: &RecallQuery) -> Result<Vec<Hit>> {
+        if hides_common(q) {
+            return Ok(Vec::new());
+        }
         let engine = &self.0;
         // Grow from the best direct matches — by meaning when there is an
         // embedding model, by words when there is not.
@@ -247,6 +268,9 @@ impl RecallArm for TemporalArm {
     }
 
     async fn search(&self, q: &RecallQuery) -> Result<Vec<Hit>> {
+        if hides_common(q) {
+            return Ok(Vec::new());
+        }
         let Some(window) = parse_window(&q.text, local_date(q.now)) else {
             return Ok(Vec::new());
         };
@@ -268,6 +292,47 @@ impl RecallArm for TemporalArm {
     }
 }
 
+// ===== project =====
+
+/// One of the four arms above, run over a project's bank instead of the
+/// agent's: the same strategy, `folder` replaced by the project's bank, and
+/// every fact in it visible (a project's facts carry no chat, and the chats of a
+/// project share them). A question that comes from no project gets nothing.
+///
+/// The hits keep the label `facts`: fusion identifies a result by `(arm, key)`,
+/// and this is the same kind of store.
+pub struct ProjectFacts<A> {
+    name: &'static str,
+    inner: A,
+}
+
+impl<A: RecallArm> ProjectFacts<A> {
+    pub fn new(name: &'static str, inner: A) -> Self {
+        Self { name, inner }
+    }
+}
+
+#[async_trait]
+impl<A: RecallArm> RecallArm for ProjectFacts<A> {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    async fn search(&self, q: &RecallQuery) -> Result<Vec<Hit>> {
+        let Some(project) = &q.project else {
+            return Ok(Vec::new());
+        };
+        self.inner
+            .search(&RecallQuery {
+                folder: project.bank.clone(),
+                facts_by_chat: false,
+                project: None,
+                ..q.clone()
+            })
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +351,7 @@ mod tests {
             superseded_by: None,
             origin: String::new(),
             slot: None,
+            source: String::new(),
         }
     }
 
@@ -336,6 +402,7 @@ mod tests {
             facts_by_chat: by_chat,
             limit: 10,
             now: 1_000_000,
+            project: None,
         }
     }
 

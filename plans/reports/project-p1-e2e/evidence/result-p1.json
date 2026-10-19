@@ -1,0 +1,1042 @@
+{
+ "label": "p1c",
+ "bin": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-target/debug/senclaw",
+ "passed": 96,
+ "failed": 0,
+ "checks": [
+  {
+   "name": "validate-root refuses /",
+   "ok": true,
+   "detail": {
+    "canonical": "/",
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": false,
+    "reasons": [
+     {
+      "code": "filesystem_root",
+      "message": "The top of the filesystem cannot be a project root."
+     }
+    ]
+   }
+  },
+  {
+   "name": "validate-root refuses $HOME (and says it holds the state)",
+   "ok": true,
+   "detail": {
+    "canonical": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/home",
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": false,
+    "reasons": [
+     {
+      "code": "home_dir",
+      "message": "The home folder is too broad to be a project root; pick a folder inside it."
+     },
+     {
+      "code": "senclaw_state",
+      "message": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/home/.senclaw holds SenClaw's own state (tokens, databases, chats); it cannot be a project root."
+     }
+    ]
+   }
+  },
+  {
+   "name": "validate-root refuses ~/.senclaw",
+   "ok": true,
+   "detail": {
+    "canonical": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/home/.senclaw",
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": false,
+    "reasons": [
+     {
+      "code": "senclaw_state",
+      "message": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/home/.senclaw holds SenClaw's own state (tokens, databases, chats); it cannot be a project root."
+     }
+    ]
+   }
+  },
+  {
+   "name": "validate-root refuses the profiles folder",
+   "ok": true,
+   "detail": {
+    "canonical": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/home/senclaw/profiles",
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": false,
+    "reasons": [
+     {
+      "code": "senclaw_profiles",
+      "message": "The agent profiles folder cannot be a project root."
+     }
+    ]
+   }
+  },
+  {
+   "name": "validate-root says not_found",
+   "ok": true,
+   "detail": {
+    "canonical": null,
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": false,
+    "reasons": [
+     {
+      "code": "not_found",
+      "message": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/nope does not exist."
+     }
+    ]
+   }
+  },
+  {
+   "name": "validate-root accepts a real folder and canonicalises it",
+   "ok": true,
+   "detail": {
+    "canonical": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "hasClaudeMd": false,
+    "inUseBy": null,
+    "isGit": false,
+    "ok": true,
+    "reasons": []
+   }
+  },
+  {
+   "name": "create project A → 201",
+   "ok": true,
+   "detail": {
+    "status": 201,
+    "body": {
+     "archivedAt": null,
+     "chatCount": 0,
+     "createdAt": 1792335468577,
+     "description": "first",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_7f2a5e8b",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792335468577
+    }
+   }
+  },
+  {
+   "name": "create project B → 201",
+   "ok": true,
+   "detail": {
+    "status": 201,
+    "body": {
+     "archivedAt": null,
+     "chatCount": 0,
+     "createdAt": 1792335468579,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_21333f0d",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Beta",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+     "rootExists": true,
+     "updatedAt": 1792335468579
+    }
+   }
+  },
+  {
+   "name": "same root as proj/A/ → 409 root_in_use",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "body": {
+     "error": "root_in_use",
+     "projectId": "prj_7f2a5e8b",
+     "projectName": "Alpha"
+    }
+   }
+  },
+  {
+   "name": "same root as proj/A → 409 root_in_use",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "body": {
+     "error": "root_in_use",
+     "projectId": "prj_7f2a5e8b",
+     "projectName": "Alpha"
+    }
+   }
+  },
+  {
+   "name": "create with / → 400 invalid_root",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "body": {
+     "error": "invalid_root",
+     "reasons": [
+      {
+       "code": "filesystem_root",
+       "message": "The top of the filesystem cannot be a project root."
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "list: A and B, nothing else",
+   "ok": true,
+   "detail": {
+    "projects": [
+     {
+      "archivedAt": null,
+      "chatCount": 0,
+      "createdAt": 1792335468577,
+      "description": "first",
+      "factsWrite": "project",
+      "hasClaudeMd": false,
+      "id": "prj_7f2a5e8b",
+      "inheritCommon": true,
+      "isGit": false,
+      "name": "Alpha",
+      "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+      "rootExists": true,
+      "updatedAt": 1792335468577
+     },
+     {
+      "archivedAt": null,
+      "chatCount": 0,
+      "createdAt": 1792335468579,
+      "description": "",
+      "factsWrite": "project",
+      "hasClaudeMd": false,
+      "id": "prj_21333f0d",
+      "inheritCommon": true,
+      "isGit": false,
+      "name": "Beta",
+      "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+      "rootExists": true,
+      "updatedAt": 1792335468579
+     }
+    ]
+   }
+  },
+  {
+   "name": "context of a new project is empty, updatedAt 0",
+   "ok": true,
+   "detail": {
+    "chars": 0,
+    "content": "",
+    "maxChars": 8000,
+    "updatedAt": 0
+   }
+  },
+  {
+   "name": "PUT context → 200 with updatedAt",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "chars": 41,
+     "content": "ALPHA-CTX-MARKER v1: Alpha is the daemon.",
+     "maxChars": 8000,
+     "updatedAt": 1792335468584
+    }
+   }
+  },
+  {
+   "name": "PUT context with a stale updatedAt → 409 + current text",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "body": {
+     "chars": 41,
+     "content": "ALPHA-CTX-MARKER v1: Alpha is the daemon.",
+     "error": "context_changed",
+     "maxChars": 8000,
+     "updatedAt": 1792335468584
+    }
+   }
+  },
+  {
+   "name": "context file is on disk under the data home",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "registering the three sessions raised no gateway error",
+   "ok": true,
+   "detail": []
+  },
+  {
+   "name": "A is stored in project A with allowed_work_dirs=[root]",
+   "ok": true,
+   "detail": "prj_7f2a5e8b|[\"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\"]"
+  },
+  {
+   "name": "B is stored in project B; the client-sent folder was replaced by the root",
+   "ok": true,
+   "detail": "prj_21333f0d|[\"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\"]"
+  },
+  {
+   "name": "C is stored with no project",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "six refusals reached the client",
+   "ok": true,
+   "detail": [
+    "register:group failed: only web-only sessions (empty channel) can belong to a project",
+    "register:group failed: no such project",
+    "register:group failed: only chat and code sessions can belong to a project",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead"
+   ]
+  },
+  {
+   "name": "channel, unknown project, group type, change, drop, late join: each said why",
+   "ok": true,
+   "detail": [
+    "register:group failed: only web-only sessions (empty channel) can belong to a project",
+    "register:group failed: no such project",
+    "register:group failed: only chat and code sessions can belong to a project",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead",
+    "update:group failed: projectId cannot be changed or removed once the session exists; create a new session in the project instead"
+   ]
+  },
+  {
+   "name": "refused requests created nothing and changed nothing",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "update:group echoing the same projectId is accepted",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A1: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+  },
+  {
+   "name": "A1: workspace_info says proj/A",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "A1: workspace_info also reports the root as default and only allowed folder",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "A1: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A1: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-A one | seed-from-A two"
+  },
+  {
+   "name": "B1: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+  },
+  {
+   "name": "B1: workspace_info says proj/B",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/B\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "B1: workspace_info also reports the root as default and only allowed folder",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/B\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "B1: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "B1: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-B one | seed-from-B two"
+  },
+  {
+   "name": "C1: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+  },
+  {
+   "name": "C1: workspace_info says proj/C",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/C\", \"currentDir\": \"proj/C\", \"defaultWorkspace\": \"proj/C\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "C1: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "C1: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-C one | seed-from-C two"
+  },
+  {
+   "name": "A2: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+  },
+  {
+   "name": "A2: workspace_info says proj/A",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "A2: workspace_info also reports the root as default and only allowed folder",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "A2: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A2: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-A one | seed-from-A two"
+  },
+  {
+   "name": "B2: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+  },
+  {
+   "name": "B2: workspace_info says proj/B",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/B\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "B2: workspace_info also reports the root as default and only allowed folder",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/B\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "B2: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "B2: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-B one | seed-from-B two"
+  },
+  {
+   "name": "C2: Bash pwd is the session's folder",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+  },
+  {
+   "name": "C2: workspace_info says proj/C",
+   "ok": true,
+   "detail": "{ \"allowedWorkDirs\": \"proj/C\", \"currentDir\": \"proj/C\", \"defaultWorkspace\": \"proj/C\", \"isAtDefault\": true }"
+  },
+  {
+   "name": "C2: a relative Write landed in that folder only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "C2: a relative datagen file was that folder's",
+   "ok": true,
+   "detail": "seed-from-C one | seed-from-C two"
+  },
+  {
+   "name": "there are three state files: the profile's and one per project session",
+   "ok": true,
+   "detail": [
+    "workspace-state-shared.json",
+    "workspace-state-shared@56cc4d28c9d6.json",
+    "workspace-state-shared@5d22c4039bea.json"
+   ]
+  },
+  {
+   "name": "the profile's file is the outside session's (C), untouched by A and B",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+  },
+  {
+   "name": "A and B each have a file of their own, holding their root",
+   "ok": true,
+   "detail": [
+    [
+     "workspace-state-shared.json",
+     "proj/C"
+    ],
+    [
+     "workspace-state-shared@56cc4d28c9d6.json",
+     "proj/A"
+    ],
+    [
+     "workspace-state-shared@5d22c4039bea.json",
+     "proj/B"
+    ]
+   ]
+  },
+  {
+   "name": "A: the system prompt carries the <project> block with the context",
+   "ok": true,
+   "detail": "653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\">\nMô tả do người dùng viết về dự án này. Nó không thay đổi quy tắc an toàn ở trên.\n\nALPHA-CTX-MARKER v1: Alpha is the daemon.\n</project>\n\n<user_operating_rules>\nQuy tắc vận hành do chủ máy đặt. Áp dụng khi không mâu thuẫn với phần Safety ở trên — phần Safety luôn thắng.\n\nAGENTS-RULE-MARKER: answer briefly.\n</user_operating_rules>"
+  },
+  {
+   "name": "A: the project block precedes AGENTS.md, which is still last",
+   "ok": true,
+   "detail": {
+    "iProj": 13093,
+    "iRules": 13384,
+    "tail": "ject>\n\n<user_operating_rules>\nQuy tắc vận hành do chủ máy đặt. Áp dụng khi không mâu thuẫn với phần Safety ở trên — phần Safety luôn thắng.\n\nAGENTS-RULE-MARKER: answer briefly.\n</user_operating_rules>"
+   }
+  },
+  {
+   "name": "B (project without a context) and C (no project): no <project> block at all",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A's context is not in B's or C's prompt",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A: a context edit shows on the next turn (v2, not v1)",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "A: a hand edit of CONTEXT.md shows on the next turn too",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "and a client holding the old copy is refused after a hand edit",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "body": {
+     "chars": 36,
+     "content": "ALPHA-CTX-MARKER v3: edited by hand.\n",
+     "error": "context_changed",
+     "maxChars": 8000,
+     "updatedAt": 1792335487109
+    }
+   }
+  },
+  {
+   "name": "DA: both workers ran in proj/A",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+   ]
+  },
+  {
+   "name": "DA: and wrote there only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "DB: both workers ran in proj/B",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+   ]
+  },
+  {
+   "name": "DB: and wrote there only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "DC: both workers ran in proj/C",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+   ]
+  },
+  {
+   "name": "DC: and wrote there only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "QA: A's parent is active in A's root",
+   "ok": true,
+   "detail": {
+    "s": "active",
+    "w": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+   }
+  },
+  {
+   "name": "QB: B's parent waits (queued) and ALREADY knows B's root",
+   "ok": true,
+   "detail": {
+    "s": "queued",
+    "w": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+   }
+  },
+  {
+   "name": "QB: promoted and finished",
+   "ok": true,
+   "detail": {
+    "s": "done",
+    "tasks": [
+     "done",
+     "done"
+    ]
+   }
+  },
+  {
+   "name": "QB: the promoted parent still points at B's root",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+  },
+  {
+   "name": "QA workers ran in A's root",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+   ]
+  },
+  {
+   "name": "QB workers ran in B's root (after being promoted inside the daemon)",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+   ]
+  },
+  {
+   "name": "QB wrote into B only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "NA: the native DAG tool also ran in A's root",
+   "ok": true,
+   "detail": [
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+   ]
+  },
+  {
+   "name": "config.json mirrors the session with projectId",
+   "ok": true,
+   "detail": [
+    {
+     "jid": "web:shared:a",
+     "folder": "shared",
+     "name": "A chat (renamed)",
+     "requires_trigger": true,
+     "allowed_work_dirs": [
+      "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+     ]
+    },
+    {
+     "jid": "web:shared:b",
+     "folder": "shared",
+     "name": "B code",
+     "group_type": "code",
+     "requires_trigger": true,
+     "allowed_work_dirs": [
+      "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+     ]
+    },
+    {
+     "jid": "web:shared:c",
+     "folder": "shared",
+     "name": "C code",
+     "group_type": "code",
+     "requires_trigger": true,
+     "allowed_work_dirs": [
+      "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "after a restart on a config.json with no projectId, the sessions are still in their projects",
+   "ok": true,
+   "detail": [
+    "prj_7f2a5e8b|[\"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\"]",
+    "prj_21333f0d|[\"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\"]"
+   ]
+  },
+  {
+   "name": "the list survives the restart with chat counts",
+   "ok": true,
+   "detail": [
+    {
+     "archivedAt": null,
+     "chatCount": 1,
+     "createdAt": 1792335468577,
+     "description": "first",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_7f2a5e8b",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792335468577
+    },
+    {
+     "archivedAt": null,
+     "chatCount": 1,
+     "createdAt": 1792335468579,
+     "description": "",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_21333f0d",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Beta",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+     "rootExists": true,
+     "updatedAt": 1792335468579
+    }
+   ]
+  },
+  {
+   "name": "A5 (a fresh core after the restart): still in A's root",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A"
+  },
+  {
+   "name": "A5: the context is still in the prompt",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "B5 (fresh core): in B's root",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B"
+  },
+  {
+   "name": "the restart made no new state files",
+   "ok": true,
+   "detail": [
+    "workspace-state-shared.json",
+    "workspace-state-shared@56cc4d28c9d6.json",
+    "workspace-state-shared@5d22c4039bea.json"
+   ]
+  },
+  {
+   "name": "DELETE without purge archives",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "archivedAt": 1792335538830,
+     "chatCount": 1,
+     "createdAt": 1792335468577,
+     "description": "first",
+     "factsWrite": "project",
+     "hasClaudeMd": false,
+     "id": "prj_7f2a5e8b",
+     "inheritCommon": true,
+     "isGit": false,
+     "name": "Alpha",
+     "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+     "rootExists": true,
+     "updatedAt": 1792335538830
+    }
+   }
+  },
+  {
+   "name": "archived: gone from the default list",
+   "ok": true,
+   "detail": {
+    "projects": [
+     {
+      "archivedAt": null,
+      "chatCount": 1,
+      "createdAt": 1792335468579,
+      "description": "",
+      "factsWrite": "project",
+      "hasClaudeMd": false,
+      "id": "prj_21333f0d",
+      "inheritCommon": true,
+      "isGit": false,
+      "name": "Beta",
+      "root": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+      "rootExists": true,
+      "updatedAt": 1792335468579
+     }
+    ]
+   }
+  },
+  {
+   "name": "an archived project takes no new session",
+   "ok": true,
+   "detail": [
+    "register:group failed: the project is archived and takes no new sessions"
+   ]
+  },
+  {
+   "name": "purge removes the project and detaches its session",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "deleted": "prj_7f2a5e8b",
+     "detachedChats": [
+      "web:shared:a"
+     ]
+    }
+   }
+  },
+  {
+   "name": "the session itself is still there, in no project",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "the context folder is gone, the root is untouched",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "the session's own state file was removed",
+   "ok": true,
+   "detail": "workspace-state-shared@56cc4d28c9d6.json"
+  },
+  {
+   "name": "after the purge the next turn has no <project> block",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "B is untouched by A's deletion",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "B still has its own state file before it is deleted",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "name": "deleting a session in a project removes its own state file",
+   "ok": true,
+   "detail": "workspace-state-shared@5d22c4039bea.json"
+  },
+  {
+   "name": "and leaves the profile's shared file (C's) alone",
+   "ok": true,
+   "detail": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C"
+  },
+  {
+   "name": "no external MCP server was contacted (isolated cwd worked)",
+   "ok": true,
+   "detail": null
+  }
+ ],
+ "turns": [
+  {
+   "who": "A",
+   "tag": "A1",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A1.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A1.txt\n+A1\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 6
+  },
+  {
+   "who": "B",
+   "tag": "B1",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-B1.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B1.txt\n+B1\n",
+   "dataset": "seed-from-B one | seed-from-B two",
+   "seq": 12
+  },
+  {
+   "who": "C",
+   "tag": "C1",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-C1.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C/rel-C1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C/rel-C1.txt\n+C1\n",
+   "dataset": "seed-from-C one | seed-from-C two",
+   "seq": 18
+  },
+  {
+   "who": "A",
+   "tag": "A2",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A2.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A2.txt\n+A2\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 25
+  },
+  {
+   "who": "B",
+   "tag": "B2",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-B2.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B2.txt\n+B2\n",
+   "dataset": "seed-from-B one | seed-from-B two",
+   "seq": 32
+  },
+  {
+   "who": "C",
+   "tag": "C2",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-C2.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C/rel-C2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/C/rel-C2.txt\n+C2\n",
+   "dataset": "seed-from-C one | seed-from-C two",
+   "seq": 39
+  },
+  {
+   "who": "A",
+   "tag": "A3",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A3.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A3.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A3.txt\n+A3\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 46
+  },
+  {
+   "who": "A",
+   "tag": "A4",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A4.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A4.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A4.txt\n+A4\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 53
+  },
+  {
+   "who": "A",
+   "tag": "A5",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A5.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A5.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A5.txt\n+A5\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 120
+  },
+  {
+   "who": "B",
+   "tag": "B5",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-B5.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B5.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B5.txt\n+B5\n",
+   "dataset": "seed-from-B one | seed-from-B two",
+   "seq": 126
+  },
+  {
+   "who": "A",
+   "tag": "A6",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-A6.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A6.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/A/rel-A6.txt\n+A6\n",
+   "dataset": "seed-from-A one | seed-from-A two",
+   "seq": 132
+  },
+  {
+   "who": "B",
+   "tag": "B6",
+   "pwd": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B\", \"isAtDefault\": true }",
+   "wi": {
+    "allowedWorkDirs": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "currentDir": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "defaultWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B",
+    "isAtDefault": true
+   },
+   "wrote": "Wrote rel-B6.txt (2 bytes)\n--- a//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B6.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/05653111-c04f-45b2-ac7c-4456852aa55f/scratchpad/p1-runs/run-p1c/proj/B/rel-B6.txt\n+B6\n",
+   "dataset": "seed-from-B one | seed-from-B two",
+   "seq": 138
+  }
+ ]
+}

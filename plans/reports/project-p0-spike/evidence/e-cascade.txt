@@ -1,0 +1,15 @@
+### foreign_keys=ON
+=== BEFORE (foreign_keys will be ON)
+facts_total|29 facts[shared]|11 facts[dshare]|12 entities_total|77 entities[shared]|29 entities[dshare]|32 links_total|100 links[dshare]|45 fts_total|29 fts[dshare]|12 ORPHAN entities|0 ORPHAN links|0 ORPHAN fts|0 
+PRAGMA foreign_keys ->|1
+deleted rows|11
+=== AFTER
+facts_total|18 facts[shared]|0 facts[dshare]|12 entities_total|48 entities[shared]|0 entities[dshare]|32 links_total|60 links[dshare]|45 fts_total|18 fts[dshare]|12 ORPHAN entities|0 ORPHAN links|0 ORPHAN fts|0 
+
+### foreign_keys=OFF
+=== BEFORE (foreign_keys will be OFF)
+facts_total|29 facts[shared]|11 facts[dshare]|12 entities_total|77 entities[shared]|29 entities[dshare]|32 links_total|100 links[dshare]|45 fts_total|29 fts[dshare]|12 ORPHAN entities|0 ORPHAN links|0 ORPHAN fts|0 
+PRAGMA foreign_keys ->|0
+deleted rows|11
+=== AFTER
+facts_total|18 facts[shared]|0 facts[dshare]|12 entities_total|77 entities[shared]|0 entities[dshare]|32 links_total|100 links[dshare]|45 fts_total|18 fts[dshare]|12 ORPHAN entities|29 ORPHAN links|40 ORPHAN fts|0 

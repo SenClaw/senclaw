@@ -126,6 +126,8 @@ pub struct PathsConfig {
     /// Defaults to a sibling `senclaw_cognitive.db` next to `db_path`.
     pub cognitive_db_path: PathBuf,
     pub profiles_dir: PathBuf,
+    /// One folder per project (`<id>/CONTEXT.md`), beside `profiles_dir`.
+    pub projects_dir: PathBuf,
     pub workspace_dir: PathBuf,
     /// Soul Core — who the *human* is (`~/.senclaw/USER.md`).
     ///
@@ -538,6 +540,12 @@ pub struct DispatchConfig {
     pub max_agent_turns: usize,
     /// Per-item run timeout (`SENCLAW_DISPATCH_TIMEOUT_SECS`).
     pub default_timeout_secs: u64,
+    /// Keep what a worker says when it closes a card of a project's board as a
+    /// fact of that project (`SENCLAW_DISPATCH_CARD_FACTS`, default off). On a
+    /// small local model nearly every summary, however empty ("Done."), became a
+    /// fact ("Kanban task X completed"), and about a third of what was kept was
+    /// that or a copy of another fact, so it is something a person turns on.
+    pub card_facts: bool,
 }
 
 fn env_or(key: &str, fallback: &str) -> String {
@@ -626,6 +634,7 @@ impl Config {
                     "PROFILES_DIR",
                     env_path("AGENTS_DIR", senclaw_data.join("profiles")),
                 ),
+                projects_dir: env_path("PROJECTS_DIR", senclaw_data.join("projects")),
                 workspace_dir: env_path("WORKSPACE_DIR", senclaw_data.join("workspace")),
                 user_profile_path: env_path(
                     "SENCLAW_USER_PROFILE_PATH",
@@ -860,6 +869,7 @@ impl Config {
                 kanban_url: env_or("SENCLAW_DISPATCH_KANBAN_URL", "http://127.0.0.1:4400"),
                 max_agent_turns: env_int("SENCLAW_DISPATCH_MAX_TURNS", 40),
                 default_timeout_secs: env_int("SENCLAW_DISPATCH_TIMEOUT_SECS", 600),
+                card_facts: env_bool("SENCLAW_DISPATCH_CARD_FACTS", false),
             },
             background: BackgroundConfig {
                 enabled: env_bool("SENCLAW_BACKGROUND_ENABLED", true),

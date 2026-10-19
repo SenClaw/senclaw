@@ -238,7 +238,11 @@ impl BridgeState {
             "core" => {
                 let db = self.db.as_ref().ok_or("daemon database unavailable")?;
                 let g = bridge_servers::resolve_group(db, chat).ok_or("no chat group to scope SenClaw tools to")?;
-                Ok((bridge_servers::core_server(&self.config, &g), Some(bridge_servers::scope_instructions(&g))))
+                let project = crate::projects::project_for_binding(db, &g).ok().flatten();
+                Ok((
+                    bridge_servers::core_server(&self.config, &g, project.as_ref()),
+                    Some(bridge_servers::scope_instructions(&g)),
+                ))
             }
             other => Err(format!("unknown SenClaw MCP server `{other}` (core, kanban)")),
         }

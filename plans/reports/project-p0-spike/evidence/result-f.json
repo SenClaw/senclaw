@@ -1,0 +1,22 @@
+[
+ {
+  "id": "p-20261018-0001",
+  "chat": "web:fshare:1",
+  "status": "done",
+  "sharedWorkspace": "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/smoke/run-f1/proj/A",
+  "tasks": [
+   "slow:done (MOCK-DONE W-F1dag-fast)",
+   "fast:error (Cancelled: admin agent stopped)"
+  ]
+ },
+ {
+  "id": "p-20261018-0004",
+  "chat": "web:fshare:2",
+  "status": "done",
+  "sharedWorkspace": null,
+  "tasks": [
+   "slow:error (Cancelled: admin agent stopped)",
+   "fast:error (Cancelled: admin agent stopped)"
+  ]
+ }
+]

@@ -314,6 +314,7 @@ mod tests {
             superseded_by: None,
             origin: String::new(),
             slot: None,
+            source: String::new(),
         }
     }
 

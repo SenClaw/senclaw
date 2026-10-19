@@ -591,6 +591,7 @@ pub(crate) async fn handle_list_groups(
                 agent_id: Some(br.agent.id),
                 channel_id: Some(br.channel.id),
                 last_activity: None,
+                project_id: None,
             });
         }
     }
@@ -606,6 +607,65 @@ pub(crate) async fn handle_list_groups(
         sender,
         &serde_json::json!({"type": "groups", "groups": groups}),
     );
+}
+
+/// The project a `register:group` puts the session in, or why it cannot.
+///
+/// `Ok(None)`: no project (or a dangling id on a session that already has one,
+/// which the caller keeps as it is).
+pub(crate) fn decide_project(
+    db: &crate::db::Db,
+    existing: Option<&GroupBinding>,
+    msg: &serde_json::Value,
+    msg_channel: &str,
+) -> Result<Option<crate::projects::Project>, &'static str> {
+    use crate::projects::{
+        check_joinable, check_member_shape, decide_membership, requested_project, MembershipError,
+    };
+    let requested = requested_project(msg).map_err(MembershipError::message)?;
+    let decided = decide_membership(existing, requested.as_ref().map(|r| r.as_deref()))
+        .map_err(MembershipError::message)?;
+    let Some(project_id) = decided else {
+        return Ok(None);
+    };
+    let channel = if msg_channel.is_empty() {
+        existing.map(|e| e.channel.as_str()).unwrap_or("")
+    } else {
+        msg_channel
+    };
+    let group_type = msg["groupType"].as_str().unwrap_or("chat");
+    check_member_shape(channel, group_type).map_err(MembershipError::message)?;
+    let project = db.get_project(&project_id).ok().flatten();
+    let is_new_member = existing.map_or(true, |e| {
+        e.project_id.as_deref() != Some(project_id.as_str())
+    });
+    if is_new_member {
+        check_joinable(project.as_ref()).map_err(MembershipError::message)?;
+    }
+    Ok(project)
+}
+
+/// Whether an `update:group` leaves the session's project alone: it may echo
+/// the current one back but not change or drop it, and a session in a project
+/// must stay one a project can hold (web-only, chat or code).
+pub(crate) fn check_update_keeps_project(
+    existing: &GroupBinding,
+    msg: &serde_json::Value,
+) -> Result<(), &'static str> {
+    use crate::projects::{
+        check_member_shape, decide_membership, requested_project, MembershipError,
+    };
+    let asked = requested_project(msg).map_err(MembershipError::message)?;
+    decide_membership(Some(existing), asked.as_ref().map(|a| a.as_deref()))
+        .map_err(MembershipError::message)?;
+    if existing.project_id.is_some() {
+        check_member_shape(
+            msg["channel"].as_str().unwrap_or(&existing.channel),
+            msg["groupType"].as_str().unwrap_or(&existing.group_type),
+        )
+        .map_err(MembershipError::message)?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn handle_register_group(
@@ -655,6 +715,21 @@ pub(crate) async fn handle_register_group(
         );
         return;
     }
+
+    // Project membership is decided here, once, when the session is created
+    // (and only echoed back on a re-register). Before the channel-specific
+    // work below so a refused request has had no side effects.
+    let existing_before = state.group_manager.get(&state.db, &jid);
+    let project = match decide_project(&state.db, existing_before.as_ref(), msg, channel) {
+        Ok(p) => p,
+        Err(why) => {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": format!("register:group failed: {why}")}),
+            );
+            return;
+        }
+    };
 
     let mut resolved_jid = jid.clone();
     let resolved_folder = folder.to_string();
@@ -739,7 +814,11 @@ pub(crate) async fn handle_register_group(
             existing.as_ref().and_then(|e| e.allowed_tools.clone())
         },
         allowed_paths: None,
-        allowed_work_dirs: if msg.get("allowedWorkDirs").is_some() {
+        // A session in a project works in the project's root and may switch
+        // only within it, whatever folders the client listed.
+        allowed_work_dirs: if let Some(p) = &project {
+            Some(vec![p.root.clone()])
+        } else if msg.get("allowedWorkDirs").is_some() {
             msg["allowedWorkDirs"].as_array().map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str().map(String::from))
@@ -768,6 +847,11 @@ pub(crate) async fn handle_register_group(
             .as_ref()
             .map(|e| e.added_at.clone())
             .unwrap_or_else(|| now.clone()),
+        project_id: project.as_ref().map(|p| p.id.clone()).or_else(|| {
+            // The project row is gone (a dangling id): the session keeps the
+            // id it was created with rather than silently leaving.
+            existing.as_ref().and_then(|e| e.project_id.clone())
+        }),
     };
 
     state
@@ -901,6 +985,19 @@ pub(crate) async fn handle_update_group(
             &serde_json::json!({"type": "error", "message": "jid required"}),
         );
         return;
+    }
+
+    // A session's project is fixed when it is created: it cannot be changed or
+    // removed here. Echoing the current one back (as a client that sends the
+    // whole group does) is fine.
+    if let Some(existing) = state.group_manager.get(&state.db, &jid) {
+        if let Err(why) = check_update_keeps_project(&existing, msg) {
+            send_json(
+                sender,
+                &serde_json::json!({"type": "error", "message": format!("update:group failed: {why}")}),
+            );
+            return;
+        }
     }
 
     let mut updates = GroupBindingUpdate::default();

@@ -594,7 +594,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 return error_result("goal is required".into());
             }
             let instruction = args["instruction"].as_str();
-            match crate::kanban::llm::generate_board(goal, instruction).await {
+            let context = args["board_id"]
+                .as_i64()
+                .filter(|id| *id > 0)
+                .and_then(|id| state.context_of_board(id));
+            match crate::kanban::llm::generate_board(goal, instruction, context.as_deref()).await {
                 Ok(gen) => {
                     let board_id = match args["board_id"].as_i64() {
                         Some(id) if id > 0 => id,
@@ -628,11 +632,13 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             let outline = db.board_outline(board_id).ok();
             let instruction = args["instruction"].as_str();
+            let context = state.context_of_board(board_id);
             match crate::kanban::llm::breakdown_card(
                 &title,
                 &description,
                 outline.as_deref(),
                 instruction,
+                context.as_deref(),
             )
             .await
             {

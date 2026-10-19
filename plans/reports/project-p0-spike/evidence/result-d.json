@@ -1,0 +1,238 @@
+{
+ "steps": [
+  {
+   "step": "D1 turn 1",
+   "tag": "D11",
+   "jid": "web:dshare:1",
+   "nMessagesInFirstRequest": 2,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile"
+   ],
+   "bashPwd": "proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "step": "D1 turn 2",
+   "tag": "D12",
+   "jid": "web:dshare:1",
+   "nMessagesInFirstRequest": 10,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D11",
+    "user:<system-reminder> Skill hint: `bash-executor` may help with "
+   ],
+   "bashPwd": "proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }"
+  },
+  {
+   "step": "D2 turn 1",
+   "tag": "D21",
+   "jid": "web:dshare:2",
+   "nMessagesInFirstRequest": 2,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile"
+   ],
+   "bashPwd": "proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/B\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": true }"
+  },
+  {
+   "step": "D1 turn 3 (after destroy)",
+   "tag": "D13",
+   "jid": "web:dshare:1",
+   "nMessagesInFirstRequest": 18,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D11",
+    "user:<system-reminder> Skill hint: `bash-executor` may help with ",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D12",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile"
+   ],
+   "bashPwd": "proj/A2",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A2\", \"currentDir\": \"proj/A2\", \"defaultWorkspace\": \"proj/A2\", \"isAtDefault\": true }"
+  },
+  {
+   "step": "D2 turn 2 (sibling, after)",
+   "tag": "D22",
+   "jid": "web:dshare:2",
+   "nMessagesInFirstRequest": 10,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D21",
+    "user:<system-reminder> Skill hint: `bash-executor` may help with "
+   ],
+   "bashPwd": "proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"proj/A2\", \"defaultWorkspace\": \"proj/B\", \"isAtDefault\": false }"
+  },
+  {
+   "step": "D1 turn 4 (after destroying a jid that does not exist)",
+   "tag": "D14",
+   "jid": "web:dshare:1",
+   "nMessagesInFirstRequest": 26,
+   "rolesInFirstRequest": [
+    "system:You are a helpful AI assistant. Use the tools provided to he",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D11",
+    "user:<system-reminder> Skill hint: `bash-executor` may help with ",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D12",
+    "user:<system-reminder> Today's date is 2026-10-18.  <user_profile",
+    "assistant:",
+    "tool:Loaded 1 tool(s):   - mcp__core__workspace_info (now availab",
+    "assistant:",
+    "tool:/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642",
+    "assistant:",
+    "tool:{   \"content\": [     {       \"text\": \"{\\n  \\\"allowedWorkDirs",
+    "assistant:MOCK-DONE D13",
+    "user:<system-reminder> Skill hint: `bash-executor` may help with "
+   ],
+   "bashPwd": "proj/A2",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A2\", \"currentDir\": \"proj/A2\", \"defaultWorkspace\": \"proj/A2\", \"isAtDefault\": true }"
+  }
+ ],
+ "before": {
+  "coreServers": [
+   {
+    "pid": "22672",
+    "jid": "web:shared:a",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "22897",
+    "jid": "web:shared:b",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   },
+   {
+    "pid": "23645",
+    "jid": "web:dshare:1",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "23845",
+    "jid": "web:dshare:2",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   }
+  ],
+  "stateFileDshare": "proj/B"
+ },
+ "afterDestroy": {
+  "coreServers": [
+   {
+    "pid": "22672",
+    "jid": "web:shared:a",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "22897",
+    "jid": "web:shared:b",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   },
+   {
+    "pid": "23645",
+    "jid": "web:dshare:1",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "23845",
+    "jid": "web:dshare:2",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   }
+  ],
+  "stateFileDshare": "proj/B"
+ },
+ "afterRecreate": {
+  "coreServers": [
+   {
+    "pid": "22672",
+    "jid": "web:shared:a",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "22897",
+    "jid": "web:shared:b",
+    "stateFile": "home/.senclaw/workspace-state-shared.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   },
+   {
+    "pid": "23645",
+    "jid": "web:dshare:1",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/A",
+    "allowedWorkDirs": "[\"proj/A\"]"
+   },
+   {
+    "pid": "23845",
+    "jid": "web:dshare:2",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/B",
+    "allowedWorkDirs": "[\"proj/B\"]"
+   },
+   {
+    "pid": "24158",
+    "jid": "web:dshare:1",
+    "stateFile": "home/.senclaw/workspace-state-dshare.json",
+    "defaultWorkspace": "proj/A2",
+    "allowedWorkDirs": "[\"proj/A2\"]"
+   }
+  ],
+  "stateFileDshare": "proj/A2"
+ }
+}

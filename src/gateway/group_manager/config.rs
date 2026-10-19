@@ -54,6 +54,7 @@ pub(super) fn save_group_to_config(config_path: &Path, binding: &GroupBinding) {
         bot_token: binding.bot_token.clone(),
         max_messages: binding.max_messages,
         llm_config_id: binding.llm_config_id.clone(),
+        project_id: binding.project_id.clone(),
     };
     if let Some(existing) = groups.iter_mut().find(|g| g.jid == entry.jid) {
         *existing = entry;
@@ -136,6 +137,12 @@ pub fn sync_groups_from_config(
                 .as_ref()
                 .map(|e| e.added_at.clone())
                 .unwrap_or_else(|| now.clone()),
+            // A config written before projects existed has no entry for it;
+            // the stored row must not lose the session's project.
+            project_id: entry
+                .project_id
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|e| e.project_id.clone())),
         };
 
         ensure_agent_dirs(config, &binding.folder, &binding.name);
@@ -240,6 +247,7 @@ mod tests {
             llm_config_id: None,
             last_active: None,
             added_at: "2026-07-18T00:00:00Z".into(),
+            project_id: None,
         };
         // A schedule session bound to the "ssh" profile folder, plus a stale
         // config-managed channel row that genuinely conflicts.
@@ -254,6 +262,119 @@ mod tests {
         assert!(db.get_group("schedule:abc").unwrap().is_some());
         assert!(db.get_group("tg:group:9").unwrap().is_none());
         assert!(db.get_group("web:ssh").unwrap().is_some());
+    }
+
+    fn sample_config(tmp: &std::path::Path) -> crate::config::Config {
+        let mut config = crate::config::Config::from_env();
+        config.paths.global_config_path = tmp.join("config.json");
+        config.paths.profiles_dir = tmp.join("agents");
+        config.paths.workspace_dir = tmp.join("workspace");
+        config
+    }
+
+    fn sample_session(jid: &str, project: Option<&str>) -> crate::types::GroupBinding {
+        crate::types::GroupBinding {
+            jid: jid.into(),
+            // Not "main": that implicit group is never written to config.json.
+            folder: "dev".into(),
+            name: "Chat".into(),
+            channel: String::new(),
+            group_type: "code".into(),
+            requires_trigger: false,
+            allowed_tools: None,
+            allowed_paths: None,
+            allowed_work_dirs: Some(vec!["/work/sen".into()]),
+            bot_token: None,
+            max_messages: None,
+            llm_config_id: None,
+            last_active: None,
+            added_at: "2026-10-18T00:00:00Z".into(),
+            project_id: project.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_config_written_before_projects_loads_and_never_unlinks_a_session() {
+        // config.json mirrors the sessions; one saved by an older build has no
+        // `projectId`. Boot reconciliation rebuilds each binding from its entry,
+        // so a missing field must mean "keep what the database says".
+        use crate::db::Db;
+        let tmp = tempfile::tempdir().unwrap();
+        let config = sample_config(tmp.path());
+        std::fs::write(
+            &config.paths.global_config_path,
+            r#"{"groups":[
+                {"jid":"web:main:old","folder":"dev","name":"Old"},
+                {"jid":"web:main:inproject","folder":"dev","name":"In project","group_type":"code",
+                 "allowed_work_dirs":["/work/sen"]}
+            ]}"#,
+        )
+        .unwrap();
+        let cfg = super::load_global_config(&config.paths.global_config_path);
+        assert!(cfg
+            .groups
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|g| g.project_id.is_none()));
+
+        let db = Db::open_in_memory(&config).unwrap();
+        let project = db
+            .create_project(
+                crate::projects::NewProject {
+                    name: "Sen".into(),
+                    root: "/work/sen".into(),
+                    description: String::new(),
+                    facts_write: crate::projects::FactsWrite::Project,
+                    inherit_common: true,
+                },
+                1,
+            )
+            .unwrap();
+        db.upsert_group(&sample_session("web:main:inproject", Some(&project.id)))
+            .unwrap();
+
+        let gm = super::GroupManager::new();
+        let (added, updated, removed) = super::sync_groups_from_config(&db, &gm, &config);
+        assert_eq!((added, updated, removed), (1, 1, 0));
+        assert_eq!(
+            db.get_group("web:main:inproject")
+                .unwrap()
+                .unwrap()
+                .project_id
+                .as_deref(),
+            Some(project.id.as_str()),
+            "the entry has no projectId; the session keeps its project"
+        );
+        assert_eq!(
+            db.get_group("web:main:old").unwrap().unwrap().project_id,
+            None
+        );
+    }
+
+    #[test]
+    fn a_session_in_a_project_round_trips_through_config_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.json");
+        super::save_group_to_config(&path, &sample_session("web:main:p", Some("prj_0a1b2c3d")));
+        super::save_group_to_config(&path, &sample_session("web:main:plain", None));
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let raw: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let groups = raw["groups"].as_array().unwrap();
+        assert_eq!(groups[0]["projectId"], "prj_0a1b2c3d");
+        // A session outside a project writes exactly what it always wrote.
+        assert!(groups[1].get("projectId").is_none(), "{text}");
+
+        let back = super::load_global_config(&path).groups.unwrap();
+        assert_eq!(back[0].project_id.as_deref(), Some("prj_0a1b2c3d"));
+        assert_eq!(back[1].project_id, None);
+        // The snake_case spelling other fields use is accepted too.
+        let entry: super::GroupConfigEntry = serde_json::from_str(
+            r#"{"jid":"web:x","folder":"dev","name":"X","project_id":"prj_00000001"}"#,
+        )
+        .unwrap();
+        assert_eq!(entry.project_id.as_deref(), Some("prj_00000001"));
     }
 
     #[test]

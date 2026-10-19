@@ -45,6 +45,9 @@ pub struct VirtualServer {
     pool: Option<Box<dyn VirtualWorkerPool>>,
     admin_folder: String,
     default_workspace: PathBuf,
+    /// The root of the project the chat was created in; it wins over the
+    /// profile's workspace-state file.
+    project_root: Option<PathBuf>,
 }
 
 impl VirtualServer {
@@ -60,7 +63,14 @@ impl VirtualServer {
             pool,
             admin_folder: admin_folder.to_owned(),
             default_workspace: default_workspace.to_path_buf(),
+            project_root: None,
         }
+    }
+
+    /// Attach the project root of the session (`None`/blank = no project).
+    pub fn with_project_root(mut self, root: Option<String>) -> Self {
+        self.project_root = root.filter(|r| !r.trim().is_empty()).map(PathBuf::from);
+        self
     }
 
     fn scan_personas(dir: &Path) -> Vec<PersonaConfig> {
@@ -93,6 +103,9 @@ impl VirtualServer {
     }
 
     fn read_current_workspace(&self) -> PathBuf {
+        if let Some(root) = &self.project_root {
+            return root.clone();
+        }
         let state_file = crate::util::paths::senclaw_home()
             .join(format!("workspace-state-{}.json", self.admin_folder));
         fs::read_to_string(&state_file)
@@ -187,6 +200,7 @@ pub struct McpVirtualServer {
     agents_config_dir: PathBuf,
     admin_folder: String,
     default_workspace: PathBuf,
+    project_root: Option<String>,
 }
 
 impl McpVirtualServer {
@@ -205,6 +219,7 @@ impl McpVirtualServer {
             agents_config_dir: PathBuf::from(agents_config_dir),
             admin_folder,
             default_workspace: PathBuf::from(default_workspace),
+            project_root: crate::projects::project_root_from_env(),
         }))
     }
 }
@@ -218,7 +233,8 @@ impl McpVirtualServer {
             &self.admin_folder,
             &self.default_workspace,
             None,
-        );
+        )
+        .with_project_root(self.project_root.clone());
         srv.list_personas().content
     }
 
@@ -234,7 +250,8 @@ impl McpVirtualServer {
             &self.admin_folder,
             &self.default_workspace,
             None,
-        );
+        )
+        .with_project_root(self.project_root.clone());
         srv.run_persona(&p.persona_name, &p.prompt, p.timeout_seconds)
             .await
             .content

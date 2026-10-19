@@ -639,7 +639,7 @@ impl AgentPool {
         if !self.state.lock().unwrap().cores.contains(jid) {
             return;
         }
-        let state_file = self.workspace_state_file(&binding.folder);
+        let state_file = self.workspace_state_file(&crate::projects::workspace_state_key(&binding));
         match std::fs::read_to_string(&state_file) {
             Ok(raw) => match serde_json::from_str::<WorkspaceStateFile>(&raw) {
                 Ok(state) if !state.current_dir.is_empty() => {
@@ -837,11 +837,133 @@ impl AgentPool {
 
     // ===== Workspace state file =====
 
-    /// `~/.senclaw/workspace-state-{folder}.json` — mirrors TS path scheme
-    /// (with the `senclaw` brand rename).
-    pub(crate) fn workspace_state_file(&self, folder: &str) -> PathBuf {
+    /// The project `binding` was created in, with the root to use for it.
+    ///
+    /// `Ok(None)` outside a project. Also when the id names a project that no
+    /// longer exists (it was deleted between the session's last turn and
+    /// now): the session then runs as an ordinary one, and says so in the log.
+    /// `Err` when the project exists but its root cannot be used any more —
+    /// the folder is gone, or became one a root may not be. The root is judged
+    /// again on every core build because it can change after it was saved.
+    fn session_project(
+        &self,
+        binding: &GroupBinding,
+    ) -> Result<Option<(crate::projects::Project, PathBuf)>> {
+        let Some(project_id) = binding.project_id.as_deref() else {
+            return Ok(None);
+        };
+        let db = self.db.lock().unwrap().clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "session {} belongs to project {project_id}, but the agent pool has no database",
+                binding.jid
+            )
+        })?;
+        let Some(project) = db.get_project(project_id)? else {
+            tracing::warn!(
+                "[AgentPool] {} was created in project {project_id}, which no longer exists; running it outside any project",
+                binding.jid
+            );
+            return Ok(None);
+        };
+        let rules = self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| crate::projects::RootRules::from_config(c))
+            .ok_or_else(|| anyhow::anyhow!("the agent pool has no config"))?;
+        let root = crate::projects::recheck_root(&project.root, &rules).map_err(|problem| {
+            anyhow::anyhow!(
+                "Project \"{}\" cannot be used: {} ({})",
+                project.name,
+                problem.message,
+                problem.code
+            )
+        })?;
+        Ok(Some((project, root)))
+    }
+
+    /// Hand the engine the `<project>` block for the turn about to start.
+    pub(crate) fn push_project_context(&self, jid: &str, binding: &GroupBinding) {
+        self.core_api
+            .set_project_context(jid, self.project_context_block(binding));
+    }
+
+    /// The `<project>` block for the turn about to start, if the session is in
+    /// a project that has a context.
+    fn project_context_block(&self, binding: &GroupBinding) -> Option<String> {
+        let id = binding.project_id.as_deref()?;
+        let db = self.db.lock().unwrap().clone()?;
+        let projects_dir = self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.paths.projects_dir.clone())?;
+        match db.get_project(id) {
+            Ok(Some(project)) => crate::projects::render_block(&project, &projects_dir),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("[AgentPool] cannot load project {id}: {e}");
+                None
+            }
+        }
+    }
+
+    /// The project row a session was created in, as it is now. `None` outside a
+    /// project, once the row is gone, and when the database cannot be read: the
+    /// session then behaves like any other chat, which keeps its memory working.
+    fn project_row(&self, project_id: Option<&str>) -> Option<crate::projects::Project> {
+        let id = project_id?;
+        let db = self.db.lock().unwrap().clone()?;
+        match db.get_project(id) {
+            Ok(project) => project,
+            Err(e) => {
+                tracing::warn!("[AgentPool] cannot load project {id}: {e}");
+                None
+            }
+        }
+    }
+
+    /// Whether the facts of a conversation are tagged with its chat
+    /// (`SENCLAW_MEMORY_FACTS_SCOPE`, `chat` by default).
+    fn facts_by_chat(&self) -> bool {
+        self.config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.memory.engine_facts_by_chat)
+            .unwrap_or(true)
+    }
+
+    /// Where the facts of this session's conversation are stored, or `None`
+    /// when its project says to keep none. Read on every use, so a change of
+    /// the project's `facts_write` applies to the next window and summary.
+    pub(crate) fn fact_target(
+        &self,
+        folder: &str,
+        jid: &str,
+        project_id: Option<&str>,
+    ) -> Option<crate::memory::engine::facts::FactTarget> {
+        let project = self.project_row(project_id);
+        crate::projects::fact_target(project.as_ref(), folder, jid, self.facts_by_chat())
+    }
+
+    /// The project bank recall reads for this session besides the agent's own.
+    fn project_recall(
+        &self,
+        project_id: Option<&str>,
+    ) -> Option<crate::memory::engine::ProjectRecall> {
+        crate::projects::recall_scope(self.project_row(project_id).as_ref())
+    }
+
+    /// `~/.senclaw/workspace-state-{key}.json` — mirrors TS path scheme
+    /// (with the `senclaw` brand rename). `key` is
+    /// [`crate::projects::workspace_state_key`] of a binding: the profile
+    /// folder outside a project, a per-session key inside one.
+    pub(crate) fn workspace_state_file(&self, key: &str) -> PathBuf {
         let home = self.senclaw_home.lock().unwrap().clone();
-        home.join(format!("workspace-state-{folder}.json"))
+        home.join(crate::projects::workspace_state_file_name(key))
     }
 
     /// Initialize the workspace state file with the default working dir
@@ -878,7 +1000,7 @@ impl AgentPool {
     /// Get or create a core for `binding`, using `pending_creates` as a
     /// concurrency lock so concurrent callers for the same JID wait on the
     /// in-flight creation instead of duplicating (mirrors TS 454–466).
-    async fn get_or_create(&self, binding: &GroupBinding) -> Result<()> {
+    pub(crate) async fn get_or_create(&self, binding: &GroupBinding) -> Result<()> {
         // Fast path: already exists.
         if self.state.lock().unwrap().cores.contains(&binding.jid) {
             return Ok(());
@@ -940,6 +1062,17 @@ impl AgentPool {
 
         let binding = binding.clone();
 
+        // The project this session was created in, resolved once, here: its
+        // root becomes the working folder, the only folder the session may
+        // switch within, and part of the MCP servers' environment. Refusing
+        // to build the core beats falling back to the profile's folder — a
+        // session that thinks it is in a project must not quietly work
+        // somewhere else.
+        let project = self.session_project(&binding)?;
+        let project_root: Option<String> = project
+            .as_ref()
+            .map(|(_, root)| root.to_string_lossy().to_string());
+
         // Sync allowedWorkDirs from config.json (config.json overrides DB).
         // Mirrors TS AgentPool.ts:479-482.
         //
@@ -948,7 +1081,9 @@ impl AgentPool {
         // the code-session REST layer (plans/260912-0141-code-v2, phase 2)
         // creates them again as thin wrappers over an ordinary chat, so the
         // branches below are kept, not dead.
-        let allowed_work_dirs = if binding.group_type == "code" {
+        let allowed_work_dirs = if let Some(root) = &project_root {
+            Some(vec![root.clone()])
+        } else if binding.group_type == "code" {
             // Code chat sessions are explicitly bound to project workspace selected
             // in code_sessions.workspace; never override from global config.
             binding.allowed_work_dirs.clone()
@@ -996,7 +1131,9 @@ impl AgentPool {
         let default_workspace = crate::util::paths::senclaw_data_home()
             .join("workspace")
             .join(&binding.folder);
-        let workspace_dir = if binding.group_type == "code" {
+        let workspace_dir = if let Some(root) = &project_root {
+            PathBuf::from(root)
+        } else if binding.group_type == "code" {
             allowed_work_dirs
                 .as_ref()
                 .and_then(|dirs| dirs.first())
@@ -1009,11 +1146,16 @@ impl AgentPool {
         } else {
             default_workspace
         };
-        let state_file = home.join(format!("workspace-state-{}.json", binding.folder));
+        // Inside a project the file is the session's own (so two sessions of
+        // one profile never share a working folder); outside, the profile's.
+        let state_file = home.join(crate::projects::workspace_state_file_name(
+            &crate::projects::workspace_state_key(&binding),
+        ));
         Self::init_workspace_state(&state_file, &workspace_dir);
-        if binding.group_type == "code" {
+        if binding.group_type == "code" || project_root.is_some() {
             // Code chat sessions must always stick to session workspace, even if
             // an old workspace-state file already exists from a previous run.
+            // A session in a project starts in its root the same way.
             let body = WorkspaceStateFile {
                 current_dir: workspace_dir.to_string_lossy().to_string(),
                 updated_at: local_iso_string_now(),
@@ -1066,6 +1208,9 @@ impl AgentPool {
             let virtual_agents_dir_s = cfg.paths.virtual_agents_dir.to_string_lossy().to_string();
 
             let mut mcp_servers: Vec<McpServerConfig> = Vec::new();
+            let project_bank: Option<String> = project
+                .as_ref()
+                .map(|(p, _)| crate::projects::project_bank(&p.id));
 
             let openai_key = (!cfg.memory.openai_api_key.is_empty())
                 .then_some(cfg.memory.openai_api_key.as_str());
@@ -1111,6 +1256,8 @@ impl AgentPool {
                         js_timeout_ms: 5_000,
                         js_memory_mb: 128,
                         servers: crate::mcp::helper::DEFAULT_CORE_SERVERS,
+                        project_root: project_root.as_deref(),
+                        project_bank: project_bank.as_deref(),
                     },
                 ));
             } else {
@@ -1157,12 +1304,18 @@ impl AgentPool {
                 // Plan mode, and in Agent mode they're available but unused
                 // unless the model explicitly calls them. State is per-folder, so
                 // groups don't share dispatch state.
-                mcp_servers.push(dispatch_mcp_config(
+                let mut dispatch_cfg = dispatch_mcp_config(
                     &dispatch_state_s,
                     &binding.folder,
                     &binding.jid,
                     Some(&virtual_agents_dir_s),
-                ));
+                );
+                crate::mcp::helper::with_project_env(
+                    &mut dispatch_cfg,
+                    project_root.as_deref(),
+                    project_bank.as_deref(),
+                );
+                mcp_servers.push(dispatch_cfg);
 
                 mcp_servers.push(memory_mcp_config(
                     &db_path_s,
@@ -1243,9 +1396,9 @@ impl AgentPool {
 
         // Init memory index for this agent folder — mirrors TS 628-639.
         let _ = &custom_memory_dir;
-        crate::memory::manager::get_instance()
-            .init_agent(&memory_index_folder)
-            .await;
+        if let Some(manager) = crate::memory::manager::try_get_instance() {
+            manager.init_agent(&memory_index_folder).await;
+        }
 
         // Compute use_tools whitelist — mirrors TS AgentPool.ts:514-523.
         // Task is excluded for normal chat groups (sub-agent spawning is
@@ -1374,6 +1527,7 @@ impl AgentPool {
                 state_path: cfg.paths.dispatch_state_path.clone(),
                 admin_folder: binding.folder.clone(),
                 agents_config_dir: Some(cfg.paths.virtual_agents_dir.to_string_lossy().to_string()),
+                project_root: project_root.clone(),
             });
             self.core_api.register_tools(
                 &binding.jid,
@@ -1810,6 +1964,13 @@ impl AgentPool {
             self.run_control_plane_shadow_specs(jid, prompt, path).await;
         }
 
+        // ---- Project context ----
+        // The `<project>` block of the system prompt. Read from disk on every
+        // turn so an edit applies to the next one, and always set — `None`
+        // clears it once a session leaves its project (the project is
+        // deleted), and keeps the prompt of a session outside one untouched.
+        self.push_project_context(jid, group);
+
         // ---- Per-group LLM override ----
         // Push the group's model selection to the engine before dispatch so the
         // reply uses the group's chosen LLM (falls back to the globally active
@@ -1865,6 +2026,7 @@ impl AgentPool {
                     facts_by_chat,
                     limit: max_results,
                     now: chrono::Utc::now().timestamp(),
+                    project: self.project_recall(group.project_id.as_deref()),
                 },
                 &crate::memory::engine::RecallConfig {
                     max_tokens,
@@ -1906,7 +2068,11 @@ impl AgentPool {
                 .map(|c| c.memory.cognitive_reflection)
                 .unwrap_or(true);
             if reflect_enabled {
-                super::reflection::reflect_push(&group.folder, jid, "User", prompt);
+                if let Some(target) =
+                    self.fact_target(&group.folder, jid, group.project_id.as_deref())
+                {
+                    super::reflection::reflect_push(&group.folder, jid, &target, "User", prompt);
+                }
             }
         }
 
@@ -2814,6 +2980,7 @@ impl AgentPool {
         let _folder = binding.folder.clone();
         let _name = binding.name.clone();
         let _bot_token = binding.bot_token.clone();
+        let _project_id = binding.project_id.clone();
 
         // Mutable state shared across event handlers.
         let last_reply: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
@@ -2823,6 +2990,7 @@ impl AgentPool {
             let pool = Arc::clone(self);
             let jid = _jid.clone();
             let folder = _folder.clone();
+            let project_id = _project_id.clone();
             let bot_token = _bot_token.clone();
             let last_reply = Arc::clone(&last_reply);
             let jid_arg = jid.clone();
@@ -2880,12 +3048,16 @@ impl AgentPool {
                         .map(|c| c.memory.cognitive_reflection)
                         .unwrap_or(true);
                     if reflect_enabled {
-                        crate::agent::agent_pool::reflection::reflect_push(
-                            &folder,
-                            &jid,
-                            "Assistant",
-                            &data.content,
-                        );
+                        if let Some(target) = pool.fact_target(&folder, &jid, project_id.as_deref())
+                        {
+                            crate::agent::agent_pool::reflection::reflect_push(
+                                &folder,
+                                &jid,
+                                &target,
+                                "Assistant",
+                                &data.content,
+                            );
+                        }
                     }
                 }),
             );
@@ -3047,6 +3219,7 @@ impl AgentPool {
             let pool = Arc::clone(self);
             let jid = _jid.clone();
             let folder = _folder.clone();
+            let project_id = _project_id.clone();
             let jid_arg = jid.clone();
             self.core_api.on_compact_exec(
                 &jid_arg,
@@ -3062,16 +3235,17 @@ impl AgentPool {
                     // decided or done stays recallable after the context is
                     // cut. Fire-and-forget: a failure logs and never touches
                     // the turn.
+                    // It goes where the conversation's own facts go: a session
+                    // in a project keeps them with the project's, or nowhere
+                    // when the project keeps none.
                     if let Some(summary) = data.summary.clone() {
                         let cfg = pool.config.lock().unwrap().as_ref().cloned();
-                        if let Some(cfg) = cfg {
-                            let folder = folder.clone();
-                            let chat = jid.clone();
+                        let target = pool.fact_target(&folder, &jid, project_id.as_deref());
+                        if let (Some(cfg), Some(target)) = (cfg, target) {
                             tokio::spawn(async move {
                                 crate::memory::engine::facts::retain_text(
                                     &cfg,
-                                    &folder,
-                                    &chat,
+                                    &target,
                                     &summary,
                                     "compaction",
                                 )
@@ -3260,6 +3434,7 @@ impl AgentPool {
     /// Start watching the workspace state file for `jid`.
     /// Mirrors TS `setupWorkspaceWatcher` (AgentPool.ts:1273–1297).
     pub fn setup_workspace_watcher(self: &Arc<Self>, jid: &str, folder: &str) {
+        // `folder` here is the state-file key (see `workspace_state_file`).
         let state_file = self.workspace_state_file(folder);
         let jid_owned = jid.to_string();
         let folder_owned = folder.to_string();

@@ -140,6 +140,11 @@ pub trait CoreApi: Send + Sync {
     /// existing core (built from the global `defaults` config before each
     /// turn; `None` = user configured nothing). Default no-op.
     fn set_user_defaults(&self, _jid: &str, _block: Option<String>) {}
+
+    /// The `<project>` system-prompt block of the session's project (rendered
+    /// from its context before each turn; `None` = not in a project, or the
+    /// project has no context). Default no-op.
+    fn set_project_context(&self, _jid: &str, _block: Option<String>) {}
     /// What memory recalled for the turn about to start; shown on every model
     /// call of the turn and not stored in the conversation. `None` clears it.
     fn set_turn_context(&self, _jid: &str, _block: Option<String>) {}

@@ -1176,6 +1176,11 @@ pub struct ZenCoreOptions {
     /// configured nothing → prompt unchanged. Set per-engine from the global
     /// `defaults` config before each turn.
     pub user_defaults: Option<String>,
+    /// Rendered `<project>` block (the context the person wrote about the
+    /// project this session was created in), placed just before the operating
+    /// rules. `None` = not in a project, or no context → the prompt is
+    /// unchanged. Set per-engine before each turn.
+    pub project_context: Option<String>,
     /// Context retrieved for THIS turn (recalled memory), shown to the model
     /// on every call of the turn but never stored in the conversation. `None`
     /// = nothing recalled. Replaced before each turn; see
@@ -1215,6 +1220,7 @@ impl Default for ZenCoreOptions {
             pre_trigger_skill: false,
             after_process: false,
             user_defaults: None,
+            project_context: None,
             turn_context: None,
             model_config_id: None,
             max_agent_turns: None,

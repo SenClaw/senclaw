@@ -36,6 +36,7 @@ use crate::memory::cognitive::{CognifyOptions, CognitiveSystem, NodeSet, NullEmb
 use crate::memory::curated;
 use crate::memory::embedding::EmbeddingProvider as EmbeddingModel;
 use crate::memory::manager::MemoryManager;
+use crate::projects::{FactsWrite, Project};
 use crate::security::replication::fold;
 
 use super::facts::store::Scope;
@@ -59,6 +60,8 @@ struct Fixture {
     fact_windows: Vec<FactWindow>,
     #[serde(default)]
     fact_queries: Vec<Case>,
+    #[serde(default)]
+    projects: Option<ProjectFixture>,
 }
 
 /// A conversation window and what the extraction model is scripted to answer
@@ -468,10 +471,9 @@ async fn run_engine(
         Arc::new(CognitiveArm::new(Arc::clone(&w.sys))),
     ];
     if with_facts {
-        arms.push(Arc::new(facts::SemanticArm(Arc::clone(&w.facts))));
-        arms.push(Arc::new(facts::KeywordArm(Arc::clone(&w.facts))));
-        arms.push(Arc::new(facts::GraphArm(Arc::clone(&w.facts))));
-        arms.push(Arc::new(facts::TemporalArm(Arc::clone(&w.facts))));
+        // The arms the daemon runs, the project ones included: asked from no
+        // project they answer nothing.
+        arms.extend(facts::fact_arms(Arc::clone(&w.facts)));
     }
     let query = RecallQuery {
         text: q.to_string(),
@@ -480,6 +482,7 @@ async fn run_engine(
         facts_by_chat: true,
         limit: max,
         now,
+        project: None,
     };
     let recalled = recall(&arms, &query, cfg).await;
     (format::render(&recalled.items), recalled)
@@ -779,6 +782,7 @@ async fn alone(w: &World, arm: Arc<dyn RecallArm>, text: &str, now: i64) -> Stri
         facts_by_chat: true,
         limit: 5,
         now,
+        project: None,
     };
     let recalled = recall(&[arm], &query, &RecallConfig::default()).await;
     format::render(&recalled.items)
@@ -878,6 +882,400 @@ async fn the_semantic_arm_needs_an_embedding_model_and_is_silent_without_one() {
     )
     .await;
     assert_eq!(none, "");
+}
+
+// ===== Projects =====
+//
+// A project keeps its facts in a bank of its own that every chat of the project
+// reads and writes. These run the fixture's `projects` section through the same
+// functions the agent pool uses to pick where a window is retained
+// (`projects::fact_target`) and what a question reads (`projects::recall_scope`),
+// then through the arms the daemon runs.
+
+#[derive(Deserialize)]
+struct ProjectFixture {
+    p: String,
+    q: String,
+    windows: Vec<ProjectWindow>,
+    queries: Vec<ProjectCase>,
+}
+
+impl ProjectFixture {
+    /// The id of project `p` or `q`.
+    fn id(&self, key: &str) -> &str {
+        match key {
+            "p" => &self.p,
+            "q" => &self.q,
+            other => panic!("the fixture has no project {other:?}"),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectWindow {
+    project: String,
+    /// The chat the window was spoken in.
+    chat: String,
+    #[serde(rename = "match")]
+    needle: String,
+    text: String,
+    facts: Vec<serde_json::Value>,
+}
+
+/// A question, and where it is asked from.
+#[derive(Deserialize)]
+struct ProjectCase {
+    #[serde(flatten)]
+    case: Case,
+    from: Asker,
+}
+
+#[derive(Deserialize)]
+struct Asker {
+    /// `p`, `q`, or none for a chat outside any project.
+    project: Option<String>,
+    chat: String,
+    #[serde(default = "yes")]
+    include_common: bool,
+    /// A kanban worker of the project: no chat and no profile, so it asks the
+    /// way `projects::worker_recall_query` does and `include_common` has no say.
+    #[serde(default)]
+    worker: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Strings that only a project's facts contain: they must never turn up in a
+/// chat outside it.
+const PROJECT_MARKERS: [&str; 5] = ["7421", "900 triệu", "thứ Sáu", "Mặt Trời", "Biển Xanh"];
+
+fn project_row(id: &str, include_common: bool) -> Project {
+    Project {
+        id: id.into(),
+        name: id.into(),
+        root: "/nowhere".into(),
+        description: String::new(),
+        facts_write: FactsWrite::Project,
+        inherit_common: include_common,
+        created_at: 1,
+        updated_at: 1,
+        archived_at: None,
+    }
+}
+
+fn project_fixture(fx: &Fixture) -> &ProjectFixture {
+    fx.projects.as_ref().expect("the fixture has projects")
+}
+
+/// The fixture's project windows, retained where the project says: the real
+/// pipeline with the extraction model scripted, in fixture order.
+async fn retain_project_windows(w: &World, fx: &Fixture) {
+    let pf = project_fixture(fx);
+    let scripted = ScriptedFacts {
+        script: pf
+            .windows
+            .iter()
+            .map(|win| (win.needle.clone(), win.facts.clone()))
+            .collect(),
+        seen: Arc::new(Mutex::new(Vec::new())),
+    };
+    for win in &pf.windows {
+        let project = project_row(pf.id(&win.project), true);
+        let target = crate::projects::fact_target(Some(&project), &w.folder, &win.chat, true)
+            .expect("a project that keeps its facts has somewhere to put them");
+        let report = facts::retain(
+            &w.facts,
+            &scripted,
+            defense::Mode::Redact,
+            &RetainRequest {
+                bank: &target.bank,
+                text: &win.text,
+                source: "eval",
+                now: fixture_now(fx),
+                origin: &target.origin,
+            },
+        )
+        .await;
+        assert_eq!(
+            report.stored,
+            win.facts.len(),
+            "window {:?} stored {} of {} scripted facts ({report:?})",
+            win.needle,
+            report.stored,
+            win.facts.len()
+        );
+    }
+}
+
+/// One project question through the fact arms the daemon runs.
+async fn ask_from(w: &World, fx: &Fixture, pc: &ProjectCase) -> (String, Recalled) {
+    let pf = project_fixture(fx);
+    let limit = Config::from_env().memory.search_max_results as usize;
+    let query = if pc.from.worker {
+        let key = pc
+            .from
+            .project
+            .as_deref()
+            .expect("a worker belongs to a project");
+        crate::projects::worker_recall_query(pf.id(key), &pc.case.text, limit, fixture_now(fx))
+    } else {
+        let project = pc.from.project.as_deref().map(|key| {
+            crate::projects::recall_scope(Some(&project_row(pf.id(key), pc.from.include_common)))
+                .expect("a project has a bank to read")
+        });
+        RecallQuery {
+            text: pc.case.text.clone(),
+            folder: w.folder.clone(),
+            chat_jid: pc.from.chat.clone(),
+            facts_by_chat: true,
+            limit,
+            now: fixture_now(fx),
+            project,
+        }
+    };
+    let arms = facts::fact_arms(Arc::clone(&w.facts));
+    let recalled = recall(&arms, &query, &RecallConfig::default()).await;
+    (format::render(&recalled.items), recalled)
+}
+
+async fn run_project_cases(label: &str, vectors: bool) {
+    let fx = fixture();
+    let world = build_world(&fx, vectors).await;
+    retain_project_windows(&world, &fx).await;
+
+    eprintln!("\n== project facts: {label} ==");
+    let mut rows = Vec::new();
+    for pc in &project_fixture(&fx).queries {
+        let (context, _) = ask_from(&world, &fx, pc).await;
+        let row = grade(&pc.case, &context);
+        eprintln!(
+            "{:<34} {}",
+            pc.case.id,
+            match (row.leaked, row.answered) {
+                (true, _) => "LEAKED",
+                (false, true) => "ok",
+                (false, false) => "MISSED",
+            }
+        );
+        if row.leaked || !row.answered {
+            eprintln!(
+                "    wanted {:?}, not {:?}\n    injected: {}",
+                pc.case.must_include,
+                pc.case.must_exclude,
+                context.replace('\n', "\n      ")
+            );
+        }
+        rows.push(row);
+    }
+    let leaked: Vec<_> = rows.iter().filter(|r| r.leaked).map(|r| &r.id).collect();
+    let missed: Vec<_> = rows.iter().filter(|r| !r.answered).map(|r| &r.id).collect();
+    assert!(
+        leaked.is_empty(),
+        "leaked across a project's edge: {leaked:?}"
+    );
+    assert!(missed.is_empty(), "did not answer: {missed:?}");
+}
+
+#[tokio::test]
+async fn with_an_embedding_model_a_projects_facts_stay_inside_it_and_follow_its_chats() {
+    run_project_cases("vectors", true).await;
+}
+
+#[tokio::test]
+async fn without_an_embedding_model_a_projects_facts_stay_inside_it_and_follow_its_chats() {
+    run_project_cases("keyword only", false).await;
+}
+
+/// The questions of the rest of the fixture, asked from no project, are
+/// answered with exactly what they were before a project held any fact — and
+/// nothing a project knows is among it.
+#[tokio::test]
+async fn a_chat_outside_every_project_is_told_what_it_always_was() {
+    let fx = fixture();
+    let max = Config::from_env().memory.search_max_results as usize;
+    let (now, cfg) = (fixture_now(&fx), RecallConfig::default());
+    for vectors in [false, true] {
+        let plain = build_world(&fx, vectors).await;
+        let with = build_world(&fx, vectors).await;
+        retain_project_windows(&with, &fx).await;
+        // The facts found, whatever the order. Notes are left out of the
+        // comparison: two worlds built apart break a tie between equally good
+        // notes by the order the filesystem listed them, project or no project.
+        let found = |r: &Recalled| {
+            let mut bodies: Vec<String> = r
+                .items
+                .iter()
+                .filter(|i| i.hit.arm == facts::FACTS)
+                .map(|i| i.hit.body.clone())
+                .collect();
+            bodies.sort();
+            bodies
+        };
+        for case in fx.queries.iter().chain(&fx.fact_queries) {
+            let (_, before) = run_engine(&plain, &case.text, max, now, &cfg, true).await;
+            let (after, recalled) = run_engine(&with, &case.text, max, now, &cfg, true).await;
+            assert_eq!(
+                found(&before),
+                found(&recalled),
+                "{}: a project's facts changed what the chat is told",
+                case.id
+            );
+            for marker in PROJECT_MARKERS {
+                assert!(
+                    !after.contains(marker),
+                    "{}: {marker:?} reached a chat outside the project",
+                    case.id
+                );
+            }
+        }
+    }
+}
+
+/// The four project arms are the agent's four strategies pointed at another
+/// bank, under the same `facts` label: one project fact that several of them
+/// find is one result with a vote from each.
+#[tokio::test]
+async fn a_project_fact_found_by_several_arms_is_one_result_with_a_vote_from_each() {
+    let fx = fixture();
+    let world = build_world(&fx, true).await;
+    retain_project_windows(&world, &fx).await;
+    let pc = project_fixture(&fx)
+        .queries
+        .iter()
+        .find(|c| c.case.id == "said-in-another-chat")
+        .expect("the case exists");
+    let (_, recalled) = ask_from(&world, &fx, pc).await;
+    let port: Vec<_> = recalled
+        .items
+        .iter()
+        .filter(|i| i.hit.body.contains("7421"))
+        .collect();
+    assert_eq!(port.len(), 1, "one fact, one result");
+    assert_eq!(
+        port[0].hit.arm,
+        facts::FACTS,
+        "same label as the agent's facts"
+    );
+    let strategies: Vec<&str> = port[0].sources.iter().map(|(s, _)| *s).collect();
+    assert!(
+        strategies.contains(&"facts_project_keyword")
+            && strategies.contains(&"facts_project_semantic"),
+        "{strategies:?}"
+    );
+    assert!(
+        strategies.iter().all(|s| s.starts_with("facts_project_")),
+        "the agent's own arms found nothing of the project's: {strategies:?}"
+    );
+    // All eight fact arms report, whether or not they found anything.
+    let reported = recalled
+        .arms
+        .iter()
+        .filter(|a| a.arm.starts_with("facts"))
+        .count();
+    assert_eq!(reported, 8);
+    assert!(recalled.arms.iter().all(|a| a.error.is_none()));
+}
+
+/// A project is allowed to grow: thousands of facts must not make the question
+/// of a chat in it slow. The budget is the one the plan set, on the path every
+/// turn takes (no model is called), in a debug build.
+#[tokio::test]
+async fn the_project_arms_answer_within_150_ms_on_a_large_bank() {
+    const FACTS: usize = 5_000;
+    const BUDGET_MS: u64 = 150;
+    let fx = fixture();
+    let world = build_world(&fx, true).await;
+    retain_project_windows(&world, &fx).await;
+    let bank = "project:prj_0000000c";
+    let now = fixture_now(&fx);
+    let texts: Vec<String> = (0..FACTS)
+        .map(|i| {
+            format!(
+                "Ghi chú số {i} về module {} của dịch vụ {} chạy ở cổng {}",
+                i % 97,
+                i % 31,
+                7000 + i % 500
+            )
+        })
+        .collect();
+    let vectors = world.facts.embed_all(&texts).await;
+    let model = world.facts.model_key();
+    for (i, (text, embedding)) in texts.into_iter().zip(vectors).enumerate() {
+        let day = now - (i as i64 % 60) * 86_400;
+        world
+            .facts
+            .store
+            .insert(
+                bank,
+                &facts::store::NewFact {
+                    text,
+                    kind: facts::store::FactKind::World,
+                    occurred: (i % 5 == 0).then_some((day, day + 86_400)),
+                    mentioned_at: now - i as i64,
+                    entities: vec![format!("module {}", i % 97)],
+                    embedding,
+                    model: model.clone(),
+                    source: "eval".into(),
+                    origin: String::new(),
+                    slot: None,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(world.facts.store.count(bank).unwrap(), FACTS);
+
+    let questions = [
+        "Module 12 của dịch vụ 5 chạy ở cổng nào?",
+        "Ghi chú về cổng 7123",
+        "Hôm qua có ghi chú nào về dịch vụ 7?",
+        "Tháng này module 40 có gì",
+        "dịch vụ 30 module 96",
+        "Cổng 7499 là của dịch vụ nào?",
+    ];
+    let mut per_arm: std::collections::BTreeMap<&'static str, Vec<u64>> = Default::default();
+    for _ in 0..5 {
+        for text in questions {
+            let query = RecallQuery {
+                text: text.into(),
+                folder: world.folder.clone(),
+                chat_jid: "web:p-b".into(),
+                facts_by_chat: true,
+                limit: 5,
+                now,
+                project: Some(super::ProjectRecall {
+                    bank: bank.into(),
+                    include_common: true,
+                }),
+            };
+            let arms = facts::fact_arms(Arc::clone(&world.facts));
+            let recalled = recall(&arms, &query, &RecallConfig::default()).await;
+            for a in recalled
+                .arms
+                .iter()
+                .filter(|a| a.arm.starts_with("facts_project_"))
+            {
+                assert!(a.error.is_none(), "{}: {:?}", a.arm, a.error);
+                per_arm.entry(a.arm).or_default().push(a.millis);
+            }
+        }
+    }
+    assert_eq!(per_arm.len(), 4);
+    for (arm, mut ms) in per_arm {
+        ms.sort_unstable();
+        let p95 = ms[((ms.len() - 1) as f64 * 0.95).round() as usize];
+        eprintln!(
+            "{arm:<24} {} runs over {FACTS} facts: median {} ms, p95 {p95} ms, max {} ms",
+            ms.len(),
+            ms[ms.len() / 2],
+            ms[ms.len() - 1]
+        );
+        assert!(
+            p95 <= BUDGET_MS,
+            "{arm}: p95 {p95} ms is over {BUDGET_MS} ms"
+        );
+    }
 }
 
 // ===== A real extraction model =====
@@ -1248,3 +1646,5 @@ async fn real_extractor_keyword_only() {
 async fn real_extractor_with_vectors() {
     run_real_extractor("hashed-word vectors", true).await;
 }
+
+mod real_project;

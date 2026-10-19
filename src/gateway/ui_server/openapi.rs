@@ -35,6 +35,7 @@ const ROUTER_SOURCES: &[(&str, &str)] = &[
     ("", include_str!("../../browser_agent/rest.rs")),
     // Routes declared next to their handlers and merged into core's router.
     ("", include_str!("memory_facts.rs")),
+    ("", include_str!("projects.rs")),
 ];
 
 /// One route as the router declares it.

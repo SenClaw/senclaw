@@ -16,9 +16,9 @@ use super::slots::{self, Slot};
 use super::store::{entity_key, FactKind};
 
 /// A fact longer than this is a paragraph the model failed to split.
-const MAX_FACT_CHARS: usize = 600;
+pub const MAX_FACT_CHARS: usize = 600;
 /// Shorter than this is a fragment ("Sen.").
-const MIN_FACT_CHARS: usize = 8;
+pub const MIN_FACT_CHARS: usize = 8;
 const MAX_FACTS_PER_CHUNK: usize = 24;
 const MAX_ENTITIES_PER_FACT: usize = 8;
 const MAX_ENTITY_CHARS: usize = 80;
