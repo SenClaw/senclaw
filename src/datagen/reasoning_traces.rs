@@ -352,11 +352,40 @@ pub fn same_answer(got: &str, want: &str) -> bool {
     }
 }
 
-/// A number with an optional one-word unit: "160 km" is (160, "km"), "37 °C"
-/// is (37, "°c"), a bare "160" has an empty unit. Only a short, plain unit
-/// counts, so a second number or word ("7 or 8", "7 or eight") is not one, and
-/// a unit that starts with a letter must be set off by a space: "5x" may be an
-/// algebraic term, not 5 of something.
+/// Words a unit of several words is made of ("square metres", "km per hour",
+/// "mét vuông"). One word outside this list and the text after the number is
+/// not read as a unit, so "7 or eight" stays what it is: a different answer.
+/// A unit of a single word needs no list entry (see `number_with_unit`).
+const UNIT_WORDS: &[&str] = &[
+    // modifiers
+    "square", "cubic", "sq", "squared", "cubed", "per",
+    // length and area
+    "millimetre", "millimetres", "millimeter", "millimeters", "centimetre", "centimetres", "centimeter",
+    "centimeters", "metre", "metres", "meter", "meters", "kilometre", "kilometres", "kilometer", "kilometers",
+    "inch", "inches", "foot", "feet", "yard", "yards", "mile", "miles", "hectare", "hectares", "acre", "acres",
+    "mm", "cm", "m", "km", "ft", "mi",
+    // time
+    "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "month",
+    "months", "year", "years", "sec", "min", "hr", "hrs", "h", "s",
+    // mass and volume
+    "gram", "grams", "kilogram", "kilograms", "milligram", "milligrams", "tonne", "tonnes", "ton", "tons",
+    "pound", "pounds", "ounce", "ounces", "g", "mg", "kg", "lb", "lbs", "oz", "litre", "litres", "liter",
+    "liters", "millilitre", "millilitres", "milliliter", "milliliters", "gallon", "gallons", "l", "ml",
+    // temperature, angle, ratio
+    "degree", "degrees", "celsius", "fahrenheit", "kelvin", "radian", "radians", "percent", "cent",
+    // money
+    "dollar", "dollars", "cents", "euro", "euros", "yen", "dong", "usd", "vnd",
+    // Vietnamese
+    "mét", "vuông", "khối", "trên", "giờ", "phút", "giây", "ngày", "tuần", "tháng", "đồng", "lít", "gam",
+    "độ", "phần", "trăm", "đô", "la", "xentimét", "milimét", "kilômét", "kilôgam", "ki-lô-mét", "ki-lô-gam",
+];
+
+/// A number with an optional unit: "160 km" is (160, "km"), "28 square metres"
+/// is (28, "square metres"), a bare "160" has an empty unit. A unit is one
+/// short plain word, or up to four words that are all in `UNIT_WORDS`; so a
+/// second number or word ("7 or 8", "7 or eight") is not one. A unit that
+/// starts with a letter must be set off by a space: "5x" may be an algebraic
+/// term, not 5 of something. Both spellings of metre and litre are one unit.
 fn number_with_unit(s: &str) -> Option<(f64, String)> {
     let inner = boxed(s).unwrap_or_else(|| s.to_string());
     let text = inner.trim().trim_matches('$').replace("\\text{", "").replace(['{', '}'], "");
@@ -371,13 +400,20 @@ fn number_with_unit(s: &str) -> Option<(f64, String)> {
     if unit.is_empty() {
         return Some((value, String::new()));
     }
-    let plain = unit.chars().all(|c| c.is_alphabetic() || matches!(c, '%' | '/' | '°' | '²' | '³' | '^' | '·' | '-'));
+    let words: Vec<String> = unit.split_whitespace().map(str::to_lowercase).collect();
+    let is_unit = match words.as_slice() {
+        [one] => {
+            one.chars().count() <= 10
+                && one.chars().all(|c| c.is_alphabetic() || matches!(c, '%' | '/' | '°' | '²' | '³' | '^' | '·' | '-'))
+        }
+        many => many.len() <= 4 && many.iter().all(|w| UNIT_WORDS.contains(&w.as_str())),
+    };
     let starts_with_letter = unit.chars().next().is_some_and(char::is_alphabetic);
     let spaced = rest.starts_with(char::is_whitespace);
-    if !plain || unit.chars().count() > 10 || (starts_with_letter && !spaced) {
+    if !is_unit || (starts_with_letter && !spaced) {
         return None;
     }
-    Some((value, unit.to_lowercase()))
+    Some((value, words.join(" ").replace("meter", "metre").replace("liter", "litre")))
 }
 
 /// A number, with commas allowed only as thousands separators: "1,000" is
@@ -468,6 +504,29 @@ mod tests {
         assert!(!same_answer("7 or eight", "7"), "more than one word is not a unit");
         assert!(!same_answer("5x", "5"), "without a space it may be an algebraic term");
         assert!(!same_answer("1,5 km", "15"), "a decimal comma is still not a thousands separator");
+    }
+
+    #[test]
+    fn a_unit_of_several_known_words_is_still_a_unit() {
+        assert!(same_answer("28 square metres", "28"));
+        assert!(same_answer("28 Square Meters", "28"));
+        assert!(same_answer("28 square metres.", "28"));
+        assert!(same_answer("28", "28 square metres"), "the reference may carry the unit instead");
+        assert!(same_answer("28 square meters", "28 square metres"), "both spellings of metre are one unit");
+        assert!(same_answer("60 km per hour", "60"));
+        assert!(same_answer("60 kilometres per hour", "60"));
+        assert!(same_answer("45 cubic centimetres", "45"));
+        assert!(same_answer("10 metres per second", "10"));
+        assert!(same_answer("12 mét vuông", "12"));
+        assert!(same_answer("10 mét trên giây", "10"));
+
+        assert!(!same_answer("28 square metres", "28 square kilometres"), "two different units are different answers");
+        assert!(!same_answer("28 square metres", "29"));
+        assert!(!same_answer("7 or eight", "7"), "a connective is not a unit word");
+        assert!(!same_answer("7 and eight", "7"));
+        assert!(!same_answer("28 square apples", "28"), "every word of the unit must be a unit word");
+        assert!(!same_answer("7 metres or 8", "7"), "a second number is never part of a unit");
+        assert!(!same_answer("5 hours minutes seconds days weeks", "5"), "a unit is at most four words");
     }
 
     #[test]
