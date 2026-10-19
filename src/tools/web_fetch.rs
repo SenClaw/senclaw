@@ -63,6 +63,15 @@ impl Tool for WebFetchTool {
                 if scheme != "http" && scheme != "https" {
                     return Err(format!("Unsupported scheme: {url}"));
                 }
+                if let Some(engine) = search_results_engine(&u) {
+                    return Err(format!(
+                        "{engine} search results cannot be fetched with WebFetch: the page is built by scripts, and a \
+                         plain request gets a consent or bot-check page with no results. Use the `browser_search` tool \
+                         instead — it searches in a real browser tab (the person's own Chrome through the SenClaw \
+                         extension when Settings → Browser selects it). Fetch a result's own URL afterwards if you \
+                         need the whole page."
+                    ));
+                }
                 if crate::util::fetch_safety::is_blocked_fetch_host(url) {
                     return Err(format!(
                         "Blocked URL (SSRF guard): {url} resolves to a local, private, or link-local address"
@@ -280,6 +289,43 @@ fn strip_html(html: &str) -> String {
     decode_entities(collapsed.trim())
 }
 
+/// The search engine whose results page `url` is, when it is one.
+///
+/// Results pages are built by scripts and answer a plain HTTP request with a
+/// consent or bot-check page, so a fetch returns no results and the model
+/// reports it "could not extract" the data it was asked for. A site's own
+/// search (`example.com/search?q=`) is not an engine's and passes.
+fn search_results_engine(url: &reqwest::Url) -> Option<&'static str> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    let host = host.trim_start_matches("www.");
+    let path = url.path().trim_end_matches('/');
+    let has = |key: &str| url.query_pairs().any(|(k, v)| k == key && !v.trim().is_empty());
+    let on = |domain: &str| host == domain || host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'));
+    // One results path on every country domain (google.com.vn, google.co.uk);
+    // `news.google.com` and the like are other products and start elsewhere.
+    if host.starts_with("google.") && path == "/search" {
+        Some("Google")
+    } else if on("bing.com") && path == "/search" {
+        Some("Bing")
+    } else if on("duckduckgo.com") && has("q") {
+        Some("DuckDuckGo")
+    } else if host == "search.yahoo.com" && path.starts_with("/search") {
+        Some("Yahoo")
+    } else if host == "search.brave.com" && path == "/search" {
+        Some("Brave")
+    } else if (on("yandex.com") || on("yandex.ru")) && path == "/search" {
+        Some("Yandex")
+    } else if on("baidu.com") && path == "/s" && has("wd") {
+        Some("Baidu")
+    } else if on("coccoc.com") && path == "/search" {
+        Some("Cốc Cốc")
+    } else if on("ecosia.org") && path == "/search" {
+        Some("Ecosia")
+    } else {
+        None
+    }
+}
+
 fn decode_entities(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&lt;", "<")
@@ -330,5 +376,62 @@ mod tests {
         assert!(tool.validate_input(&bad, &ctx).await.is_err());
         let good = serde_json::json!({"url": "https://example.com"});
         assert!(tool.validate_input(&good, &ctx).await.is_ok());
+    }
+
+    fn engine_of(url: &str) -> Option<&'static str> {
+        search_results_engine(&reqwest::Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn a_search_engines_results_page_is_recognised() {
+        // The URL the model fetched on 2026-10-18 instead of searching in a browser.
+        assert_eq!(
+            engine_of("https://www.google.com/search?q=gi%C3%A1+v%C3%A0ng+h%E1%BB%99m+2026-10-18"),
+            Some("Google")
+        );
+        assert_eq!(engine_of("https://www.google.com.vn/search?q=giá+vàng"), Some("Google"));
+        assert_eq!(engine_of("https://google.co.uk/search/?q=x"), Some("Google"));
+        assert_eq!(engine_of("https://www.bing.com/search?q=gold"), Some("Bing"));
+        assert_eq!(engine_of("https://html.duckduckgo.com/html/?q=gold"), Some("DuckDuckGo"));
+        assert_eq!(engine_of("https://duckduckgo.com/?q=gold&ia=web"), Some("DuckDuckGo"));
+        assert_eq!(engine_of("https://search.yahoo.com/search?p=gold"), Some("Yahoo"));
+        assert_eq!(engine_of("https://search.brave.com/search?q=gold"), Some("Brave"));
+        assert_eq!(engine_of("https://yandex.ru/search/?text=gold"), Some("Yandex"));
+        assert_eq!(engine_of("https://www.baidu.com/s?wd=gold"), Some("Baidu"));
+        assert_eq!(engine_of("https://coccoc.com/search?query=gold"), Some("Cốc Cốc"));
+    }
+
+    #[test]
+    fn pages_that_are_not_an_engines_results_pass() {
+        // Same hosts, other pages; and a site's own search is just a page.
+        assert_eq!(engine_of("https://www.google.com/finance/quote/USD-VND"), None);
+        assert_eq!(engine_of("https://www.google.com/maps/search/cafe"), None);
+        assert_eq!(engine_of("https://news.google.com/search?q=gold"), None);
+        assert_eq!(engine_of("https://duckduckgo.com/"), None);
+        assert_eq!(engine_of("https://www.bing.com/"), None);
+        assert_eq!(engine_of("https://example.com/search?q=gold"), None);
+        assert_eq!(engine_of("https://notgoogle.com/search?q=gold"), None);
+        assert_eq!(engine_of("https://www.24h.com.vn/gia-vang-hom-nay-c425.html"), None);
+    }
+
+    #[tokio::test]
+    async fn fetching_a_results_page_points_at_browser_search() {
+        let tool = WebFetchTool;
+        let ctx = ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+            edit_format: Default::default(),
+        };
+        let serp = serde_json::json!({
+            "url": "https://www.google.com/search?q=gi%C3%A1+v%C3%A0ng+h%E1%BB%99m+nay",
+            "prompt": "Tìm giá vàng SJC và PNJ."
+        });
+        let err = tool.validate_input(&serp, &ctx).await.unwrap_err();
+        assert!(err.contains("Google"), "{err}");
+        assert!(err.contains("browser_search"), "{err}");
     }
 }

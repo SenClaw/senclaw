@@ -121,6 +121,10 @@ struct HandoverParams {
 struct SearchParams {
     /// What to search the web for.
     query: String,
+    /// Omit to search where Settings → Browser says (the person's Chrome through the
+    /// SenClaw extension, or SenClaw's own browser). "managed" or "extension" overrides it.
+    #[serde(default)]
+    browser: Option<String>,
 }
 
 #[derive(Clone)]
@@ -265,23 +269,31 @@ impl McpBrowserAgentServer {
     }
 
     #[rmcp::tool(
-        description = "Search the web in SenClaw's own browser (DuckDuckGo, then Bing if DuckDuckGo shows a bot check) and return the results page's text and links, with `engine` naming the one that answered."
+        description = "Search the web in a real browser tab — the person's Chrome through the SenClaw extension when Settings → Browser selects it, otherwise SenClaw's own browser (DuckDuckGo, then Bing if DuckDuckGo shows a bot check) — and return the results page's text and links, with `engine` naming the one that answered and `driver` the browser used. Use this for every web search; never fetch a search engine's results URL with WebFetch."
     )]
     async fn browser_search(&self, Parameters(p): Parameters<SearchParams>) -> String {
         let mut walls = Vec::new();
+        // The browser the settings (or the caller) chose, as the open answered.
+        // Reading it back keeps `/read` on the tab `/open` made even when a
+        // per-domain driver differs from the default.
+        let mut used = p.browser.clone();
         for (engine, base) in SEARCH_ENGINES {
             let url = format!("{base}{}", urlencoding(&p.query));
-            let opened = self.post("/api/browser-agent/open", json!({ "url": url, "browser": "managed" }), STEP_TIMEOUT).await;
+            let opened = self.post("/api/browser-agent/open", json!({ "url": url, "browser": p.browser }), STEP_TIMEOUT).await;
             if opened.contains("\"error\"") {
                 return opened;
             }
-            let read = self.post("/api/browser-agent/read", json!({ "max_chars": 8000, "browser": "managed" }), STEP_TIMEOUT).await;
+            if let Some(driver) = serde_json::from_str::<Value>(&opened).ok().and_then(|o| o.get("driver").and_then(Value::as_str).map(str::to_string)) {
+                used = Some(driver);
+            }
+            let read = self.post("/api/browser-agent/read", json!({ "max_chars": 8000, "browser": used }), STEP_TIMEOUT).await;
             let Ok(mut page) = serde_json::from_str::<Value>(&read) else { return read };
             if page.get("error").is_some() {
                 return read;
             }
             if !is_bot_wall(page.get("text").and_then(Value::as_str).unwrap_or_default()) {
                 page["engine"] = json!(engine);
+                page["driver"] = json!(used);
                 // The results themselves, instead of every link on the page.
                 page["results"] = json!(result_links(page.get("links").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default()));
                 if let Some(o) = page.as_object_mut() {
@@ -291,8 +303,13 @@ impl McpBrowserAgentServer {
             }
             walls.push(*engine);
         }
+        let advice = if used.as_deref() == Some("extension") {
+            "Hand the tab over (browser_handover) so the person can clear it."
+        } else {
+            "Search in the person's own Chrome (browser_search with browser \"extension\"), or hand the tab over (browser_handover)."
+        };
         json!({
-            "error": format!("{} answered with a bot check instead of results. Search in the person's own Chrome (browser_open with browser \"extension\"), or hand the tab over (browser_handover).", walls.join(" and ")),
+            "error": format!("{} answered with a bot check instead of results. {advice}", walls.join(" and ")),
             "code": "blocked",
         })
         .to_string()
@@ -390,6 +407,77 @@ mod tests {
         let urls: Vec<&str> = results.iter().filter_map(|r| r["url"].as_str()).collect();
         assert_eq!(urls, vec!["https://www.accuweather.com/en/vn/hanoi", "https://www.bbc.com/weather/1581130"]);
         assert_eq!(results[0]["title"], "Hanoi Weather | AccuWeather", "the first link to a site names it");
+    }
+
+    /// The daemon's side of a search: records what `browser_search` asks of
+    /// `/open` and `/read`, and answers as the extension driver would.
+    async fn stub_daemon() -> (String, std::sync::Arc<std::sync::Mutex<Vec<(&'static str, Value)>>>) {
+        use axum::routing::post;
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<(&'static str, Value)>>> = Default::default();
+        let (open_seen, read_seen) = (seen.clone(), seen.clone());
+        let app = axum::Router::new()
+            .route(
+                "/api/browser-agent/open",
+                post(move |axum::Json(body): axum::Json<Value>| {
+                    let seen = open_seen.clone();
+                    async move {
+                        // Answers with the driver it ran in, as the real route does.
+                        let driver = body["browser"].as_str().unwrap_or("extension").to_string();
+                        seen.lock().unwrap().push(("open", body));
+                        axum::Json(json!({ "tab_id": "t1", "driver": driver, "page": {} }))
+                    }
+                }),
+            )
+            .route(
+                "/api/browser-agent/read",
+                post(move |axum::Json(body): axum::Json<Value>| {
+                    let seen = read_seen.clone();
+                    async move {
+                        seen.lock().unwrap().push(("read", body));
+                        axum::Json(json!({
+                            "url": "https://html.duckduckgo.com/html/?q=x",
+                            "title": "x at DuckDuckGo",
+                            "text": "Giá vàng hôm nay các thương hiệu Sjc, 9999",
+                            "links": [{ "text": "24h", "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.24h.com.vn%2Fgia-vang" }],
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (url, seen)
+    }
+
+    /// A search used to say `"browser": "managed"` itself, so the person who
+    /// chose their own Chrome (the extension) in Settings → Browser still got
+    /// SenClaw's headless profile — and the model, told the search "does not
+    /// open anything", went to WebFetch.
+    #[tokio::test]
+    async fn a_search_goes_where_the_settings_say_unless_asked_otherwise() {
+        let (url, seen) = stub_daemon().await;
+        let server = McpBrowserAgentServer::new(Some(url), Some("chat-1".into()));
+
+        let out = server.browser_search(Parameters(SearchParams { query: "giá vàng".into(), browser: None })).await;
+        let out: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(out["engine"], "DuckDuckGo");
+        assert_eq!(out["driver"], "extension", "the browser the open answered with");
+        assert_eq!(out["results"][0]["url"], "https://www.24h.com.vn/gia-vang");
+        {
+            let calls = seen.lock().unwrap();
+            let (_, open) = calls.iter().find(|(p, _)| *p == "open").unwrap();
+            assert!(open["browser"].is_null(), "no browser named: the settings decide, got {open}");
+            assert_eq!(open["chat_jid"], "chat-1");
+            assert!(open["url"].as_str().unwrap().starts_with("https://html.duckduckgo.com/html/?q=gi%C3%A1"));
+            let (_, read) = calls.iter().find(|(p, _)| *p == "read").unwrap();
+            assert_eq!(read["browser"], "extension", "the read stays on the tab the open made");
+        }
+
+        seen.lock().unwrap().clear();
+        server.browser_search(Parameters(SearchParams { query: "x".into(), browser: Some("managed".into()) })).await;
+        let calls = seen.lock().unwrap();
+        let (_, open) = calls.iter().find(|(p, _)| *p == "open").unwrap();
+        assert_eq!(open["browser"], "managed", "an explicit choice is honoured");
     }
 
     #[test]
