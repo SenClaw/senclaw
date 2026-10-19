@@ -56,32 +56,15 @@ pub async fn list_models(
         .build()?;
 
     match def.id {
-        // Both Google providers list through the same production endpoint.
+        // Antigravity lists on its own host, as the IDE does; Gemini CLI keeps
+        // the production endpoint. See `antigravity_models`.
+        "antigravity" => antigravity_models(&http, def, access_token, project_id).await,
+        // Gemini CLI lists through the production Code Assist endpoint.
         //
         // The body is `{project}` — *not* the `{metadata}` envelope the
         // loadCodeAssist/onboardUser calls take. Sending the wrong one returns
         // 400 Bad Request, which is how this was found.
-        "antigravity" | "gemini-cli" => {
-            let project = project_id.map(str::trim).filter(|p| !p.is_empty());
-            let body = match project {
-                Some(p) => serde_json::json!({ "project": p }),
-                None => serde_json::json!({}),
-            };
-
-            match post_json(&http, CODE_ASSIST_MODELS_URL, access_token, &body).await {
-                Ok(json) => Ok(parse_google_models(&json)),
-                // A project the account may not bill against fails the listing
-                // even though the catalogue itself is readable without one.
-                // Retry bare rather than showing the user a dead picker.
-                Err(e) if project.is_some() && is_project_rejection(&e.to_string()) => {
-                    let json =
-                        post_json(&http, CODE_ASSIST_MODELS_URL, access_token, &serde_json::json!({}))
-                            .await?;
-                    Ok(parse_google_models(&json))
-                }
-                Err(e) => Err(e),
-            }
-        }
+        "gemini-cli" => production_listing(&http, access_token, project_id).await,
         "codex" => {
             let url =
                 format!("https://chatgpt.com/backend-api/codex/models?client_version={CODEX_CLIENT_VERSION}");
@@ -121,6 +104,93 @@ pub async fn list_models(
         }
         _ => bail!("{} does not publish a model list", def.display_name),
     }
+}
+
+/// The Code Assist listing on the production host, with the Google API client
+/// identity the discovery calls have always used.
+async fn production_listing(
+    http: &reqwest::Client,
+    access_token: &str,
+    project_id: Option<&str>,
+) -> Result<Vec<DiscoveredModel>> {
+    let project = project_id.map(str::trim).filter(|p| !p.is_empty());
+    let body = match project {
+        Some(p) => serde_json::json!({ "project": p }),
+        None => serde_json::json!({}),
+    };
+
+    match post_json(http, CODE_ASSIST_MODELS_URL, access_token, &body).await {
+        Ok(json) => Ok(parse_google_models(&json)),
+        // A project the account may not bill against fails the listing
+        // even though the catalogue itself is readable without one.
+        // Retry bare rather than showing the user a dead picker.
+        Err(e) if project.is_some() && is_project_rejection(&e.to_string()) => {
+            let json = post_json(http, CODE_ASSIST_MODELS_URL, access_token, &serde_json::json!({}))
+                .await?;
+            Ok(parse_google_models(&json))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Antigravity's model listing: `fetchAvailableModels` on the **same host that
+/// serves its completions**, asked as the IDE asks it.
+///
+/// It used to be the production host with the Google API client identity. By
+/// 2026-10 that answers `403 PERMISSION_DENIED` for every account, so the picker
+/// silently fell back to a static list of models Google had since retired
+/// (3.6/3.5 Flash, Gemini 3.1 Pro: 404 or "no longer available"). 9router moved
+/// the same call to the `daily-` host with the IDE identity in v0.5.9x; this
+/// follows it, and keeps the production listing as a fallback so a host that
+/// changes its mind again costs nothing.
+async fn antigravity_models(
+    http: &reqwest::Client,
+    def: &OauthProviderDef,
+    access_token: &str,
+    project_id: Option<&str>,
+) -> Result<Vec<DiscoveredModel>> {
+    let project = project_id.map(str::trim).filter(|p| !p.is_empty());
+    let body = match project {
+        Some(p) => serde_json::json!({ "project": p }),
+        None => serde_json::json!({}),
+    };
+    let url = format!(
+        "{}/v1internal:fetchAvailableModels",
+        def.base_url.trim_end_matches('/')
+    );
+
+    let ide = match finish(antigravity_listing_request(http, &url, access_token, &body)).await {
+        Ok(json) => {
+            let models = parse_google_models(&json);
+            if !models.is_empty() {
+                return Ok(models);
+            }
+            anyhow::anyhow!("the IDE listing was empty")
+        }
+        Err(e) => e,
+    };
+    tracing::debug!("[antigravity] IDE model listing failed, trying production: {ide}");
+
+    production_listing(http, access_token, project_id)
+        .await
+        .map_err(|prod| anyhow::anyhow!("{prod} (the IDE host said: {ide})"))
+}
+
+/// The listing call as Antigravity's IDE makes it: its own `User-Agent` plus the
+/// client name and version, and nothing from the Google API client.
+fn antigravity_listing_request(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+    body: &Value,
+) -> reqwest::RequestBuilder {
+    http.post(url)
+        .bearer_auth(token)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", super::transport::antigravity_user_agent())
+        .header("X-Client-Name", "antigravity")
+        .header("X-Client-Version", super::transport::ANTIGRAVITY_IDE_VERSION)
+        .json(body)
 }
 
 /// True when a listing error blames the project rather than the token.
@@ -562,6 +632,34 @@ mod tests {
         assert!(CODE_ASSIST_MODELS_URL.starts_with("https://cloudcode-pa.googleapis.com"));
         assert!(!CODE_ASSIST_MODELS_URL.contains("daily-"));
         assert!(!CODE_ASSIST_MODELS_URL.contains("sandbox"));
+    }
+
+    #[test]
+    fn antigravity_lists_on_its_own_host_as_the_ide_does() {
+        let def = super::super::provider::get("antigravity").unwrap();
+        assert!(def.base_url.starts_with("https://daily-cloudcode-pa."));
+        let url = format!("{}/v1internal:fetchAvailableModels", def.base_url);
+        let http = reqwest::Client::new();
+        let request = antigravity_listing_request(
+            &http,
+            &url,
+            "tok",
+            &serde_json::json!({ "project": "p-1" }),
+        )
+        .build()
+        .unwrap();
+
+        let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok());
+        assert_eq!(request.url().host_str(), Some("daily-cloudcode-pa.googleapis.com"));
+        assert_eq!(header("x-client-name"), Some("antigravity"));
+        assert_eq!(
+            header("x-client-version"),
+            Some(super::super::transport::ANTIGRAVITY_IDE_VERSION)
+        );
+        assert!(header("user-agent").is_some_and(|ua| ua.starts_with("antigravity/ide/")));
+        // The Google API client identity belongs to the production listing only.
+        assert!(header("x-goog-api-client").is_none());
+        assert_eq!(header("authorization"), Some("Bearer tok"));
     }
 
     #[test]

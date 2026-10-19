@@ -23,6 +23,23 @@ was left out and why, and how to repeat the sync.
   validator rejects with a 400 for every account (upstream #3922); discovery asks for models as client `0.159.0`
   (it was `0.144.6`), because the backend silently drops entries whose `minimal_client_version` is higher.
 
+## Follow-up the same day: the Antigravity model picker
+
+Checked on the running install through the daemon's own `GET /api/oauth/accounts/:id/models` and `POST /api/oauth/test-model`
+(two accounts, same result):
+
+- **Discovery had been failing for every account** — `fetchAvailableModels` on the production host answered
+  `403 PERMISSION_DENIED`, so the picker showed the static fallback list. 9router had moved the same call to the `daily-`
+  host (the one that serves completions) with the IDE's own identity (`User-Agent: antigravity/ide/<ver>`,
+  `X-Client-Name`, `X-Client-Version`). SenClaw now asks that way first and keeps the production listing as a fallback.
+- **The fallback list was full of retired models.** Gemini 3.6 Flash and `gemini-pro-agent` / `gemini-3.1-pro-low` answer
+  `404`; Gemini 3.5 Flash answers "no longer available". What answered: `gemini-3.8-flash-{high,medium,low}`,
+  `gemini-3-flash`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking` (`gpt-oss-120b-medium` was out of capacity). The list is
+  now those plus 9router's Gemini 4 Argon and Claude 5.5 ids, which 404 on the old IDE build and are left to the picker's
+  test to confirm.
+- **Not ported:** 9router's tiered ids (`gemini-3.7-flash-tiered` plus a thinking level) — SenClaw's adapter has no
+  thinking-level parameter to send.
+
 ## What was deliberately not taken
 
 - **Client impersonation.** Upstream spoofs Claude Code (`2.1.x`), Grok CLI and the Codex CLI `User-Agent`, and rewrites

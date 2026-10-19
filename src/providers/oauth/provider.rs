@@ -268,15 +268,25 @@ const ANTIGRAVITY: OauthProviderDef = OauthProviderDef {
     // which is why a request aimed there with a generated project id comes back
     // `CONSUMER_INVALID`. Gemini CLI is the mirror image and uses prod for both.
     base_url: "https://daily-cloudcode-pa.googleapis.com",
+    // Only the fallback, shown when the live listing cannot be had; the real
+    // list is `discovery::antigravity_models`. Checked 2026-10-19 against two
+    // accounts through the daemon's own test route: the Gemini 3.8 Flash tiers,
+    // Gemini 3 Flash and the Claude 4.6 pair answer; Gemini 3.6 / 3.5 Flash and
+    // Gemini 3.1 Pro (`gemini-pro-agent`) are retired (404 or "no longer
+    // available"), so they are gone. The 4 Argon and Claude 5.5 entries are what
+    // 9router v0.5.104 lists; they 404 on an old IDE build and are left to the
+    // picker's own test to confirm.
     default_models: &[
-        ("gemini-3.6-flash-high", "Gemini 3.6 Flash (High)"),
-        ("gemini-3.6-flash-medium", "Gemini 3.6 Flash (Medium)"),
-        ("gemini-3.6-flash-low", "Gemini 3.6 Flash (Low)"),
-        ("gemini-3.5-flash-high", "Gemini 3.5 Flash (High)"),
-        ("gemini-3.5-flash-low", "Gemini 3.5 Flash (Medium)"),
-        ("gemini-3.5-flash-extra-low", "Gemini 3.5 Flash (Low)"),
-        ("gemini-pro-agent", "Gemini 3.1 Pro (High)"),
-        ("gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)"),
+        ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
+        ("gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"),
+        ("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"),
+        ("gemini-4-argon-high", "Gemini 4 Argon (High)"),
+        ("claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"),
+        ("claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"),
+        ("claude-sonnet-5-5-low", "Claude Sonnet 5.5 (Low)"),
+        ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+        ("claude-opus-5-5-medium", "Claude Opus 5.5 (Medium)"),
+        ("claude-opus-5-5-low", "Claude Opus 5.5 (Low)"),
         ("gemini-3-flash", "Gemini 3 Flash"),
         ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
         ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
@@ -581,6 +591,34 @@ pub fn adapt_is_oauth_only(adapt: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fallback list is what the picker shows when discovery fails. Models
+    /// Google has retired must not be in it: a user picks them, the first chat
+    /// 404s, and nothing says why.
+    #[test]
+    fn the_antigravity_fallback_lists_no_retired_model() {
+        let ag = get("antigravity").unwrap();
+        let ids: Vec<&str> = ag.default_models.iter().map(|(id, _)| *id).collect();
+        for retired in [
+            "gemini-3.6-flash-high",
+            "gemini-3.6-flash-medium",
+            "gemini-3.6-flash-low",
+            "gemini-3.5-flash-high",
+            "gemini-3.5-flash-low",
+            "gemini-3.5-flash-extra-low",
+            "gemini-pro-agent",
+            "gemini-3.1-pro-low",
+        ] {
+            assert!(!ids.contains(&retired), "{retired} is retired: {ids:?}");
+        }
+        for current in ["gemini-3.8-flash-high", "gemini-3-flash", "claude-sonnet-4-6"] {
+            assert!(ids.contains(&current), "{current} missing: {ids:?}");
+        }
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "duplicate model id");
+    }
 
     #[test]
     fn every_provider_is_addressable_by_id() {

@@ -540,6 +540,10 @@ at, what was left out and why, and the diff commands to repeat it: [docs/provide
   spoofing or its prompt-branding rewrites.
 - **`ANTIGRAVITY_IDE_VERSION` and the Codex `client_version` gate models.** A stale value hides new models without an error
   (Codex answers 200 with the newest entries missing); bump them when a sync shows upstream moved.
+- **Antigravity lists its models on its own host, as the IDE.** `fetchAvailableModels` on the production host with the Google
+  API client identity answers 403 for every account (2026-10); `discovery::antigravity_models` asks the `daily-` host with the IDE
+  identity and falls back to production. When discovery fails the picker shows `default_models`, so keep that list to ids that
+  answer — probe them with `POST /api/oauth/test-model` before editing it.
 - **The Antigravity chat request has no `requestType`.** `"agent"` there earns a detail-free 429 with quota left
   (`request_body`, pinned by a test).
 - **A Codex tool schema must not carry `\p{..}` patterns** — the backend rejects the whole request. The strip runs only on
