@@ -103,7 +103,9 @@ Bản ghi mang theo đoạn văn trong `context`, nên dùng được làm eval 
 
 Với mỗi bài toán, quy trình như sau:
 1. Model giải bài, kết thúc bằng dòng `Answer: …`. Nếu không có dòng đó thì đọc `\boxed{…}`, xử lý được ngoặc lồng.
-2. Nếu có đáp án tham chiếu, đáp án được so **bằng code**: bỏ định dạng, so số theo giá trị.
+2. Nếu có đáp án tham chiếu, đáp án được so **bằng code**: bỏ định dạng, so số theo giá trị. Một đơn vị ngắn đi kèm số
+   không làm đổi đáp án (`160 km` = `160`), trừ khi hai bên cùng ghi đơn vị mà khác nhau (`160 km` ≠ `160 miles`).
+   Đơn vị chỉ là một từ ngắn; `7 or eight` và `5x` (không có khoảng trắng, có thể là hạng tử đại số) không được tính là số 7 và số 5.
 3. Một lần gọi riêng chấm 3 điểm từ 0 đến 1: correctness, clarity, completeness.
 4. Bài chỉ đạt khi **mọi** điểm ≥ `threshold` và đáp án đúng.
 5. Chưa đạt thì cải thiện theo nhận xét, tối đa `maxIterations` vòng.

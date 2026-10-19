@@ -336,14 +336,48 @@ pub fn same_answer(got: &str, want: &str) -> bool {
             .trim_end_matches('.')
             .to_lowercase()
     };
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-6 * y.abs().max(1.0);
     let (a, b) = (norm(got), norm(want));
     if a == b {
         return true;
     }
     match (number(&a), number(&b)) {
-        (Some(x), Some(y)) => (x - y).abs() <= 1e-6 * y.abs().max(1.0),
-        _ => false,
+        (Some(x), Some(y)) => close(x, y),
+        _ => match (number_with_unit(got), number_with_unit(want)) {
+            // The unit is not part of the value, unless both sides name one
+            // and they differ ("160 km" is not "160 miles").
+            (Some((x, ux)), Some((y, uy))) => close(x, y) && (ux.is_empty() || uy.is_empty() || ux == uy),
+            _ => false,
+        },
     }
+}
+
+/// A number with an optional one-word unit: "160 km" is (160, "km"), "37 °C"
+/// is (37, "°c"), a bare "160" has an empty unit. Only a short, plain unit
+/// counts, so a second number or word ("7 or 8", "7 or eight") is not one, and
+/// a unit that starts with a letter must be set off by a space: "5x" may be an
+/// algebraic term, not 5 of something.
+fn number_with_unit(s: &str) -> Option<(f64, String)> {
+    let inner = boxed(s).unwrap_or_else(|| s.to_string());
+    let text = inner.trim().trim_matches('$').replace("\\text{", "").replace(['{', '}'], "");
+    let text = text.trim().trim_end_matches('.');
+    let digits_end = text
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || c == ',' || c == '.' || (i == 0 && matches!(c, '-' | '+'))))
+        .map_or(text.len(), |(i, _)| i);
+    let value = number(text[..digits_end].trim_end_matches([',', '.']))?;
+    let rest = &text[digits_end..];
+    let unit = rest.trim();
+    if unit.is_empty() {
+        return Some((value, String::new()));
+    }
+    let plain = unit.chars().all(|c| c.is_alphabetic() || matches!(c, '%' | '/' | '°' | '²' | '³' | '^' | '·' | '-'));
+    let starts_with_letter = unit.chars().next().is_some_and(char::is_alphabetic);
+    let spaced = rest.starts_with(char::is_whitespace);
+    if !plain || unit.chars().count() > 10 || (starts_with_letter && !spaced) {
+        return None;
+    }
+    Some((value, unit.to_lowercase()))
 }
 
 /// A number, with commas allowed only as thousands separators: "1,000" is
@@ -412,6 +446,28 @@ mod tests {
         assert!(same_answer("$0.50$", "0.5"));
         assert!(same_answer("Paris.", "paris"));
         assert!(!same_answer("12", "13"));
+    }
+
+    #[test]
+    fn a_short_unit_next_to_a_number_does_not_change_the_answer() {
+        assert!(same_answer("160 km", "160"));
+        assert!(same_answer("160", "160 km"), "the reference may carry the unit instead");
+        assert!(same_answer("160 KM", "160 km"));
+        assert!(same_answer("60 km/h", "60"));
+        assert!(same_answer("$12.50 USD", "12.5"));
+        assert!(same_answer("37 °C", "37"));
+        assert!(same_answer("50%", "50"));
+        assert!(same_answer("\\boxed{160\\text{ km}}", "160"));
+        assert!(same_answer("1,000 km.", "1000"));
+        assert!(same_answer("-5 °C", "-5"));
+
+        assert!(!same_answer("160 km", "160 miles"), "two different units are different answers");
+        assert!(!same_answer("160 km", "161"));
+        assert!(!same_answer("12 km", "13 km"));
+        assert!(!same_answer("7 or 8", "7"), "a second number is not a unit");
+        assert!(!same_answer("7 or eight", "7"), "more than one word is not a unit");
+        assert!(!same_answer("5x", "5"), "without a space it may be an algebraic term");
+        assert!(!same_answer("1,5 km", "15"), "a decimal comma is still not a thousands separator");
     }
 
     #[test]
