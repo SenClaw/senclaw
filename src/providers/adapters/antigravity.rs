@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::zen_core::query_llm::{build_assistant_message, post_authed};
+use crate::zen_core::query_llm::{build_assistant_message, post_authed, sanitize_schema_node};
 use crate::zen_core::{ContentBlock, Message, ModelProfile, RawUsage, Tool};
 
 /// Google caps Code Assist output well below what some models advertise.
@@ -635,9 +635,11 @@ pub(crate) fn gemini_tools(tools: &[Arc<dyn Tool>]) -> Vec<Value> {
 /// "Proto field is not repeating, cannot start list".
 ///
 /// Order matters. Each pass assumes the previous ones have run:
-/// const → enum → merge allOf → collapse anyOf/oneOf → collapse type arrays →
-/// infer object type → drop unknown keywords → prune `required`.
+/// boolean subschemas → const → enum → merge allOf → collapse anyOf/oneOf →
+/// collapse type arrays → infer object type → drop unknown keywords → prune
+/// `required`.
 pub(crate) fn sanitize_schema(schema: &mut Value) {
+    replace_boolean_subschemas(schema);
     convert_const_to_enum(schema);
     convert_enum_values_to_strings(schema);
     merge_all_of(schema);
@@ -663,6 +665,24 @@ fn walk(schema: &mut Value, f: &mut impl FnMut(&mut Map<String, Value>)) {
             }
         }
         _ => {}
+    }
+}
+
+/// `true`/`false` in a schema position → `{"type": "object"}`.
+///
+/// schemars renders `serde_json::Value` as `true`, so a `Vec<Value>` parameter
+/// is `{"type": "array", "items": true}` — valid JSON Schema, but Gemini's
+/// `Schema` message only parses objects and 400s the whole request
+/// (`...items: true`). Gemini has no "any" type, so a typed schema has to
+/// stand in; `object` is the one this crate already uses for the
+/// OpenAI-compatible Gemini path (`sanitize_schema_node`), and the shape of
+/// every bare `object` parameter Gemini accepts today. It runs first so the
+/// later passes only ever see object schemas. A root that is itself a boolean
+/// is left for `gemini_tools`, which replaces a non-object with an empty
+/// parameter object.
+fn replace_boolean_subschemas(schema: &mut Value) {
+    if schema.is_object() {
+        sanitize_schema_node(schema);
     }
 }
 
@@ -848,6 +868,32 @@ fn gemini_would_reject(schema: &Value) -> Option<String> {
             }
             if map.contains_key("properties") && !map.contains_key("type") {
                 return Some("properties without a type".into());
+            }
+            // `true`/`false` as a schema is valid JSON Schema, but Gemini's
+            // `Schema` message only parses objects.
+            for key in ["properties", "patternProperties"] {
+                if let Some(Value::Object(named)) = map.get(key) {
+                    if let Some(name) = named.iter().find(|(_, v)| v.is_boolean()).map(|(k, _)| k)
+                    {
+                        return Some(format!("boolean schema at `{key}.{name}`"));
+                    }
+                }
+            }
+            for key in ["anyOf", "oneOf", "allOf", "prefixItems"] {
+                if let Some(Value::Array(branches)) = map.get(key) {
+                    if branches.iter().any(Value::is_boolean) {
+                        return Some(format!("boolean schema inside `{key}`"));
+                    }
+                }
+            }
+            for key in ["items", "not", "contains", "propertyNames", "if", "then", "else"] {
+                match map.get(key) {
+                    Some(Value::Bool(_)) => return Some(format!("boolean schema at `{key}`")),
+                    Some(Value::Array(tuple)) if tuple.iter().any(Value::is_boolean) => {
+                        return Some(format!("boolean schema inside `{key}`"));
+                    }
+                    _ => {}
+                }
             }
             map.values().find_map(gemini_would_reject)
         }
@@ -1453,6 +1499,75 @@ mod tests {
         assert_eq!(gemini_would_reject(&nasty), None, "{nasty:#}");
         assert_eq!(nasty["type"], "object");
         assert_eq!(nasty["properties"]["a"]["type"], "string");
+    }
+
+    #[test]
+    fn boolean_subschemas_are_replaced_by_typed_schemas() {
+        // `true` is valid JSON Schema ("any value") and is what schemars emits
+        // for `serde_json::Value`, but Gemini's `Schema` message only parses
+        // objects — one boolean in any schema position fails the whole request.
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "any": true,
+                "list": { "type": "array", "items": true },
+                "nested": { "type": "object", "properties": { "inner": true } },
+                "choice": { "anyOf": [true, { "type": "string" }] }
+            },
+            "required": ["any"]
+        });
+        assert!(
+            gemini_would_reject(&schema).is_some(),
+            "the helper must flag the raw schema"
+        );
+
+        sanitize_schema(&mut schema);
+
+        assert_eq!(gemini_would_reject(&schema), None, "{schema:#}");
+        let props = &schema["properties"];
+        assert_eq!(props["any"]["type"], "object");
+        assert_eq!(props["list"]["type"], "array");
+        assert_eq!(props["list"]["items"]["type"], "object");
+        assert_eq!(props["nested"]["properties"]["inner"]["type"], "object");
+        assert!(props["choice"].get("anyOf").is_none());
+        assert!(props["choice"]["type"].is_string());
+        assert_eq!(schema["required"], serde_json::json!(["any"]));
+    }
+
+    #[test]
+    fn a_boolean_root_is_left_for_the_parameter_fallback() {
+        // `gemini_tools` swaps a non-object for an empty parameter object; a
+        // bare `{"type": "object"}` would skip that fallback.
+        let mut schema = serde_json::json!(true);
+        sanitize_schema(&mut schema);
+        assert_eq!(schema, serde_json::json!(true));
+    }
+
+    #[test]
+    fn the_datagen_start_declaration_is_accepted() {
+        // The live 400 (2026-10-19): `seeds` and `problems` are
+        // `Option<Vec<serde_json::Value>>`, rendered as an array of `true`.
+        let tool = crate::mcp::datagen_server::McpDatagenServer::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == "datagen_start")
+            .expect("datagen_start is registered");
+        let mut schema = Value::Object((*tool.input_schema).clone());
+        for field in ["seeds", "problems"] {
+            assert_eq!(
+                schema["properties"][field]["items"],
+                serde_json::json!(true),
+                "premise: `{field}` renders as an array of booleans; {schema:#}"
+            );
+        }
+
+        sanitize_schema(&mut schema);
+
+        assert_eq!(gemini_would_reject(&schema), None, "{schema:#}");
+        for field in ["seeds", "problems"] {
+            assert_eq!(schema["properties"][field]["type"], "array");
+            assert!(schema["properties"][field]["items"]["type"].is_string());
+        }
     }
 
     #[test]
