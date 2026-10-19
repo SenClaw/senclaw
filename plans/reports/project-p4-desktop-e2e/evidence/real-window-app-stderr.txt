@@ -1,0 +1,4 @@
+2026-10-19 01:25:38.572 SenClaw Desktop[97625:3871475] Running with merged UI and platform thread. Experimental.
+2026-10-19 14:10:44.202 SenClaw Desktop[37378:4355892] Running with merged UI and platform thread. Experimental.
+2026-10-19 14:53:36.700 SenClaw Desktop[37378:4355892] ERROR: getApplicationProperty: called with invalid property
+2026-10-19 14:53:36.702 SenClaw Desktop[37378:4355892] ERROR: getApplicationProperty: called with invalid property

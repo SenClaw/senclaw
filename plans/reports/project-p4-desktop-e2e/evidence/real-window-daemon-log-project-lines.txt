@@ -1,0 +1,17 @@
+2026-10-19T07:09:41.812376Z  INFO senclaw: [SenClaw] DB initialized: /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/home/.senclaw/sencl
+2026-10-19T07:09:41.817616Z  INFO senclaw: [SenClaw] Soul Core ready path=/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/home/.senclaw/
+2026-10-19T07:09:41.818304Z  WARN senclaw::agent::persona_registry: [PersonaRegistry] Primary directory not found, skipping: /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c
+2026-10-19T07:09:41.818458Z  WARN senclaw::agent::persona_registry: [PersonaRegistry] Watcher: directory not found, skipping: /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8
+2026-10-19T07:09:41.826601Z  INFO senclaw::agent::dispatch_bridge::bridge: [DispatchBridge] Started, state: /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/s
+2026-10-19T07:09:41.827526Z  INFO senclaw: [SenClaw] WorkflowService ready: 0 definition(s) in /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4r
+2026-10-19T07:09:41.899857Z  INFO senclaw::wiki::manager: [WikiManager] Initialized wiki at "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run
+2026-10-19T07:09:41.899896Z  INFO senclaw: [SenClaw] WikiManager initialized: /private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/home/sencl
+2026-10-19T07:55:31.024944Z  INFO senclaw::mcp::client: MCP spawn: senclaw-core (/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/senclaw
+2026-10-19T07:55:31.055884Z  INFO senclaw::zen_core::config_manager: [ConfigManager] saved to "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4r
+2026-10-19T07:55:31.064264Z  INFO senclaw::zen_core::engine: [web:main:mveym6o8-7ru33o] process_user_input: Hello from the Alpha project (0 image block(s))
+2026-10-19T07:55:31.079699Z  INFO senclaw::zen_core::config_manager: [ConfigManager] saved to "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4r
+2026-10-19T07:55:54.585831Z  INFO senclaw::mcp::client: MCP spawn: senclaw-core (/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/senclaw
+2026-10-19T07:55:54.608047Z  INFO senclaw::zen_core::config_manager: [ConfigManager] saved to "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4r
+2026-10-19T07:55:54.614975Z  INFO senclaw::zen_core::engine: [web:main:mveymous-9npj5e] process_user_input: A chat outside any project (0 image block(s))
+2026-10-19T07:55:54.629876Z  INFO senclaw::zen_core::config_manager: [ConfigManager] saved to "/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4r
+2026-10-19T07:57:09.988283Z  INFO senclaw::gateway::ui_server::projects: [projects] 1 board(s) left the deleted project prj_168db082
