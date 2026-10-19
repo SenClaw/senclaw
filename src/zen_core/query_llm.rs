@@ -47,6 +47,54 @@ fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
     }
 }
 
+/// The host a base URL names, lowercased, with scheme, userinfo, port and path
+/// stripped. `None` for a malformed authority (an IPv6 literal with no closing
+/// bracket): malformed is never "local".
+fn endpoint_host(base_url: &str) -> Option<String> {
+    let rest = base_url.split_once("://").map_or(base_url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // `user:pass@host` — the last `@` wins, since userinfo may contain one.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+
+    let host = if let Some(after) = authority.strip_prefix('[') {
+        // IPv6 literal: `[::1]:8080`.
+        after.split_once(']')?.0
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    Some(host.trim().to_ascii_lowercase())
+}
+
+/// Does this base URL point at a server its owner runs — this machine, or a box
+/// on their own network (LM Studio, Ollama, a llama.cpp or vLLM server)?
+///
+/// Such a server is normally reached with **no API key**, so an empty key says
+/// nothing about it, where for a public host it means "cannot authenticate".
+/// Same conservative rule as [`is_loopback_endpoint`]: the host is isolated and
+/// then matched whole, so `192.168.0.1.evil.com` and `10.0.0.1x` are public.
+/// What counts: loopback, RFC 1918 (`10/8`, `172.16/12`, `192.168/16`),
+/// link-local, IPv6 unique-local and link-local, and `.local` (mDNS) names.
+pub(crate) fn is_self_hosted_endpoint(base_url: &str) -> bool {
+    if is_loopback_endpoint(base_url) {
+        return true;
+    }
+    let Some(host) = endpoint_host(base_url) else {
+        return false;
+    };
+    let host = host.trim_end_matches('.');
+    if host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_link_local(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let first = ip.segments()[0];
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
+
 /// Does this base URL point at this machine?
 ///
 /// Hand-rolled rather than pulled through a URL parser because the answer must
@@ -54,22 +102,9 @@ fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
 /// **not** loopback, and a prefix test would say it is. The host is isolated
 /// first (scheme, userinfo, port, path all stripped), then matched whole.
 pub(crate) fn is_loopback_endpoint(base_url: &str) -> bool {
-    let rest = base_url.split_once("://").map_or(base_url, |(_, r)| r);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // `user:pass@host` — the last `@` wins, since userinfo may contain one.
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-
-    let host = if let Some(after) = authority.strip_prefix('[') {
-        // IPv6 literal: `[::1]:8080`. No closing bracket means malformed, and
-        // malformed is not loopback.
-        match after.split_once(']') {
-            Some((h, _)) => h,
-            None => return false,
-        }
-    } else {
-        authority.split(':').next().unwrap_or("")
+    let Some(host) = endpoint_host(base_url) else {
+        return false;
     };
-    let host = host.trim().to_ascii_lowercase();
 
     // RFC 6761: `localhost` and anything under `.localhost` resolve to loopback.
     if host == "localhost" || host.ends_with(".localhost") {
@@ -2046,7 +2081,52 @@ mod sse_tests {
 
 #[cfg(test)]
 mod loopback_tests {
-    use super::{is_loopback_endpoint, total_request_timeout, REQUEST_TIMEOUT};
+    use super::{
+        is_loopback_endpoint, is_self_hosted_endpoint, total_request_timeout, REQUEST_TIMEOUT,
+    };
+
+    /// A model server on the owner's own network needs no key — LM Studio on
+    /// another machine is the common case, and the extractor used to skip it
+    /// for exactly that reason, so nothing was ever remembered.
+    #[test]
+    fn a_server_on_the_owners_own_network_is_self_hosted() {
+        for url in [
+            "http://192.168.0.93:1234/v1", // LM Studio on the LAN
+            "http://10.1.2.3:11434/v1",
+            "http://172.16.0.5:8080/v1",
+            "http://172.31.255.1/v1",
+            "http://169.254.10.20:8080/v1", // link-local
+            "http://my-mac.local:1234/v1",  // mDNS
+            "http://[fd12:3456::1]:8080/v1", // IPv6 unique-local
+            "http://[fe80::1]:8080/v1",     // IPv6 link-local
+            "http://user:pass@192.168.1.5:8080/v1",
+            "http://localhost:1234/v1", // loopback counts too
+            "http://127.0.0.1:18788/api/space/apps/mlx-llm/proxy/v1",
+        ] {
+            assert!(is_self_hosted_endpoint(url), "{url} should be self-hosted");
+        }
+    }
+
+    /// Public hosts keep needing a key, and a name that merely starts like a
+    /// private address is a public name.
+    #[test]
+    fn a_public_host_is_not_self_hosted() {
+        for url in [
+            "https://api.openai.com/v1",
+            "https://api.deepseek.com",
+            "http://192.168.0.1.evil.com/v1",
+            "http://10.0.0.1x:8080/v1",
+            "http://172.32.0.1/v1", // just outside 172.16/12
+            "http://11.0.0.1/v1",
+            "http://192.169.0.1/v1",
+            "http://[2001:db8::1]:8080/v1",
+            "http://evil.com/.local",
+            "http://[fd12::1:8080/v1", // malformed IPv6 — never assume local
+            "",
+        ] {
+            assert!(!is_self_hosted_endpoint(url), "{url} must NOT be self-hosted");
+        }
+    }
 
     #[test]
     fn recognises_every_shape_a_local_engine_is_configured_with() {

@@ -142,7 +142,19 @@ pub async fn retain_text(
 ) -> Option<RetainReport> {
     let engine = instance()?;
     let Some(llm) = crate::memory::cognitive::create_cognitive_llm(config) else {
-        tracing::debug!("[facts] no extraction model configured; window not retained");
+        // A window dropped here looks exactly like "nothing worth remembering",
+        // which is how a real install went weeks remembering nothing. Say it
+        // once at warn; the per-window repeat stays at debug.
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::debug!("[facts] no extraction model usable; window not retained");
+        } else {
+            tracing::warn!(
+                "[facts] no extraction model usable, so conversations are not being remembered: \
+                 the model chosen in Settings needs an API key, unless it is a local model or a \
+                 server on this machine or network"
+            );
+        }
         return None;
     };
     let mode = defense::Mode::parse(&config.memory.engine_defense);

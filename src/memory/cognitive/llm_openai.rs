@@ -336,14 +336,19 @@ pub fn create_cognitive_llm(
             if base.is_empty() {
                 continue;
             }
-            // An empty key disqualifies a *remote* config — it cannot
+            // An empty key disqualifies a *public* config — it cannot
             // authenticate, and trying costs a round trip and a 401. A local
             // one is different: a model served by a Space App or a runtime is
             // reached through the daemon's own proxy on loopback, which needs
-            // no credential and is handed none. Skipping those on an empty key
-            // would make the cognitive layer silently unable to use any local
-            // model.
-            let is_local = crate::apps::llm_provider::is_app_config(&cfg.id) || crate::local_models::is_local_config(&cfg.id);
+            // no credential and is handed none; and a server the owner runs
+            // on their own network (LM Studio, Ollama, llama.cpp) is normally
+            // started with no key at all. Skipping those on an empty key made
+            // the cognitive layer silently unable to use any local model — on
+            // a real install whose only model was LM Studio on the LAN, no
+            // conversation was ever remembered and nothing said why.
+            let is_local = crate::apps::llm_provider::is_app_config(&cfg.id)
+                || crate::local_models::is_local_config(&cfg.id)
+                || crate::zen_core::query_llm::is_self_hosted_endpoint(base);
             if key.is_empty() && !is_local {
                 continue;
             }
@@ -554,6 +559,57 @@ mod tests {
         );
     }
 
+
+    fn custom_config(id: &str, base_url: &str) -> crate::gateway::group_manager::LlmConfig {
+        crate::gateway::group_manager::LlmConfig {
+            id: id.into(),
+            label: "google/gemma-4-e4b (Custom LLM endpoint)".into(),
+            provider: "custom".into(),
+            base_url: base_url.into(),
+            api_key: String::new(),
+            model_name: "google/gemma-4-e4b".into(),
+            adapt: "openai".into(),
+            max_tokens: 8192,
+            context_length: 128_000,
+            vision: None,
+            auth: None,
+            oauth_account_id: None,
+            edit_format: None,
+        }
+    }
+
+    /// The real install: the only model is LM Studio on another machine of the
+    /// LAN, saved with an empty key, chosen for chat, quick and cognitive work.
+    /// Resolution used to skip it, so no conversation was ever turned into
+    /// facts.
+    #[test]
+    fn create_accepts_a_lan_server_with_no_api_key() {
+        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
+        let mut cfg = cfg_with_isolated_config();
+        cfg.memory.openai_api_key = String::new();
+        let llm_cfg = custom_config("llm_lan", "http://192.168.0.93:1234/v1");
+        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("llm_lan")).unwrap();
+
+        assert!(
+            create_cognitive_llm(&cfg).is_some(),
+            "a server on the owner's own network must resolve without a key"
+        );
+    }
+
+    /// The other half of the rule: a public endpoint with no key still cannot
+    /// authenticate, so it is skipped rather than tried.
+    #[test]
+    fn create_still_skips_a_public_endpoint_with_no_api_key() {
+        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
+        let mut cfg = cfg_with_isolated_config();
+        cfg.memory.openai_api_key = String::new();
+        let llm_cfg = custom_config("llm_public", "https://api.example.com/v1");
+        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("llm_public")).unwrap();
+
+        assert!(create_cognitive_llm(&cfg).is_none());
+    }
 
     #[test]
     fn create_picks_anthropic_adapter_when_stored_adapt_is_anthropic() {
