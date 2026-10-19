@@ -47,6 +47,40 @@ pub fn daemon_ui_port() -> u16 {
     std::env::var("SENCLAW_UI_PORT").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(18788)
 }
 
+/// `http://127.0.0.1:<port>` — the form every loopback caller of the daemon
+/// builds its URLs from.
+pub fn loopback_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Where this process should send requests meant for the daemon's HTTP API.
+///
+/// Inside the daemon that is its own port, whatever `SENCLAW_BASE_URL` says:
+/// that variable is what a Space App is *launched* with, and exported from a
+/// developer's shell it would send the board's model calls to a different
+/// daemon. A child the daemon spawned (`kanban-server`) has no port published
+/// in its process, so it follows the pointer its parent put in its
+/// environment, else the same fallback chain as [`daemon_ui_port`] — never a
+/// hard-coded 18788, which is another daemon whenever the port is not the
+/// default.
+pub fn daemon_base_url() -> String {
+    base_url_from(
+        DAEMON_UI_PORT.get().copied(),
+        std::env::var("SENCLAW_BASE_URL").ok().as_deref(),
+        daemon_ui_port(),
+    )
+}
+
+fn base_url_from(own_port: Option<u16>, env_base: Option<&str>, fallback_port: u16) -> String {
+    if let Some(port) = own_port {
+        return loopback_base_url(port);
+    }
+    match env_base.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(base) => base.trim_end_matches('/').to_string(),
+        None => loopback_base_url(fallback_port),
+    }
+}
+
 /// Publish the daemon's API token to its in-process callers. Idempotent; a
 /// second call with a different token is ignored (there is one daemon).
 pub fn set_daemon_token(token: &str) {
@@ -116,6 +150,30 @@ mod tests {
         assert!(is_own_api_url("http://[::1]:18788/api/config"));
         // A different port is still us — the port is configurable.
         assert!(is_own_api_url("http://127.0.0.1:9999/api/config"));
+    }
+
+    #[test]
+    fn the_daemon_calls_itself_not_the_default_port() {
+        // A daemon on 38788 whose environment names another daemon (a shell
+        // that exports SENCLAW_BASE_URL for app work) still calls itself.
+        assert_eq!(
+            base_url_from(Some(38788), Some("http://127.0.0.1:18788"), 18788),
+            "http://127.0.0.1:38788"
+        );
+    }
+
+    #[test]
+    fn a_child_follows_the_pointer_its_parent_gave_it() {
+        assert_eq!(
+            base_url_from(None, Some(" http://127.0.0.1:38788/ "), 18788),
+            "http://127.0.0.1:38788"
+        );
+        // An exported-but-empty variable is no pointer.
+        assert_eq!(
+            base_url_from(None, Some("  "), 28788),
+            "http://127.0.0.1:28788"
+        );
+        assert_eq!(base_url_from(None, None, 28788), "http://127.0.0.1:28788");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use app_space_sdk::SpaceClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use crate::kanban::db::{GenCard, GenColumn};
 
@@ -387,14 +388,74 @@ pub async fn set_active_model(id: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The Space-App id the board's model calls are made under
+/// (`/api/space/apps/kanban/bridge`).
+pub const APP_ID: &str = "kanban";
+
+/// The board's Space-App access token, published once by `run_daemon`.
+///
+/// A process-global for the reason `util::internal_auth` keeps the daemon token
+/// in one: the callers are free functions several layers below anything that
+/// holds the daemon's database. Under `SENCLAW_APP_TOKEN_MODE=strict` the
+/// bridge refuses a tokenless call from anything that is not the daemon's web
+/// UI, and the board is not the web UI.
+static APP_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The board's token from the daemon's own token table, minted on first use.
+/// The board is not an installed Space App, so no launcher mints it.
+pub fn provision_app_token(db: &crate::db::Db) -> anyhow::Result<String> {
+    crate::apps::token::ensure(db, APP_ID)
+}
+
+/// Publish the token for this process's own model calls. Idempotent.
+pub fn set_app_token(token: &str) {
+    let t = token.trim();
+    if !t.is_empty() {
+        let _ = APP_TOKEN.set(t.to_string());
+    }
+}
+
+/// The token to present: the one the daemon published in this process, else
+/// the one a parent put in `SENCLAW_TOKEN_ACCESS_APP` (a `kanban-server`
+/// child — see [`child_env`]).
+fn app_token() -> Option<String> {
+    APP_TOKEN
+        .get()
+        .cloned()
+        .or_else(app_space_sdk::bridge::app_token_from_env)
+}
+
+/// Environment for a `kanban-server` child, so its own model calls (the
+/// `kanban_generate_board` / `kanban_breakdown_card` tools) reach this daemon
+/// and present the board's token. Without it the child inherits nothing but
+/// the daemon's environment, which names no port and no token.
+pub fn child_env(ui_port: u16) -> HashMap<String, String> {
+    let mut env = HashMap::from([(
+        "SENCLAW_BASE_URL".to_string(),
+        crate::util::internal_auth::loopback_base_url(ui_port),
+    )]);
+    if let Some(token) = APP_TOKEN.get() {
+        env.insert(crate::apps::token::ENV_APP_TOKEN.to_string(), token.clone());
+    }
+    env
+}
+
 /// The app's single gateway to SenClaw services. Every LLM call goes through the
 /// app-space-sdk (the daemon's Space-App open API) — the app never contacts an
 /// LLM provider directly.
+///
+/// The target is the daemon this process belongs to, never a fixed port: a
+/// daemon on another port (an isolated test run, or a user who moved it) would
+/// otherwise send the board's calls to whichever daemon holds 18788.
 fn client() -> SpaceClient {
-    if std::env::var("SENCLAW_SPACE_APP_ID").is_err() {
-        std::env::set_var("SENCLAW_SPACE_APP_ID", "kanban");
-    }
-    SpaceClient::from_env()
+    client_for(
+        &crate::util::internal_auth::daemon_base_url(),
+        app_token().as_deref(),
+    )
+}
+
+fn client_for(base_url: &str, token: Option<&str>) -> SpaceClient {
+    SpaceClient::with_token(base_url, APP_ID, token)
 }
 
 /// One-shot completion on SenClaw's active LLM via the SDK open API.
@@ -412,6 +473,130 @@ pub async fn bridge_llm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::token::{self, TokenMode};
+    use crate::gateway::ui_server::app_auth::{
+        decide, looks_like_daemon_ui, presented_token, Decision,
+    };
+    use axum::{
+        extract::{Path, State},
+        http::{HeaderMap, StatusCode, Uri},
+        routing::post,
+        Json, Router,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// A stand-in for the daemon's `/api/space/apps/<id>/bridge`: the real
+    /// strict-mode decision over a real token table, with the real SDK client
+    /// on the other end of a real socket. Only the HTTP glue is test code.
+    struct Gate {
+        db: crate::db::Db,
+        calls: Mutex<Vec<(String, Option<&'static str>)>>,
+    }
+
+    async fn bridge(
+        State(g): State<Arc<Gate>>,
+        Path(id): Path<String>,
+        uri: Uri,
+        headers: HeaderMap,
+    ) -> (StatusCode, Json<Value>) {
+        let presented = presented_token(&headers, uri.query());
+        let verdict = decide(
+            TokenMode::Strict,
+            &id,
+            "/bridge",
+            presented.as_deref(),
+            |t| token::resolve(&g.db, t),
+            looks_like_daemon_ui(&headers),
+        );
+        match verdict {
+            Decision::Allow(_) => {
+                g.calls.lock().unwrap().push((id, None));
+                (
+                    StatusCode::OK,
+                    Json(json!({ "status": "ok", "text": "served", "model": "mock" })),
+                )
+            }
+            Decision::Deny(status, code, message) => {
+                g.calls.lock().unwrap().push((id, Some(code)));
+                (status, Json(json!({ "error": message, "code": code })))
+            }
+        }
+    }
+
+    /// Serve the stand-in on an ephemeral loopback port; returns its base URL.
+    async fn serve(gate: Arc<Gate>) -> String {
+        let app = Router::new()
+            .route("/api/space/apps/:id/bridge", post(bridge))
+            .with_state(gate);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        base
+    }
+
+    fn gate() -> Arc<Gate> {
+        let db = crate::db::Db::open_in_memory(&crate::config::Config::from_env()).unwrap();
+        Arc::new(Gate {
+            db,
+            calls: Mutex::new(Vec::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn strict_mode_serves_the_board_with_its_token_and_refuses_it_without() {
+        let gate = gate();
+        let token = provision_app_token(&gate.db).unwrap();
+        let base = serve(Arc::clone(&gate)).await;
+
+        let served = client_for(&base, Some(&token))
+            .llm_request("sys", "prompt", 8)
+            .await;
+        assert_eq!(served.unwrap(), ("served".to_string(), "mock".to_string()));
+
+        // What every kanban model call did before the token was sent.
+        assert!(client_for(&base, None)
+            .llm_request("sys", "prompt", 8)
+            .await
+            .is_err());
+
+        // The board's token is the board's alone.
+        let other = token::ensure(&gate.db, "someone-else").unwrap();
+        assert!(client_for(&base, Some(&other))
+            .llm_request("sys", "prompt", 8)
+            .await
+            .is_err());
+
+        assert_eq!(
+            *gate.calls.lock().unwrap(),
+            vec![
+                ("kanban".to_string(), None),
+                ("kanban".to_string(), Some("app_token_required")),
+                ("kanban".to_string(), Some("app_token_scope")),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_board_token_is_stable_across_daemon_restarts() {
+        let gate = gate();
+        let first = provision_app_token(&gate.db).unwrap();
+        assert_eq!(provision_app_token(&gate.db).unwrap(), first);
+    }
+
+    #[test]
+    fn a_kanban_server_child_is_told_where_the_daemon_is_and_who_it_is() {
+        // The only test that publishes the process-global token.
+        let gate = gate();
+        let token = provision_app_token(&gate.db).unwrap();
+        set_app_token(&token);
+
+        assert_eq!(app_token().as_deref(), Some(token.as_str()));
+        let env = child_env(38788);
+        assert_eq!(env["SENCLAW_BASE_URL"], "http://127.0.0.1:38788");
+        assert_eq!(env[crate::apps::token::ENV_APP_TOKEN], token);
+    }
 
     #[test]
     fn prompts_without_a_project_are_what_they_were() {

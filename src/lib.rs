@@ -1874,6 +1874,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             cfg.clone(),
         ));
     let kanban_state = kanban::make_state_with(Some(Arc::clone(&project_directory)));
+    // The board's model calls (generate, break down, chat, model picker) go
+    // back into this daemon's Space-App bridge, as the `kanban` app. Under the
+    // default `strict` token mode that needs the app's own token.
+    match kanban::llm::provision_app_token(&db) {
+        Ok(token) => kanban::llm::set_app_token(&token),
+        Err(e) => tracing::warn!("[kanban] no app token for the model bridge: {e}"),
+    }
 
     // Auto-launch + auto-register MCP servers declared by installed Space Apps
     // (manifest `mcp.autoRegister`). Lifecycle is tied to the daemon.
@@ -3099,7 +3106,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 name: "senclaw-kanban".into(),
                 command: senclaw_exe,
                 args: vec!["kanban-server".into()],
-                env: Default::default(),
+                env: kanban::llm::child_env(cfg.ui_server.port),
             };
             let provider: std::sync::Arc<dyn DispatchProvider> =
                 std::sync::Arc::new(

@@ -1017,9 +1017,8 @@ async fn model_active(Json(b): Json<ModelActiveBody>) -> Result<Json<Value>, Api
 }
 
 async fn llm_info() -> Json<Value> {
-    let base =
-        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
-    let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
+    let base = crate::util::internal_auth::daemon_base_url();
+    let url = format!("{base}/api/llm-config");
     let mut req = reqwest::Client::new()
         .get(&url)
         .timeout(std::time::Duration::from_secs(6));

@@ -234,7 +234,7 @@ impl BridgeState {
     /// The child to spawn, plus the scope note for its `initialize` reply.
     fn server_config(&self, kind: &str, chat: Option<&str>) -> Result<(McpServerConfig, Option<String>), String> {
         match kind {
-            "kanban" => Ok((bridge_servers::kanban_server(), None)),
+            "kanban" => Ok((bridge_servers::kanban_server(self.config.ui_server.port), None)),
             "core" => {
                 let db = self.db.as_ref().ok_or("daemon database unavailable")?;
                 let g = bridge_servers::resolve_group(db, chat).ok_or("no chat group to scope SenClaw tools to")?;
