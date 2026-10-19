@@ -7,6 +7,8 @@
 //! Provides a single API for listing, adding, removing, connecting, and
 //! querying tools across all MCP servers regardless of origin.
 
+#[cfg(test)]
+pub(crate) mod mock_server;
 pub mod service;
 #[cfg(test)]
 mod tests;

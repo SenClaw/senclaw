@@ -766,10 +766,16 @@ impl SpaceMcpLauncher {
         let mut config =
             build_mcp_config(&name, &mcp, app_id, base_url, mcp_origin.as_deref(), session)?;
         stamp_app_identity(&mut config, db, app_id, self.api_version);
-        manager
-            .add_or_update(config, McpScopeType::Project)
-            .await
-            .with_context(|| format!("register MCP '{name}'"))?;
+        // A session app is registered on demand even though it is running now:
+        // the reaper will stop it, and its tools must outlive the connection.
+        let registered = if session {
+            manager
+                .add_or_update_on_demand(config, McpScopeType::Project)
+                .await
+        } else {
+            manager.add_or_update(config, McpScopeType::Project).await
+        };
+        registered.with_context(|| format!("register MCP '{name}'"))?;
         // Remember what this app's tools are, so the next boot can put them in
         // the agent roster without starting the app to ask.
         let tools = manager

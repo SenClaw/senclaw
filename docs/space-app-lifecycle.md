@@ -48,6 +48,23 @@ gọi nó — và nó **không bao giờ** được khởi động. Vòng chết
 Một cache rỗng **không bao giờ** ghi đè cache tốt: một lần connect hỏng mà xoá
 cache sẽ làm app mất tool → không gọi được → không khởi động được.
 
+### Roster của phiên chat lấy tool từ đâu
+
+Mỗi phiên chat chụp roster **một lần**, lúc engine của phiên được tạo
+(`ZenEngine::refresh_mcp_tools` → `McpManager::get_external_tools`). Nguồn đó
+từng chỉ liệt kê server có trạng thái `Connected`, nên app `session` đang nghỉ
+— đăng ký offline từ cache lúc boot, hoặc vừa bị reaper / nút Stop ngắt kết
+nối (việc này còn xoá luôn danh sách tool trong bộ nhớ) — đóng góp **0 tool**
+cho phiên mở đúng lúc đó: `ToolSearch select:mcp__lakehouse-mcp__…` trả
+"Nothing from `lakehouse-mcp` is registered in this session" dù
+`space_app_mcp_list` báo đã đăng ký, và agent loay hoay khởi động app bằng
+tay. Giờ server `on_demand` (đăng ký bằng `add_or_update_offline` hoặc
+`add_or_update_on_demand` — `run_and_register` dùng cái sau cho app `session`)
+được liệt kê **bất kể trạng thái kết nối**, miễn là còn `enabled`;
+`disconnect_server` giữ nguyên tool của nó; và một lần connect trả danh sách
+rỗng không ghi đè danh sách cũ. Test: `mcp::manager::tests` và
+`zen_core::engine::tests::a_chat_started_while_a_session_app_sleeps_can_load_and_call_its_tool`.
+
 App chưa từng chạy lần nào thì chưa có cache. Lần boot đó daemon khởi động nó
 **một lần** để học danh sách tool, rồi reaper dừng lại sau một phút. Mỗi app chỉ
 tốn đúng một lần như vậy trong đời.

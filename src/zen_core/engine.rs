@@ -4313,4 +4313,127 @@ mod tests {
         let (_dir2, path2) = config_file(&[llm_cfg("a", "gpt-4o")], Some("gone"));
         assert!(ZenEngine::model_accepts_images(&path2, Some("also-gone")));
     }
+    // ---- a chat that starts while a session Space App is stopped ----
+
+    fn tool_context() -> ToolContext<'static> {
+        ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: None,
+            response_registry: None,
+            edit_format: Default::default(),
+        }
+    }
+
+    fn result_text(out: Vec<ToolOutput>) -> String {
+        match out.into_iter().next() {
+            Some(ToolOutput::Result {
+                result_for_assistant,
+                ..
+            }) => result_for_assistant,
+            _ => panic!("expected a result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_chat_started_while_a_session_app_sleeps_can_load_and_call_its_tool() {
+        use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpTransportType};
+        use crate::mcp::manager::mock_server::{self, tool};
+
+        // The daemon after a boot (or an idle reap): Lakehouse is registered
+        // from its tool cache and its process is not running.
+        let dir = tempfile::TempDir::new().unwrap();
+        let work = dir.path().join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        let manager = Arc::new(crate::mcp::manager::McpManager::new(
+            work,
+            dir.path().to_path_buf(),
+        ));
+        let stopped = mock_server::reserve().await;
+        let lake_tools = vec![
+            tool("lake_import_file", "Import a CSV or JSON file as a dataset"),
+            tool("lake_query", "Run SQL over a dataset"),
+        ];
+        manager
+            .add_or_update_offline(
+                ExternalMcpServerConfig {
+                    name: "lakehouse-mcp".into(),
+                    transport: McpTransportType::Http,
+                    description: None,
+                    enabled: true,
+                    use_tools: None,
+                    command: None,
+                    args: vec![],
+                    env: Default::default(),
+                    url: Some(stopped.url.clone()),
+                    headers: Default::default(),
+                },
+                McpScopeType::Project,
+                lake_tools.clone(),
+            )
+            .await
+            .unwrap();
+
+        // The chat's first message creates its engine, which takes the roster.
+        let engine = ZenEngine::new(
+            ZenCoreOptions {
+                instance_id: "chat-while-app-sleeps".into(),
+                ..Default::default()
+            },
+            Some(manager),
+        );
+        engine.refresh_mcp_tools().await;
+
+        // ToolSearch finds it by keyword and loads it by name — the two steps
+        // the agent took on the real install before giving up.
+        let ctx = tool_context();
+        let search = engine
+            .available_tools()
+            .into_iter()
+            .find(|t| t.name() == "ToolSearch")
+            .expect("ToolSearch is always loaded");
+        let by_keyword = result_text(
+            search
+                .call(serde_json::json!({ "query": "lake import dataset" }), &ctx)
+                .await
+                .unwrap(),
+        );
+        assert!(
+            by_keyword.contains("mcp__lakehouse-mcp__lake_import_file"),
+            "keyword search missed the sleeping app's tool: {by_keyword}"
+        );
+        let by_name = result_text(
+            search
+                .call(
+                    serde_json::json!({ "query": "select:mcp__lakehouse-mcp__lake_import_file" }),
+                    &ctx,
+                )
+                .await
+                .unwrap(),
+        );
+        assert!(by_name.contains("Loaded 1 tool(s)"), "select: failed: {by_name}");
+        assert!(
+            !by_name.contains("is registered in this session"),
+            "select: reported the app as absent: {by_name}"
+        );
+
+        // It is now in the turn's tool list, and calling it wakes the app: the
+        // daemon's app proxy starts the process, which here is the mock coming
+        // up on the port the registration already points at.
+        let loaded = engine
+            .tools_for_main_agent()
+            .into_iter()
+            .find(|t| t.name() == "mcp__lakehouse-mcp__lake_import_file")
+            .expect("the tool ToolSearch loaded must be callable next turn");
+        let _app_started = stopped.serve(lake_tools);
+        let answer = result_text(
+            loaded
+                .call(serde_json::json!({ "path": "sales.csv" }), &ctx)
+                .await
+                .unwrap(),
+        );
+        assert!(answer.contains("lake_import_file"), "got: {answer}");
+    }
 }

@@ -222,3 +222,231 @@ async fn a_registered_builtin_spec_is_reachable_by_name() {
         "senclaw-dispatch must resolve once its spec is registered; got: {err}"
     );
 }
+
+// ---- on-demand (session-mode Space App) servers -------------------------
+//
+// A session app's process is not running most of the time, yet its tools have
+// to stay in every new chat's roster: nothing would call a tool that is not
+// offered, so the app would never start. These pin the half of that promise
+// that lives in the manager.
+
+use super::mock_server::{self, tool};
+
+fn http_config(name: &str, url: &str) -> ExternalMcpServerConfig {
+    ExternalMcpServerConfig {
+        name: name.into(),
+        transport: McpTransportType::Http,
+        description: None,
+        enabled: true,
+        use_tools: None,
+        command: None,
+        args: vec![],
+        env: HashMap::new(),
+        url: Some(url.into()),
+        headers: HashMap::new(),
+    }
+}
+
+fn manager_in(dir: &tempfile::TempDir) -> McpManager {
+    let work = dir.path().join("project");
+    std::fs::create_dir_all(&work).unwrap();
+    McpManager::new(work, dir.path().to_path_buf())
+}
+
+async fn roster(mgr: &McpManager) -> Vec<String> {
+    let mut names: Vec<String> = mgr
+        .get_external_tools_full()
+        .await
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    names.sort();
+    names
+}
+
+#[tokio::test]
+async fn an_app_registered_from_its_cache_has_its_tools_in_the_roster() {
+    // `add_or_update_offline` documents exactly this: no connection, no process,
+    // and still "tools in every agent's roster". The roster used to list only
+    // servers whose status was Connected, so a stopped session app — which is
+    // never Connected — contributed nothing to a chat started while it slept.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let stopped = mock_server::reserve().await;
+
+    mgr.add_or_update_offline(
+        http_config("lakehouse-mcp", &stopped.url),
+        McpScopeType::Project,
+        vec![tool("lake_import_file", "Import a file"), tool("lake_query", "Run SQL")],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        roster(&mgr).await,
+        vec![
+            "mcp__lakehouse-mcp__lake_import_file".to_string(),
+            "mcp__lakehouse-mcp__lake_query".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_on_demand_app_offers_nothing() {
+    // The cache must not turn "off" into "on": a server the person disabled
+    // keeps its cached list on disk, and none of it may reach an agent.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let stopped = mock_server::reserve().await;
+    mgr.add_or_update_offline(
+        http_config("lakehouse-mcp", &stopped.url),
+        McpScopeType::Project,
+        vec![tool("lake_query", "Run SQL")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(roster(&mgr).await.len(), 1);
+
+    mgr.update_enabled("lakehouse-mcp", McpScopeType::Project, false)
+        .await
+        .unwrap();
+    assert!(roster(&mgr).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_regular_server_that_is_not_connected_offers_nothing() {
+    // Only on-demand servers are listed while disconnected. A server that
+    // failed to connect has no process behind it that a call could start, so
+    // listing its tools would offer calls that can only fail.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+
+    // Port 1 refuses the connection at once.
+    mgr.add_or_update(
+        http_config("plain-mcp", "http://127.0.0.1:1/mcp"),
+        McpScopeType::Project,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        mgr.get_server_info("plain-mcp").await.status,
+        McpServerStatus::Error
+    );
+
+    assert!(roster(&mgr).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_on_demand_apps_tools_survive_the_idle_reaper_disconnecting_it() {
+    // The reaper stops an idle session app and drops its MCP connection. That
+    // used to empty the tool list as well, so a chat started in the next minute
+    // saw none of the app's tools — the reported failure, one minute after any
+    // use. Dropping the connection must not drop the roster entry.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let reserved = mock_server::reserve().await;
+    let url = reserved.url.clone();
+    let _running = reserved.serve(vec![tool("lake_query", "Run SQL")]);
+
+    mgr.add_or_update_on_demand(http_config("lakehouse-mcp", &url), McpScopeType::Project)
+        .await
+        .unwrap();
+    assert_eq!(
+        mgr.get_server_info("lakehouse-mcp").await.status,
+        McpServerStatus::Connected
+    );
+    assert_eq!(roster(&mgr).await, vec!["mcp__lakehouse-mcp__lake_query".to_string()]);
+
+    mgr.disconnect_server("lakehouse-mcp").await.unwrap();
+
+    let info = mgr.get_server_info("lakehouse-mcp").await;
+    assert_eq!(info.status, McpServerStatus::Disconnected);
+    assert_eq!(roster(&mgr).await, vec!["mcp__lakehouse-mcp__lake_query".to_string()]);
+}
+
+#[tokio::test]
+async fn a_regular_server_forgets_its_tools_when_disconnected() {
+    // The other side of the line above: only an on-demand app is expected to
+    // come back by itself on the next call.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let reserved = mock_server::reserve().await;
+    let url = reserved.url.clone();
+    let _running = reserved.serve(vec![tool("plain_tool", "A tool")]);
+
+    mgr.add_or_update(http_config("plain-mcp", &url), McpScopeType::Project)
+        .await
+        .unwrap();
+    assert_eq!(roster(&mgr).await.len(), 1);
+
+    mgr.disconnect_server("plain-mcp").await.unwrap();
+    assert!(roster(&mgr).await.is_empty());
+}
+
+#[tokio::test]
+async fn the_first_call_to_a_listed_but_stopped_app_connects_and_answers() {
+    // The other half of the promise: the tool is offered while the app sleeps,
+    // and calling it is what wakes the app (in the daemon, the URL is the app
+    // proxy, which starts the process before forwarding).
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    let stopped = mock_server::reserve().await;
+    let url = stopped.url.clone();
+
+    mgr.add_or_update_offline(
+        http_config("lakehouse-mcp", &url),
+        McpScopeType::Project,
+        vec![tool("lake_query", "Run SQL")],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        mgr.get_server_info("lakehouse-mcp").await.status,
+        McpServerStatus::Disconnected
+    );
+
+    let _started = stopped.serve(vec![tool("lake_query", "Run SQL")]);
+    let out = mgr
+        .call_external_tool(
+            "mcp__lakehouse-mcp__lake_query",
+            serde_json::json!({ "path": "demo" }),
+        )
+        .await
+        .unwrap();
+
+    assert!(out.to_string().contains("lake_query"), "got: {out}");
+    assert_eq!(
+        mgr.get_server_info("lakehouse-mcp").await.status,
+        McpServerStatus::Connected
+    );
+}
+
+#[tokio::test]
+async fn a_failed_connect_keeps_an_on_demand_apps_cached_tools() {
+    // The app may fail to start for a minute (missing dependency, busy port).
+    // Its tools must still be offered, or nothing could ever call it back to
+    // life — the same reason an empty list never overwrites the on-disk cache.
+    let dir = tempfile::TempDir::new().unwrap();
+    let mgr = manager_in(&dir);
+    // Port 1 refuses the connection at once.
+    mgr.add_or_update_offline(
+        http_config("lakehouse-mcp", "http://127.0.0.1:1/mcp"),
+        McpScopeType::Project,
+        vec![tool("lake_query", "Run SQL")],
+    )
+    .await
+    .unwrap();
+
+    let err = mgr
+        .call_external_tool("mcp__lakehouse-mcp__lake_query", serde_json::json!({}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not connected"), "got: {err}");
+
+    assert_eq!(
+        mgr.get_server_info("lakehouse-mcp").await.status,
+        McpServerStatus::Error
+    );
+    assert_eq!(roster(&mgr).await, vec!["mcp__lakehouse-mcp__lake_query".to_string()]);
+}
