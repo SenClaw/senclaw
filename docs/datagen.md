@@ -402,7 +402,9 @@ này.
 
 - Tối đa **2 job chạy cùng lúc**.
 - Trạng thái job nằm trong bộ nhớ của daemon. Sau khi daemon khởi động lại, dataset vẫn còn trên đĩa; manifest nào
-  còn ghi `running` sẽ hiện là `interrupted`.
+  còn ghi `running` sẽ hiện là `interrupted`. Manifest được ghi xong **trước** khi trạng thái job đổi sang `done` /
+  `failed` / `cancelled`: ai thấy job đã kết thúc rồi đọc `manifest.json` luôn thấy bản cuối (trạng thái, số liệu,
+  `provenance`).
 - Mỗi lần gọi LLM có trần 600 s. Huỷ job ngắt cuộc gọi đang chạy ngay lập tức.
 - Các pipeline sinh dữ liệu chạy tuần tự trong một job: mỗi job một luồng gọi LLM.
 
@@ -432,7 +434,7 @@ python3 scripts/datagen-e2e/run.py --self-test                                  
   lại bản ghi đã ghi.
 - `executable_qa` cần sandbox của hệ điều hành mà sandbox không lồng được, nên case đó chạy trên daemon thứ hai không có
   lớp chặn cổng (chỉ gọi REST, không có chat). Cuối lượt, suite kiểm không daemon nào giữ kết nối tới cổng thật.
-- Case gắn `xfail` ghi một lỗi đã biết (hiện có: registry báo `done` khoảng 4 ms trước khi `manifest.json` được ghi xong).
-  Nó báo `XFAIL` khi còn lỗi và `XPASS` khi đã sửa; `--strict-xfail` biến `XPASS` thành thất bại để người sửa gỡ cờ.
+- Case gắn `xfail` ghi một lỗi đã biết (hiện chưa có case nào). Nó báo `XFAIL` khi còn lỗi và `XPASS` khi đã sửa;
+  `--strict-xfail` biến `XPASS` thành thất bại để người sửa gỡ cờ.
 - `--self-test` đưa vào các bản ghi bị làm hỏng có chủ ý (câu trích bịa, đáp án sai, điểm thấp, code bị sửa, nhãn lạ…) và
   yêu cầu từng cái bị bắt: một kiểm tra không thể fail thì không chứng minh gì.

@@ -1565,6 +1565,9 @@ Rules for Claude:
   carries files the agent read, same as the trajectories it comes from.
 - **The job registry is process-global** (`datagen::registry()`), not a `UiState` field. Live status is memory
   only; the manifest is the durable record, and a `running` manifest with no live job reads as `interrupted`.
+  The final manifest is written **before** the status flips to `done` / `failed` / `cancelled` (`Registry::start`'s
+  finisher), never after: flipping first showed a finished job whose `manifest.json` still said `running` with no
+  `provenance` for ~4 ms, which a script reading the folder the moment it saw `done` hit every time.
 - **The MCP server only forwards** to the daemon, and scopes everything to its own chat (`SENCLAW_CHAT_JID` from its
   env, never a tool parameter): jobs are stamped with an `owner`, status/cancel send `?owner=`, and `export_logs`
   from a chat exports that chat only — a group chat must not be able to dump the owner's other conversations.

@@ -5,6 +5,8 @@
 //! place that builds one); the folder's manifest is the durable record. A
 //! manifest left at `running` with no live job is reported as `interrupted`:
 //! the daemon stopped mid-run, and the records written so far are still there.
+//! A job is reported `done`, `failed` or `cancelled` only after its final
+//! manifest is on disk, never before.
 //!
 //! A job started from a chat carries that chat as its `owner`, and the chat's
 //! tools only ever see, list and cancel its own jobs and datasets — the same
@@ -381,18 +383,26 @@ impl Registry {
                 Ok(r) => r,
                 Err(e) => Err(format!("the job stopped unexpectedly: {e}")),
             };
-            let final_status = {
-                let mut s = status.lock().unwrap();
-                s.state = match &result {
-                    Ok(Outcome::Finished) => JobState::Done,
-                    Ok(Outcome::Cancelled) => JobState::Cancelled,
-                    Err(_) => JobState::Failed,
-                };
-                s.error = result.err();
-                s.finished_at = Some(now_ms());
-                s.clone()
+            // The manifest is the durable record, so it is written first and
+            // the live status flips after: whoever sees the job ended — the
+            // REST status, a watch, a reader of the folder — finds the final
+            // manifest already there. The pipeline is over, so nothing else
+            // changes the status in between.
+            let mut final_status = status.lock().unwrap().clone();
+            final_status.state = match &result {
+                Ok(Outcome::Finished) => JobState::Done,
+                Ok(Outcome::Cancelled) => JobState::Cancelled,
+                Err(_) => JobState::Failed,
             };
+            final_status.error = result.err();
+            final_status.finished_at = Some(now_ms());
             write_manifest(&dir, &final_status, &params);
+            {
+                let mut s = status.lock().unwrap();
+                s.state = final_status.state;
+                s.error = final_status.error.clone();
+                s.finished_at = final_status.finished_at;
+            }
             tracing::info!(
                 "[Datagen] job {} {:?}: {} accepted, {} LLM calls",
                 final_status.job_id,
@@ -735,6 +745,161 @@ mod tests {
             .start(spec(json!({"pipeline": "reasoning_traces", "problemsFrom": {"dataset": "senclaw-flows-vi"}})), deps(tmp.path(), Some(llm)))
             .unwrap_err();
         assert!(wrong.message().contains("no records with a problem"), "{}", wrong.message());
+    }
+
+    /// How a held job ends once the test lets it.
+    #[derive(Debug, Clone, Copy)]
+    enum End {
+        Done,
+        Failed,
+        Cancelled,
+    }
+
+    impl End {
+        const ALL: [End; 3] = [End::Done, End::Failed, End::Cancelled];
+
+        fn state(self) -> JobState {
+            match self {
+                End::Done => JobState::Done,
+                End::Failed => JobState::Failed,
+                End::Cancelled => JobState::Cancelled,
+            }
+        }
+    }
+
+    /// A model that answers (or panics) only after `gate` opens, so the test
+    /// decides when the job's work is over.
+    struct Held {
+        gate: Arc<tokio::sync::Notify>,
+        panics: bool,
+    }
+
+    #[async_trait]
+    impl Llm for Held {
+        async fn complete(&self, _: &str, _: &str, _: u32) -> Result<LlmReply, String> {
+            self.gate.notified().await;
+            if self.panics {
+                panic!("model adapter bug");
+            }
+            Ok(LlmReply { text: r#"{"items":["water the plants every evening"]}"#.into(), model: "scripted".into(), ..Default::default() })
+        }
+    }
+
+    /// Start an `expand_seeds` job that waits on its model; `release` ends it as `end` says.
+    fn start_held(reg: &Registry, root: &Path, end: End) -> (JobStatus, Arc<tokio::sync::Notify>) {
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let llm: Arc<dyn Llm> = Arc::new(Held { gate: gate.clone(), panics: matches!(end, End::Failed) });
+        let st = reg
+            .start(spec(json!({"pipeline": "expand_seeds", "seeds": ["remind me to call mom"], "target": 1})), deps(root, Some(llm)))
+            .unwrap();
+        (st, gate)
+    }
+
+    fn release(reg: &Registry, st: &JobStatus, gate: &tokio::sync::Notify, end: End) {
+        match end {
+            End::Cancelled => assert_eq!(reg.cancel(&st.job_id, None), CancelResult::Cancelled),
+            End::Done | End::Failed => gate.notify_one(),
+        }
+    }
+
+    fn manifest_on_disk(dir: &str) -> Value {
+        store::read_manifest(Path::new(dir)).expect("manifest.json is readable")
+    }
+
+    /// The manifest is the durable record, so a job the registry reports as
+    /// ended must already have it written. The final write is stalled here —
+    /// opening a FIFO for writing waits for a reader, and the writer meets
+    /// the FIFO where it expects its temp file — so the registry cannot
+    /// have got ahead of it by luck of timing.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn a_job_is_not_reported_ended_while_its_manifest_is_still_being_written() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        for end in End::ALL {
+            let tmp = tempfile::tempdir().unwrap();
+            let reg = Registry::default();
+            let (st, gate) = start_held(&reg, tmp.path(), end);
+            let stall = std::ffi::CString::new(Path::new(&st.dir).join(store::MANIFEST_TMP).as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(stall.as_ptr(), 0o600) }, 0, "{end:?}: mkfifo");
+            release(&reg, &st, &gate, end);
+
+            let mut seen_ended = None;
+            for _ in 0..40 {
+                let s = reg.status(&st.job_id, None).unwrap();
+                if s.state != JobState::Running {
+                    seen_ended = Some((s.state, manifest_on_disk(&st.dir)["state"].clone()));
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+
+            // Let the stalled write through (a FIFO cannot be synced, so it
+            // fails and the job finishes without a manifest) before asserting,
+            // so a failure here cannot leave a worker thread blocked forever.
+            let reader = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(Path::new(&st.dir).join(store::MANIFEST_TMP)).unwrap();
+            let ended = wait(&reg, &st.job_id).await;
+            drop(reader);
+
+            assert_eq!(ended.state, end.state());
+            if let Some((state, on_disk)) = seen_ended {
+                assert_eq!(on_disk, json!(state), "{end:?}: the registry said {state:?} while manifest.json said {on_disk}");
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn a_job_seen_ended_already_has_its_final_manifest_on_disk() {
+        for round in 0..5 {
+            for end in End::ALL {
+                let tmp = tempfile::tempdir().unwrap();
+                let reg = Registry::default();
+                let (st, gate) = start_held(&reg, tmp.path(), end);
+                release(&reg, &st, &gate, end);
+                let ended = loop {
+                    let s = reg.status(&st.job_id, None).unwrap();
+                    if s.state != JobState::Running {
+                        break s;
+                    }
+                    tokio::task::yield_now().await;
+                };
+                // Read the file the instant the state is seen, with no wait.
+                let m = manifest_on_disk(&st.dir);
+                let at = format!("round {round}, {end:?}");
+                assert_eq!(m["state"], json!(ended.state), "{at}");
+                assert_eq!(m["accepted"], json!(ended.accepted), "{at}");
+                assert_eq!(m["finishedAt"], json!(ended.finished_at), "{at}");
+                assert!(m["finishedAt"].is_u64(), "{at}");
+                assert_eq!(m["error"], json!(ended.error), "{at}");
+                match end {
+                    End::Done => assert_eq!(m["accepted"], 1, "{at}"),
+                    End::Failed => assert!(m["error"].as_str().is_some_and(|e| e.contains("stopped unexpectedly")), "{at}"),
+                    End::Cancelled => assert!(m["error"].is_null(), "{at}"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn an_import_seen_done_already_has_its_provenance_on_disk() {
+        for round in 0..5 {
+            let tmp = tempfile::tempdir().unwrap();
+            let reg = Registry::default();
+            let st = reg.start(spec(json!({"pipeline": "import", "source": {"catalog": "senclaw-flows-vi"}})), deps(tmp.path(), None)).unwrap();
+            let ended = loop {
+                let s = reg.status(&st.job_id, None).unwrap();
+                if s.state != JobState::Running {
+                    break s;
+                }
+                tokio::task::yield_now().await;
+            };
+            let m = manifest_on_disk(&st.dir);
+            assert_eq!(ended.state, JobState::Done, "round {round}");
+            assert_eq!(m["state"], "done", "round {round}: the registry said done while manifest.json said {}", m["state"]);
+            assert_eq!(m["accepted"], 144, "round {round}");
+            assert_eq!(m["provenance"]["license"], "MIT", "round {round}");
+        }
     }
 
     #[test]

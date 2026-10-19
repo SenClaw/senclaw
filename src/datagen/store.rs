@@ -18,6 +18,8 @@ use serde_json::Value;
 
 pub const DATA_FILE: &str = "data.jsonl";
 pub const MANIFEST_FILE: &str = "manifest.json";
+/// The file a manifest is written to before it replaces [`MANIFEST_FILE`].
+pub const MANIFEST_TMP: &str = ".manifest.json.tmp";
 
 pub fn default_root() -> PathBuf {
     crate::util::paths::senclaw_data_home().join("datasets")
@@ -87,7 +89,7 @@ impl DatasetWriter {
 
 /// Replace `<dir>/manifest.json` atomically (temp file + rename).
 pub fn write_manifest(dir: &Path, manifest: &Value) -> io::Result<()> {
-    let tmp = dir.join(".manifest.json.tmp");
+    let tmp = dir.join(MANIFEST_TMP);
     {
         let mut f = private_file(&tmp, false)?;
         f.write_all(&serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?)?;

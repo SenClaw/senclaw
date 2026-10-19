@@ -376,24 +376,15 @@ def case(cid, group, needs_open=False, xfail=None):
     return deco
 
 
-def final_manifest(ctx, job, seconds=10):
-    """manifest.json of a finished job, once it agrees with the job's state.
-
-    The registry says `done` a few milliseconds before the file does (see
-    `manifest_is_final_when_a_job_reports_done`), so a case that reads the file
-    for something else waits for it instead of racing it."""
-    path = os.path.join(job["dir"], "manifest.json")
-    deadline = time.time() + ctx.timeout(seconds)
-    while True:
-        try:
-            manifest = json.load(open(path))
-            if manifest.get("state") == job["state"]:
-                return manifest
-        except (OSError, ValueError):
-            pass
-        if time.time() > deadline:
-            raise AssertionError(f"manifest.json never reached state {job['state']!r}: {path}")
-        time.sleep(0.05)
+def final_manifest(job):
+    """manifest.json of a finished job. The daemon writes it before it reports the job
+    ended (see `manifest_is_final_when_a_job_reports_done`), so one read is enough:
+    waiting here for it to catch up would hide a regression from every case that
+    reads the file."""
+    manifest = json.load(open(os.path.join(job["dir"], "manifest.json")))
+    expect(manifest.get("state") == job["state"],
+           f"the job is {job['state']!r} but its manifest.json says {manifest.get('state')!r}")
+    return manifest
 
 
 @case("catalog_lists_entries", "offline")
@@ -420,7 +411,7 @@ def _(ctx):
     expect(len(recs) == 144, f"{len(recs)} lines")
     labels = collections.Counter(r["label"] for r in recs)
     expect(len(labels) == 12 and set(labels.values()) == {12}, f"labels not 12 x 12: {dict(labels)}")
-    prov = final_manifest(ctx, job)["provenance"]
+    prov = final_manifest(job)["provenance"]
     expect(prov["dataSha256"] == sha256_file(data), "manifest dataSha256 differs from the file")
     expect(prov["license"] == "MIT", f"license {prov['license']}")
     if os.name == "posix":
@@ -476,7 +467,7 @@ def _(ctx):
     recs = read_jsonl(os.path.join(job["dir"], "data.jsonl"))
     expect({r["text"] for r in recs} == {"turn on the lights", "play some jazz", "set a timer for ten minutes"},
            f"texts {[r['text'] for r in recs]}")
-    manifest = final_manifest(ctx, job)
+    manifest = final_manifest(job)
     expect("play some jazz" not in json.dumps(manifest), "the file's content leaked into the manifest")
     prov = manifest["provenance"]
     expect(prov["license"] == "private" and prov["source"]["type"] == "file" and prov["source"].get("sha256"),
@@ -595,8 +586,7 @@ def _(ctx):
         expect(job["state"] == "cancelled", f"a cancelled job ended {job['state']!r}")
 
 
-@case("manifest_is_final_when_a_job_reports_done", "offline",
-      xfail="the registry reports `done` ~4 ms before manifest.json is rewritten (measured 12/12 on 4b0b5a4)")
+@case("manifest_is_final_when_a_job_reports_done", "offline")
 def _(ctx):
     """The instant the API reports a job done, the durable manifest already says so and holds its provenance."""
     stale = []
@@ -613,8 +603,7 @@ def _(ctx):
         manifest = json.load(open(path))
         if manifest.get("state") != job["state"] or "provenance" not in manifest:
             stale.append((manifest.get("state"), "provenance" in manifest))
-        final_manifest(ctx, job)
-    expect(not stale, f"{len(stale)} of 5: the API said done but manifest.json said {stale[0]}")
+    expect(not stale, f"{len(stale)} of 5: the API said done but manifest.json said (state, has provenance) {stale[:1]}")
 
 
 @case("checker_detects_tampering", "offline")
@@ -698,7 +687,7 @@ def _(ctx):
     job = ctx.api.run({"pipeline": "expand_seeds", "name": "from-flows", "seedsFrom": {"dataset": "flows-vi", "perLabel": 1},
                        "target": 3, "batch": 3, "maxLlmCalls": 30}, ctx.timeout(420))
     expect(job["state"] == "done", f"state {job['state']}: {job.get('error')} {job['rejected']}")
-    seeds = final_manifest(ctx, job)["params"]["seeds"]
+    seeds = final_manifest(job)["params"]["seeds"]
     expect(len(seeds) == 12, f"{len(seeds)} seeds for 12 labels x 1")
     expect(len({s["label"] for s in seeds}) == 12, "a label is missing from the seeds")
     expect(job["accepted"] >= 1, "nothing generated from the seeds")
