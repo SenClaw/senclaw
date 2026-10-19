@@ -1423,7 +1423,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         #[async_trait]
         impl LlmClient for DormantLlm {
             async fn complete(&self, _system: &str, _user: &str) -> Result<String> {
-                anyhow::bail!("cognify LLM not configured: set SENCLAW_OPENAI_API_KEY")
+                anyhow::bail!("cognify LLM not configured: the model chosen in Settings needs an API key, unless it is a local model or a server on this machine or network")
             }
         }
         let llm: Arc<dyn LlmClient> =

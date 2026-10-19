@@ -689,6 +689,13 @@ Rules for Claude:
   dropped for an undated one, and the drop counts in `RetainReport::folded`, not `reinforced` — one reply is one mention.
 - **Retain never raises.** Every failure is counted in `RetainReport` and logged; a conversation that cannot be extracted is
   skipped and the chat is unaffected.
+- **No extraction model is a loud failure, not a quiet one.** The model comes from `create_cognitive_llm`, which skips a
+  config with an empty key — but only a *public* one: a local model, a Space App provider, or a server on this machine or
+  network (`query_llm::is_self_hosted_endpoint`: loopback, RFC 1918, link-local, `.local`) needs no key. A real install
+  whose only model was LM Studio on the LAN, saved with an empty key, remembered **nothing for weeks**: every window was
+  dropped at debug level, the Facts tab said "nothing remembered yet", and the chat itself worked, so nothing looked wrong.
+  `retain_text` now warns once per process. To check a real install, look for `source = 'cognitive'` rows in
+  `llm_usage_log`: none after a conversation means extraction never ran.
 - **A model's `replaces` is a claim, not an order.** `retain` honours it only for a number in that chunk's own `KNOWN FACTS`
   list and only when `same_subject` agrees (a shared non-generic entity, else enough shared words). The old fact is hidden
   (`superseded_by`) after the new one is stored, never deleted; every read filters `superseded_by IS NULL`, and deleting the
