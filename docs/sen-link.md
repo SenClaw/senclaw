@@ -170,7 +170,7 @@ every question is refused with "has not shared its knowledge with you".
 Whatever the policy says, these **never** leave: raw day logs (`YYYY-MM-DD.md`), `conversation-summary-*` notes, notes
 written in one particular chat (`originSessionId` is a chat JID), notes of type `user`, files that are links or larger
 than 256 KB, and the profile files (`USER.md`, `AGENTS.md`, SOUL). Secrets in a text are redacted before it goes out.
-`GET /api/sen-link/peers/:id/knowledge` shows the policy and a **preview computed by the same rules as an answer**: counts
+In the apps it is the **Knowledge** panel of a peer's row (Settings → SLink, web and desktop), which also has a box to ask the peer. `GET /api/sen-link/peers/:id/knowledge` shows the policy and a **preview computed by the same rules as an answer**: counts
 of what would be shared per profile, five sample titles, and how many items each excluded class holds. Read it before
 switching a peer on: a real install had a customer's email address in an ordinary reference note.
 
@@ -274,5 +274,5 @@ taken, `GET /api/sen-link/status` reports `listenError` and the listener retries
 
 ## Not yet
 
-Streaming (`SendStreamingMessage`), push notifications, copying knowledge between machines (a read-only mirror per peer is the design, see `plans/reports/research-261020-2247-slink-knowledge-sync.md`), a screen for the sharing policy in the web and desktop apps (REST only for now), and a limit on how many handshakes one
+Streaming (`SendStreamingMessage`), push notifications, copying knowledge between machines (a read-only mirror per peer is the design, see `plans/reports/research-261020-2247-slink-knowledge-sync.md`), and a limit on how many handshakes one
 machine may open (a flood can fill the 16 handshake slots for a minute; it cannot pair).
