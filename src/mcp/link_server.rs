@@ -3,7 +3,7 @@
 //!
 //! Naming per CLAUDE.md: server `senclaw-link`, tool prefix `link_`.
 //! The tools are loopback HTTP calls to the daemon's `/api/sen-link/*`: the
-//! peer store, hub channels and A2A client live in the daemon process, not in
+//! peer store, LAN listener and A2A client live in the daemon process, not in
 //! this subprocess (same reasoning as `space_apps`).
 
 use std::time::Duration;
@@ -131,7 +131,7 @@ impl McpLinkServer {
             .as_array()
             .map(|a| {
                 a.iter()
-                    .map(|p| json!({ "id": p["id"], "name": p["name"], "can_send": p["canSend"], "via_hub": p["viaRelay"] }))
+                    .map(|p| json!({ "id": p["id"], "name": p["name"], "can_send": p["canSend"], "addr": p["addr"] }))
                     .collect()
             })
             .unwrap_or_default();

@@ -1,50 +1,83 @@
-# sen-link — SenClaw ↔ SenClaw over A2A
+# SLink — SenClaw ↔ SenClaw on the local network
 
-sen-link lets two SenClaw daemons (two machines, two people) delegate tasks to each other using the
-[A2A protocol](https://a2a-protocol.org) v1.0, JSON-RPC binding. Code: `src/sen_link/`.
+SLink (code name `sen-link`: the API paths, the `senLink` config key, the `~/.senclaw/sen-link/` folder and the
+`senclaw-link` MCP server keep it) lets two SenClaw daemons on the same network — two machines, two people — delegate
+tasks to each other using the [A2A protocol](https://a2a-protocol.org) v1.0, JSON-RPC binding. Code: `src/sen_link/`.
 
-Incoming tasks become **kanban cards** on the `sen-link` board, so the existing dispatcher — a SenClaw persona or
+Incoming tasks become **kanban cards** on the `SLink` board, so the existing dispatcher — a SenClaw persona or
 Claude Code (assignee `claude-code`, run by the `app-claude` app worker — see `app-workers.md`) — does the work, and the result goes back as the
 A2A task's artifacts.
 
-## Enable and pair
+There is no relay and no public URL. Two daemons talk to each other directly, and only inside a private network.
 
-Both daemons must reach each other over HTTP (same LAN, Tailscale, or a TLS proxy). Bind the UI server beyond
-loopback (`SENCLAW_UI_BIND_HOST`) — the API stays token-gated — and set the public URL.
+## What counts as the LAN
 
-1. On both: `PUT /api/sen-link/settings` with `{"enabled": true, "name": "Benji's SenClaw", "publicUrl": "http://100.64.0.2:18788"}`.
-2. On **B**: `POST /api/sen-link/invites` → `{"code": "K7MQ2XRP", "expiresAt": …}` (one-time, 10 min).
-3. On **A**: `POST /api/sen-link/peers/pair` with `{"url": "http://<B>:18788", "code": "K7MQ2XRP"}`.
+`lan::is_lan_addr` is the rule, and it is enforced, not just advised:
+
+| Range | |
+|---|---|
+| `127.0.0.0/8`, `::1` | loopback (one machine, tests) |
+| `10/8`, `172.16/12`, `192.168/16` | private IPv4 |
+| `169.254/16`, `fe80::/10` | link-local |
+| `fc00::/7` | unique-local IPv6 (includes Tailscale's `fd7a:115c:a1e0::/48`) |
+| `100.64.0.0/10` | CGNAT — **Tailscale's IPv4 block**, so a tailnet counts as LAN |
+
+Anything else is refused: a connection *from* a public address gets 403 before its request is read (a router that
+forwards the port shows its public side as the source, so a forwarded port stays closed), and the client will not
+*connect to* one — an IP literal is rejected up front, and a DNS name is used only through the LAN addresses it
+resolves to (no LAN address → error; no redirects; no system proxy). "LAN" means a private network, not a trusted one.
+
+## Turn it on and pair
+
+1. On both machines: Settings → **SLink** → enable, and give each a name. (`PUT /api/sen-link/settings` with
+   `{"enabled": true, "name": "Benji's SenClaw"}`.) This opens the **LAN listener**, port `18791` by default
+   (`listenPort`, bound to `listenHost`, `0.0.0.0` by default). Nothing else about the daemon is exposed: the listener
+   serves `GET /.well-known/agent-card.json`, `POST /a2a` and `POST /a2a/pair`, and nothing more — no `/api`, no MCP
+   bridge, no WebSocket gateway. `SENCLAW_UI_BIND_HOST` no longer matters for SLink.
+2. On **B**: `POST /api/sen-link/invites` → `{"code": "K7MQ2XRP", "expiresAt": …, "port": 18791, "addresses": ["192.168.1.20", …]}`
+   — a one-time code (10 minutes) and this machine's LAN addresses to type on the other side.
+3. On **A**: *Check* the address, then pair with the code.
+
+   ```
+   POST /api/sen-link/probe        {"addr": "192.168.1.20"}                          # where does it land, is it a SLink?
+   POST /api/sen-link/peers/pair   {"addr": "192.168.1.20", "code": "K7MQ2XRP"}
+   ```
+
+### Typing the address
+
+`addr` is `host[:port]` — port `18791` if omitted:
+
+| Form | Example |
+|---|---|
+| IPv4 | `192.168.1.20`, `192.168.1.20:18791` |
+| IPv6 in brackets | `[fd00::5]:18791` (scope ids such as `fe80::1%en0` are not supported: use the IPv4 address or a name) |
+| A name | `mac-mini.local`, `nas.lan`, `mac-mini`, a name from `/etc/hosts` or your DNS |
+| Tailscale | `100.101.102.103`, `macbook` or `macbook.<tailnet>.ts.net` (MagicDNS) |
+
+A pasted `http://host:port/` is accepted. A name is judged by what it resolves to, not by how it looks: a public name
+that points into `192.168.x.x` works; any name that resolves only outside the LAN is refused. `.local` names go through
+the operating system's resolver (built in on macOS; Linux needs `nss-mdns`).
+
+The address is stored **as typed**, so a name keeps following DNS when the machine's IP changes; an IP literal does not
+(re-pair, or type the name).
+
+`probe` answers `{ok, code, addr, resolved, reachable, hidden, card, error}` with `code` one of `ok`, `bad_address`,
+`unresolved`, `not_lan`, `unreachable`, `not_slink`, and an `error` sentence for a person. `card` carries the peer's
+name, id and whether it has a live invite; `hidden` means the port is a SLink that does not show its card
+(`discoverable: false`) — it can still be paired by typed address.
+
+### What pairing records
 
 Pairing exchanges two random tokens: each side stores the token it presents to the other, and only the SHA-256 of the
-token it accepts (`~/.senclaw/sen-link/peers.json`, mode 0600). A daemon without a `publicUrl` still answers `/a2a`
-to anyone who can reach it with a valid peer token; its peers just have no URL to send it tasks with.
+token it accepts (`~/.senclaw/sen-link/peers.json`, mode 0600). The side that issued the invite learns the other's
+address from the connection itself (the source address plus the port the caller says it listens on), so it can send
+tasks back with nothing typed. Each daemon has an id (`~/.senclaw/sen-link/identity.json`); pairing again with the
+same daemon replaces its record, keeping the peer id its tasks are filed under and the trust you gave it.
 
-### Through the hub (NAT, no public URL)
-
-When neither daemon can reach the other, pair through a SenClaw hub (`senclaw-hub-connector`):
-
-1. On both: set `"hubUrl": "https://<your hub>"` in sen-link settings (no `publicUrl` needed).
-2. On **B**: `POST /api/sen-link/invites` → the reply also carries `"connect": "senlink:…"`.
-3. On **A**: `POST /api/sen-link/peers/pair` with `{"connect": "senlink:…"}`.
-
-Each hub invite mints **its own hub channel** and a fresh 32-byte key; the connection string carries the hub URL,
-channel id, channel access token, key and invite code — hand it over like a password. The hub admits at most two
-connections per channel, so a channel is exactly one pair of daemons, and frames on it are AES-GCM encrypted with the
-pair's key: the hub relays ciphertext only. Requests on the channel go through the same code as `/a2a` and
-`/a2a/pair`, so peer tokens are checked exactly as over HTTP, and a peer's token is accepted only on that peer's own
-channel. A peer paired this way has no URL and is always called through its channel (`viaRelay: true`).
-
-Each request carries the sender's timestamp; one outside a 2-minute window, or an id already served within it, is
-refused — a hub replaying captured frames cannot re-run a task. Answers over 5 MiB are refused with 413 (the hub drops
-connections sending frames over 8 MiB), and a channel serves at most 8 requests at once. If a pairing reply is lost,
-retrying the same connection string re-issues the token instead of failing. An invite code alone never claims a hub
-invite over HTTP, and a hub that cannot be reached leaves a direct invite (with a `warning`).
-
-Both daemons keep their peers' channels open and reconnect on their own (2 s → 60 s backoff). Every 30 s — and right
-after removing a peer or saving settings — the open channels are reconciled with the store: an expired invite, a
-removed peer or a disabled sen-link closes its socket. Hub versions before the write-deadline fix (every frame relayed
-more than 10 s after the hub's last ping failed with "i/o timeout") drop such links every few seconds; update the hub.
+> **The link is plain HTTP with bearer tokens.** Anyone who can watch traffic on your network segment can read the
+> tasks and the tokens. That is acceptable on a home network or inside Tailscale (which encrypts), and not on a
+> coffee-shop Wi-Fi. Turn SLink off when you do not need it; with it off nothing listens. A sealed channel is the next
+> piece of work.
 
 ## Trust
 
@@ -60,13 +93,15 @@ control, and prefer Triage — a person reads the task before moving it to Ready
 
 | Route (on the sending daemon) | A2A call |
 |---|---|
-| `POST /api/sen-link/peers/pair` `{url, code}` or `{connect}` | pairing (direct, or through a hub invite) |
+| `POST /api/sen-link/probe` `{addr}` | — (checks an address) |
+| `POST /api/sen-link/peers/pair` `{addr, code}` | pairing |
 | `POST /api/sen-link/peers/:id/messages` `{text, taskId?, worktree?}` | `SendMessage` (new task, or follow-up when `taskId` is set) |
 | `GET /api/sen-link/peers/:id/tasks` | `ListTasks` |
 | `GET /api/sen-link/peers/:id/tasks/:taskId` | `GetTask` |
 | `POST /api/sen-link/peers/:id/tasks/:taskId/cancel` | `CancelTask` (queued tasks only) |
 
-Also: `GET /api/sen-link/status`, `GET /api/sen-link/peers`, `PATCH/DELETE /api/sen-link/peers/:id`.
+Also: `GET /api/sen-link/status` (settings, this daemon's id and LAN addresses, where it listens and why not, peers
+dropped by the upgrade), `GET /api/sen-link/peers`, `PATCH/DELETE /api/sen-link/peers/:id`.
 
 ### From an agent (`senclaw-link` tools)
 
@@ -85,15 +120,19 @@ To be woken when a delegated task finishes, arm a watch instead of polling in th
 
 The tools are loopback calls to `/api/sen-link/*` (registered as a daemon-wide built-in, so a watch can probe them).
 
-## Wire surface (on the receiving daemon)
+## Wire surface (on the receiving daemon, LAN listener only)
 
 | Path | Auth | |
 |---|---|---|
-| `GET /.well-known/agent-card.json` | none | Agent Card (JSON-RPC interface at `<publicUrl>/a2a`, bearer scheme) |
+| `GET /.well-known/agent-card.json` | none | Agent Card; `supportedInterfaces` names the address the caller used. 404 while SLink is off or `discoverable` is false |
 | `POST /a2a` | peer bearer token | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted) |
-| `POST /a2a/pair` | one-time invite code | pairing handshake |
+| `POST /a2a/pair` | one-time invite code | pairing handshake: `{code, name, port, daemonId, token}` |
 
-All three answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
+`/a2a` and `/a2a/pair` answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
+
+The Agent Card says who is behind it in an A2A extension, `capabilities.extensions[]` with uri
+`https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable}`; that is how `probe` recognises a
+SLink and tells it from any other web server.
 
 ### Task mapping
 
@@ -111,14 +150,31 @@ sees cards it created (card tenant `sen-link:<peer-id>`).
 
 | Key | Default | |
 |---|---|---|
-| `enabled` | false | |
+| `enabled` | false | opens the LAN listener |
 | `name`, `description` | `SenClaw`, … | shown in the Agent Card and to peers |
-| `publicUrl` | — | how peers reach this daemon |
-| `boardTitle` | `sen-link` | board incoming tasks land on (created on first use) |
+| `listenHost` | `0.0.0.0` | an IP address; which interface(s) the listener binds |
+| `listenPort` | `18791` | |
+| `discoverable` | true | false: no Agent Card, so probes and scans find nothing; pairing by typed address still works |
+| `boardTitle` | `SLink` | board incoming tasks land on (created on first use); an empty value or the old default `sen-link` means `SLink` |
 | `workspaceDir` | — | that board's workspace dir (where workers run) |
 | `defaultAssignee` | — | when the peer has no assignee of its own |
-| `hubUrl` | — | SenClaw hub for peers behind NAT; when set, every invite mints a hub channel |
+
+The listener follows these settings without a restart: saving them opens, moves or closes the socket. If the port is
+taken, `GET /api/sen-link/status` reports `listenError` and the listener retries every ten seconds.
+
+## Upgrading from the hub build (0.2.0)
+
+- `publicUrl` and `hubUrl` are gone; old values in `config.json` are ignored and dropped on the next save. Peers no
+  longer need anything to be reachable but the LAN listener — `SENCLAW_UI_BIND_HOST` can go back to loopback.
+- **Peers that only a hub reached are removed** the first time the new daemon starts; `peers.json` is copied to
+  `peers.json.bak-<unix time>` first, and `GET /api/sen-link/status` lists their names under `migrated`. Pair them again.
+- **Peers paired directly keep working in one direction at most.** Their stored address is the other side's old UI port
+  (`…:18788`), and the new daemon no longer serves `/a2a` there. They are marked `legacy` and should be paired again
+  over the LAN (pairing the same daemon replaces the record and keeps its tasks and trust).
+- The kanban board `sen-link` is renamed to `SLink` in place, cards and all. New cards carry the label `SLink`; old ones
+  keep theirs.
 
 ## Not yet
 
-Streaming (`SendStreamingMessage`), push notifications, and shared boards/memory sync.
+Finding peers without typing an address (mDNS, a network scan), a sealed channel, streaming
+(`SendStreamingMessage`), push notifications, and shared boards/memory sync.

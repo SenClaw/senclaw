@@ -3472,9 +3472,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // Auth middleware is layered *after* the kanban nest so it covers
         // those routes too (a layer added before a nest would not wrap it).
         // The `/mcp/{core|kanban}` HTTP bridge (external agents, app workers)
-        // and sen-link (A2A at `/a2a`, the Agent Card, `/api/sen-link/*`).
-        // Merged before the auth layer so their `/api` routes are gated; the
-        // others check their own tokens.
+        // and SLink's management API (`/api/sen-link/*`). Merged before the auth
+        // layer so their `/api` routes are gated; the MCP bridge checks its own
+        // token. The A2A endpoints are not here: see `sen_link::listener`.
         let cowork_router = axum::Router::new()
             .merge(mcp::http_bridge::router(mcp::http_bridge::BridgeState::new(
                 Arc::new(cfg.clone()),
@@ -3486,9 +3486,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     &cfg,
                     std::sync::Arc::clone(&kanban_state.db),
                 ));
-                // Hub channels of relay peers and live hub invites.
-                sen_link::relay::start(&link_state);
-                sen_link::router(link_state)
+                // SLink's A2A surface listens on its own LAN port while enabled;
+                // only the management API rides the UI server.
+                sen_link::listener::start(&link_state);
+                sen_link::api_router(link_state)
             });
         let ui_router = gateway::ui_server::build_router(ui_state)
             .nest(

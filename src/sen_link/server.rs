@@ -1,19 +1,22 @@
 //! Inbound A2A: the Agent Card, the JSON-RPC endpoint peers call, and the
-//! pairing handshake. All three answer 404 while sen-link is disabled.
-//! These paths live outside `/api`, so the daemon's API token gate does not
-//! apply; `/a2a` authenticates the peer token itself and `/a2a/pair` requires
-//! a live one-time invite code.
+//! pairing handshake. Only the LAN listener serves them (`listener.rs`), and
+//! all three answer 404 while SLink is disabled. These paths live outside
+//! `/api`, so the daemon's API token gate does not apply; `/a2a`
+//! authenticates the peer token itself and `/a2a/pair` requires a live
+//! one-time invite code.
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{ConnectInfo, State};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
 use super::a2a::{self, TaskState};
-use super::store::{random_token, sha256_hex, Peer};
+use super::lan::{self, Endpoint, Host};
+use super::store::{clean_daemon_id, random_token, sha256_hex, Peer};
 use super::{tasks, LinkState};
 use crate::kanban::api::now;
 
@@ -21,16 +24,26 @@ fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
-pub async fn agent_card(State(st): State<Arc<LinkState>>) -> Response {
+/// The Agent Card. A daemon that is not discoverable answers like one that is
+/// off, so a probe or a scan finds nothing; pairing by typed address still works.
+pub async fn agent_card(State(st): State<Arc<LinkState>>, headers: HeaderMap) -> Response {
     let s = st.settings();
-    if !s.enabled {
+    if !s.enabled || !s.discoverable {
         return not_found();
     }
+    // The address the caller used is the one that works for the caller.
+    let url = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| lan::parse_endpoint(h, s.listen_port).ok())
+        .map(|e| e.url(""));
     Json(a2a::agent_card(&a2a::AgentCardInfo {
         name: &s.name,
         description: &s.description,
-        url: s.public_url.as_deref(),
+        url: url.as_deref(),
         version: env!("CARGO_PKG_VERSION"),
+        daemon_id: st.store.daemon_id(),
+        pairable: st.store.has_live_invite(now()),
     }))
     .into_response()
 }
@@ -41,72 +54,68 @@ pub async fn agent_card(State(st): State<Arc<LinkState>>) -> Response {
 pub struct PairRequest {
     pub code: String,
     pub name: String,
-    /// The caller's base URL, so we can send it tasks too.
+    /// Port of the caller's own SLink listener. With the address this call
+    /// came from it tells us where to send the caller tasks.
     #[serde(default)]
-    pub url: Option<String>,
+    pub port: Option<u16>,
+    /// The caller's id (`PeerStore::daemon_id`).
+    #[serde(default)]
+    pub daemon_id: Option<String>,
     /// Token we present when calling the caller.
     #[serde(default)]
     pub token: Option<String>,
 }
 
-/// Redeem an invite and record the caller as a peer. `channel` is the hub
-/// channel the request arrived on (relay pairing): only that channel's invite
-/// matches, and the new peer keeps the channel. Shared by HTTP and the relay.
-pub fn pair_with(st: &LinkState, req: PairRequest, channel: Option<&str>) -> Result<Value, (StatusCode, String)> {
+fn internal_err(e: impl std::fmt::Display) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+/// Redeem an invite and record the caller as a peer. `source` is the address
+/// the request came from; it is the peer's address unless it is paired already.
+pub fn pair_with(st: &LinkState, req: PairRequest, source: IpAddr) -> Result<Value, (StatusCode, String)> {
     let s = st.settings();
-    let invite = match st.store.redeem_invite(&req.code, now(), channel) {
-        Ok(Some(i)) => i,
-        Ok(None) => {
-            // A retry after a lost reply over the hub: the invite is spent but
-            // the same caller (same channel, same token it gave us) already
-            // became a peer. Re-issue its token instead of refusing, or the
-            // two sides would disagree about being paired.
-            if let (Some(ch), Some(tok)) = (channel, req.token.as_deref().filter(|t| !t.is_empty())) {
-                let existing = st.store.peers().into_iter().find(|p| {
-                    p.relay.as_ref().is_some_and(|r| r.channel_id == ch) && p.outbound_token.as_deref() == Some(tok)
-                });
-                if let Some(p) = existing {
-                    let theirs = random_token();
-                    let h = sha256_hex(&theirs);
-                    st.store
-                        .update(&p.id, |p| p.inbound_token_hash = h)
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                    return Ok(json!({ "peerId": p.id, "name": s.name, "token": theirs, "url": s.public_url }));
-                }
-            }
-            return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into()));
-        }
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    };
+    match st.store.redeem_invite(&req.code, now()) {
+        Ok(true) => {}
+        Ok(false) => return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into())),
+        Err(e) => return Err(internal_err(e)),
+    }
     let theirs = random_token();
+    let daemon_id = req.daemon_id.as_deref().and_then(clean_daemon_id);
+    // The same daemon pairing again replaces its record (and keeps the id its
+    // tasks are filed under, and what we let it do), instead of adding a twin.
+    let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
+    let name: String = req.name.trim().chars().take(80).collect();
     let peer = Peer {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: req.name.trim().chars().take(80).collect(),
-        url: req.url.filter(|u| u.starts_with("http://") || u.starts_with("https://")),
+        id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
+        name: if name.is_empty() { "peer".into() } else { name },
+        addr: req
+            .port
+            .filter(|p| *p != 0)
+            .map(|port| Endpoint { host: Host::Ip(source.to_canonical()), port }.to_string()),
         outbound_token: req.token.filter(|t| !t.is_empty()),
         inbound_token_hash: sha256_hex(&theirs),
-        auto_run: false,
-        assignee: None,
-        relay: invite.relay,
+        auto_run: known.as_ref().is_some_and(|k| k.auto_run),
+        assignee: known.and_then(|k| k.assignee),
+        daemon_id,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let id = peer.id.clone();
-    st.store.upsert(peer).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    tracing::info!(peer = %id, relay = channel.is_some(), "[sen-link] paired by invite");
-    Ok(json!({ "peerId": id, "name": s.name, "token": theirs, "url": s.public_url }))
+    st.store.upsert(peer).map_err(internal_err)?;
+    tracing::info!(peer = %id, "[slink] paired by invite");
+    Ok(json!({ "peerId": id, "name": s.name, "token": theirs, "daemonId": st.store.daemon_id() }))
 }
 
-pub async fn pair(State(st): State<Arc<LinkState>>, Json(req): Json<PairRequest>) -> Response {
+pub async fn pair(State(st): State<Arc<LinkState>>, ConnectInfo(from): ConnectInfo<SocketAddr>, Json(req): Json<PairRequest>) -> Response {
     if !st.settings().enabled {
         return not_found();
     }
-    match pair_with(&st, req, None) {
+    match pair_with(&st, req, from.ip()) {
         Ok(v) => Json(v).into_response(),
         Err((code, e)) => (code, Json(json!({ "error": e }))).into_response(),
     }
 }
 
-/// Answer one JSON-RPC request body for `peer`. Shared by HTTP and the relay.
+/// Answer one JSON-RPC request body for `peer`.
 pub fn rpc_reply(st: &LinkState, peer: &Peer, req: &Value) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let Some(method) = req["method"].as_str() else {
@@ -174,7 +183,7 @@ pub fn handle(st: &LinkState, peer: &Peer, method: &str, params: &Value) -> RpcR
                 return Ok(json!({ "task": tasks::task_for(db, &card).map_err(internal)? }));
             }
             let s = st.settings();
-            let board = tasks::ensure_board(db, &s.board_title, s.workspace_dir.as_deref(), now()).map_err(internal)?;
+            let board = tasks::ensure_board(db, s.effective_board_title(), s.workspace_dir.as_deref(), now()).map_err(internal)?;
             let meta = &msg["metadata"];
             // Who works on it is the operator's choice (per peer, then the
             // default) — never the remote peer's.
@@ -203,10 +212,10 @@ pub fn handle(st: &LinkState, peer: &Peer, method: &str, params: &Value) -> RpcR
         }
         "ListTasks" => {
             let s = st.settings();
-            let Some(board) = db.list_boards().map_err(internal)?.into_iter().find(|b| b.title == s.board_title) else {
+            let Some((board, _)) = tasks::find_board(db, s.effective_board_title()).map_err(internal)? else {
                 return Ok(json!({ "tasks": [], "nextPageToken": "", "pageSize": 0, "totalSize": 0 }));
             };
-            let cards = db.list_cards(board.id, None, None, Some(&tasks::tenant_of(&peer.id))).map_err(internal)?;
+            let cards = db.list_cards(board, None, None, Some(&tasks::tenant_of(&peer.id))).map_err(internal)?;
             let list: Vec<Value> = cards.iter().filter_map(|c| tasks::task_for(db, c).ok()).collect();
             let n = list.len();
             Ok(json!({ "tasks": list, "nextPageToken": "", "pageSize": n, "totalSize": n }))
@@ -255,12 +264,12 @@ mod tests {
         Peer {
             id: id.into(),
             name: format!("peer-{id}"),
-            url: None,
+            addr: None,
             outbound_token: None,
             inbound_token_hash: String::new(),
             auto_run,
             assignee: Some("claude-code".into()),
-            relay: None,
+            daemon_id: None,
             created_at: String::new(),
         }
     }
@@ -320,22 +329,105 @@ mod tests {
         assert_eq!(st.kanban.card_role(tid).unwrap().as_deref(), Some("ready"));
     }
 
+    fn req(code: &str, port: Option<u16>, daemon_id: Option<&str>) -> PairRequest {
+        PairRequest { code: code.into(), name: "  Mac mini  ".into(), port, daemon_id: daemon_id.map(str::to_string), token: Some("slk_theirs".into()) }
+    }
+
     #[test]
-    fn a_hub_pair_retry_after_a_lost_reply_reissues_the_token() {
+    fn pairing_records_the_caller_at_the_address_it_came_from() {
         let (_t, st) = state();
-        let relay = crate::sen_link::store::RelayInfo { hub_url: "http://h".into(), channel_id: "ch".into(), access_token: "t".into(), key: "k".into() };
-        let (code, _) = st.store.create_invite(now(), Some(relay)).unwrap();
-        let req = || PairRequest { code: code.clone(), name: "A".into(), url: None, token: Some("slk_a".into()) };
-        let first = pair_with(&st, req(), Some("ch")).unwrap();
-        let again = pair_with(&st, req(), Some("ch")).unwrap();
-        assert_eq!(first["peerId"], again["peerId"]);
-        assert_ne!(first["token"], again["token"]);
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        let from: IpAddr = "192.168.1.9".parse().unwrap();
+        let reply = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), from).unwrap();
+
+        let p = st.store.get(reply["peerId"].as_str().unwrap()).unwrap();
+        assert_eq!(p.addr.as_deref(), Some("192.168.1.9:18791"));
+        assert_eq!(p.name, "Mac mini");
+        assert_eq!(p.daemon_id.as_deref(), Some("6f1c-0a"));
+        assert_eq!(p.outbound_token.as_deref(), Some("slk_theirs"));
+        assert!(!p.auto_run, "a new peer waits in Triage until a person trusts it");
+        assert_eq!(reply["daemonId"], st.store.daemon_id());
+        // The token we handed back is the one that now opens /a2a for that peer.
+        assert_eq!(st.store.by_inbound_token(reply["token"].as_str().unwrap()).unwrap().id, p.id);
+        // One code, one pairing.
+        assert_eq!(pair_with(&st, req(&code, Some(18791), None), from).unwrap_err().0, StatusCode::FORBIDDEN);
         assert_eq!(st.store.peers().len(), 1);
-        // Only the newest token works; a stranger with another token is refused.
-        assert!(st.store.by_inbound_token(again["token"].as_str().unwrap()).is_some());
-        assert!(st.store.by_inbound_token(first["token"].as_str().unwrap()).is_none());
-        let other = PairRequest { code: code.clone(), name: "X".into(), url: None, token: Some("slk_x".into()) };
-        assert_eq!(pair_with(&st, other, Some("ch")).unwrap_err().0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn the_source_address_is_read_as_the_plain_ip_and_a_missing_port_leaves_no_address() {
+        let (_t, st) = state();
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        let mapped: IpAddr = "::ffff:192.168.1.9".parse().unwrap();
+        let r = pair_with(&st, req(&code, Some(7000), None), mapped).unwrap();
+        assert_eq!(st.store.get(r["peerId"].as_str().unwrap()).unwrap().addr.as_deref(), Some("192.168.1.9:7000"));
+
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        let r = pair_with(&st, req(&code, None, Some("<b>")), mapped).unwrap();
+        let p = st.store.get(r["peerId"].as_str().unwrap()).unwrap();
+        assert_eq!((p.addr, p.daemon_id), (None, None), "no port: nowhere to send; unprintable id: dropped");
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        assert!(pair_with(&st, req(&code, Some(0), None), mapped).unwrap()["peerId"].is_string());
+    }
+
+    #[test]
+    fn a_wrong_or_stale_code_pairs_nobody() {
+        let (_t, st) = state();
+        let from: IpAddr = "10.0.0.2".parse().unwrap();
+        assert_eq!(pair_with(&st, req("NOPE2345", Some(1), None), from).unwrap_err().0, StatusCode::FORBIDDEN);
+        assert!(st.store.peers().is_empty());
+    }
+
+    #[test]
+    fn pairing_again_replaces_the_record_and_keeps_what_the_operator_allowed() {
+        let (_t, st) = state();
+        let from: IpAddr = "192.168.1.9".parse().unwrap();
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        let first = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), from).unwrap();
+        let id = first["peerId"].as_str().unwrap().to_string();
+        st.store.update(&id, |p| {
+            p.auto_run = true;
+            p.assignee = Some("claude-code".into());
+        })
+        .unwrap();
+
+        let new_ip: IpAddr = "192.168.1.77".parse().unwrap();
+        let (code, _) = st.store.create_invite(now()).unwrap();
+        let again = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), new_ip).unwrap();
+        assert_eq!(again["peerId"], first["peerId"]);
+        assert_ne!(again["token"], first["token"]);
+        let peers = st.store.peers();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].addr.as_deref(), Some("192.168.1.77:18791"));
+        assert!(peers[0].auto_run && peers[0].assignee.as_deref() == Some("claude-code"));
+        assert!(st.store.by_inbound_token(first["token"].as_str().unwrap()).is_none(), "the old token stops working");
+    }
+
+    /// An install from before the rename: board and setting both say `sen-link`.
+    #[test]
+    fn an_old_board_keeps_working_and_is_renamed_by_the_next_task() {
+        let t = tempfile::tempdir().unwrap();
+        let cfg = t.path().join("config.json");
+        std::fs::write(&cfg, r#"{"senLink": {"enabled": true, "boardTitle": "sen-link"}}"#).unwrap();
+        let st = LinkState::new_at(
+            cfg,
+            Arc::new(crate::kanban::db::Db::open(&t.path().join("kanban.db")).unwrap()),
+            PeerStore::new(t.path().join("peers.json")),
+        );
+        let a = peer("a", false);
+        let old = tasks::ensure_board(&st.kanban, "sen-link", None, 1).unwrap();
+        let card = tasks::create(&st.kanban, old, &tasks::NewTask { peer_id: "a", peer_name: "A", text: "Old task", assignee: None, auto_run: false, worktree: false }, 2).unwrap();
+
+        // The old task is still listed, before anything renames the board.
+        let listed = handle(&st, &a, "ListTasks", &json!({})).unwrap();
+        assert_eq!((listed["totalSize"].as_u64(), listed["tasks"][0]["id"].as_str()), (Some(1), Some(card.id.to_string().as_str())));
+
+        // A new task lands on the same board, which now carries the new name.
+        let r = handle(&st, &a, "SendMessage", &json!({ "message": a2a::user_message("New task", None, json!({})) })).unwrap();
+        assert_eq!(r["task"]["status"]["state"], "TASK_STATE_SUBMITTED");
+        let boards = st.kanban.list_boards().unwrap();
+        assert_eq!(boards.iter().map(|b| (b.title.as_str(), b.card_count)).collect::<Vec<_>>(), vec![("SLink", 2)]);
+        assert_eq!(handle(&st, &a, "ListTasks", &json!({})).unwrap()["totalSize"], 2);
     }
 
     #[test]

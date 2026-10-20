@@ -1,11 +1,15 @@
-//! A2A tasks backed by kanban cards. Incoming tasks land on the sen-link
-//! board, owned by the sending peer through the card's tenant
-//! (`sen-link:<peer-id>`); a peer only ever sees its own cards.
+//! A2A tasks backed by kanban cards. Incoming tasks land on the SLink board,
+//! owned by the sending peer through the card's tenant (`sen-link:<peer-id>` —
+//! the tenant keeps the code name, it is data that old cards already carry);
+//! a peer only ever sees its own cards.
 
 use serde_json::{json, Value};
 
 use super::a2a::TaskState;
+use super::settings::{DEFAULT_BOARD_TITLE, LEGACY_BOARD_TITLE};
 use crate::kanban::db::{Card, Comment, Db};
+
+const BOARD_DESCRIPTION: &str = "Tasks received from SLink peers (A2A).";
 
 pub fn tenant_of(peer_id: &str) -> String {
     format!("sen-link:{peer_id}")
@@ -74,12 +78,27 @@ pub fn task_for(db: &Db, card: &Card) -> anyhow::Result<Value> {
     Ok(task_json(card, &role, &comments))
 }
 
-/// The board incoming tasks land on; created with the default workflow on first use.
+/// The board incoming tasks land on, with the title it carries now. For the
+/// default title a board still named after the old code name counts too — it
+/// is the same board from before the display name changed.
+pub fn find_board(db: &Db, title: &str) -> anyhow::Result<Option<(i64, String)>> {
+    let boards = db.list_boards()?;
+    let wanted = |t: &str| boards.iter().find(|b| b.title == t).map(|b| (b.id, b.title.clone()));
+    Ok(wanted(title).or_else(|| (title == DEFAULT_BOARD_TITLE).then(|| wanted(LEGACY_BOARD_TITLE)).flatten()))
+}
+
+/// The board incoming tasks land on; created with the default workflow on first
+/// use. A board under the old code name is renamed in place, keeping its cards.
 pub fn ensure_board(db: &Db, title: &str, workspace_dir: Option<&str>, now: i64) -> anyhow::Result<i64> {
-    if let Some(b) = db.list_boards()?.into_iter().find(|b| b.title == title) {
-        return Ok(b.id);
+    match find_board(db, title)? {
+        Some((id, current)) => {
+            if current != title {
+                db.rename_board(id, title, BOARD_DESCRIPTION, now)?;
+            }
+            Ok(id)
+        }
+        None => db.create_board(title, BOARD_DESCRIPTION, true, workspace_dir, now),
     }
-    db.create_board(title, "Tasks received from sen-link peers (A2A).", true, workspace_dir, now)
 }
 
 pub struct NewTask<'a> {
@@ -98,10 +117,10 @@ pub fn create(db: &Db, board_id: i64, t: &NewTask<'_>, now: i64) -> anyhow::Resu
     let column = db
         .column_by_role(board_id, role)?
         .ok_or_else(|| anyhow::anyhow!("board {board_id} has no `{role}` column"))?;
-    let first = t.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task from sen-link").trim();
+    let first = t.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("Task from SLink").trim();
     let title: String = first.chars().take(120).collect();
-    let description = format!("{}\n\n— from sen-link peer **{}**", t.text.trim(), t.peer_name);
-    let mut labels = vec!["sen-link"];
+    let description = format!("{}\n\n— from SLink peer **{}**", t.text.trim(), t.peer_name);
+    let mut labels = vec!["SLink"];
     if t.worktree {
         labels.push("worktree");
     }
@@ -148,13 +167,15 @@ mod tests {
     #[test]
     fn incoming_tasks_wait_in_triage_unless_the_peer_may_auto_run() {
         let (_t, db) = db();
-        let board = ensure_board(&db, "sen-link", None, 1).unwrap();
-        assert_eq!(ensure_board(&db, "sen-link", None, 2).unwrap(), board);
-        let mk = |auto_run| NewTask { peer_id: "p1", peer_name: "B", text: "Fix the login bug\nmore", assignee: Some("claude-code"), auto_run, worktree: true };
+        let board = ensure_board(&db, "SLink", None, 1).unwrap();
+        assert_eq!(ensure_board(&db, "SLink", None, 2).unwrap(), board);
+        let mk =|auto_run| NewTask { peer_id: "p1", peer_name: "B", text: "Fix the login bug\nmore", assignee: Some("claude-code"), auto_run, worktree: true };
         let c = create(&db, board, &mk(false), 3).unwrap();
         assert_eq!(c.title, "Fix the login bug");
         assert_eq!(db.card_role(c.id).unwrap().as_deref(), Some("triage"));
         assert!(c.labels.as_deref().unwrap().contains("worktree"));
+        assert!(c.labels.as_deref().unwrap().contains("SLink"));
+        assert!(c.description.contains("from SLink peer **B**"));
         let r = create(&db, board, &mk(true), 3).unwrap();
         assert_eq!(db.card_role(r.id).unwrap().as_deref(), Some("ready"));
 
@@ -163,5 +184,24 @@ mod tests {
         let task = task_for(&db, &c).unwrap();
         assert_eq!(task["status"]["state"], "TASK_STATE_SUBMITTED");
         assert_eq!(task["id"], c.id.to_string());
+    }
+
+    #[test]
+    fn a_board_under_the_old_code_name_is_renamed_in_place_and_keeps_its_cards() {
+        let (_t, db) = db();
+        let old = ensure_board(&db, "sen-link", None, 1).unwrap();
+        let card = create(&db, old, &NewTask { peer_id: "p1", peer_name: "B", text: "Do X", assignee: None, auto_run: false, worktree: false }, 2).unwrap();
+
+        // Asked for by the default title, the old board is found and renamed, not duplicated.
+        assert_eq!(find_board(&db, "SLink").unwrap(), Some((old, "sen-link".to_string())));
+        assert_eq!(ensure_board(&db, "SLink", None, 3).unwrap(), old);
+        let boards = db.list_boards().unwrap();
+        assert_eq!(boards.len(), 1);
+        assert_eq!(boards[0].title, "SLink");
+        assert!(owned_card(&db, "p1", &card.id.to_string()).is_some(), "its cards are still there");
+
+        // A custom title never borrows the old board, and a missing board is not an error.
+        assert_eq!(find_board(&db, "Mine").unwrap(), None);
+        assert_ne!(ensure_board(&db, "Mine", None, 4).unwrap(), old);
     }
 }

@@ -128,6 +128,9 @@ qrcode = "0.14"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 rand = "0.8"
 
+# This machine's own LAN addresses (SLink shows them so the other side can type one)
+if-addrs = "0.15"
+
 tokio-stream = "0.1"
 portable-pty = "0.8"
 

@@ -91,11 +91,41 @@ pub fn user_message(text: &str, task_id: Option<&str>, metadata: Value) -> Value
     m
 }
 
+/// Extension URI under which the Agent Card carries what pairing needs to
+/// know about this daemon (`params.daemonId`, `params.pairable`).
+pub const SLINK_EXTENSION_URI: &str = "https://github.com/SenClaw/senclaw/sen-link/v1";
+
 pub struct AgentCardInfo<'a> {
     pub name: &'a str,
     pub description: &'a str,
     pub url: Option<&'a str>,
     pub version: &'a str,
+    /// This daemon's id (`PeerStore::daemon_id`).
+    pub daemon_id: &'a str,
+    /// A live invite exists, so a peer that has the code can pair now.
+    pub pairable: bool,
+}
+
+/// What an Agent Card says about the SLink behind it, or `None` when it is
+/// not a SenClaw card (a probe or scan hit some other A2A agent or web page).
+pub struct CardIdentity {
+    pub name: String,
+    pub version: String,
+    pub daemon_id: String,
+    pub pairable: bool,
+}
+
+pub fn card_identity(card: &Value) -> Option<CardIdentity> {
+    if card["provider"]["organization"].as_str() != Some("SenClaw") {
+        return None;
+    }
+    let ext = card["capabilities"]["extensions"].as_array()?.iter().find(|e| e["uri"] == SLINK_EXTENSION_URI)?;
+    Some(CardIdentity {
+        name: card["name"].as_str()?.chars().take(80).collect(),
+        version: card["version"].as_str().unwrap_or_default().chars().take(40).collect(),
+        daemon_id: super::store::clean_daemon_id(ext["params"]["daemonId"].as_str()?)?,
+        pairable: ext["params"]["pairable"].as_bool().unwrap_or(false),
+    })
 }
 
 /// This daemon's Agent Card (`/.well-known/agent-card.json`).
@@ -116,7 +146,16 @@ pub fn agent_card(i: &AgentCardInfo<'_>) -> Value {
         "version": i.version,
         "supportedInterfaces": interfaces,
         "provider": { "organization": "SenClaw", "url": "https://github.com/SenClaw" },
-        "capabilities": { "streaming": false, "pushNotifications": false },
+        "capabilities": {
+            "streaming": false,
+            "pushNotifications": false,
+            "extensions": [{
+                "uri": SLINK_EXTENSION_URI,
+                "description": "SLink: a SenClaw reachable on the local network",
+                "required": false,
+                "params": { "daemonId": i.daemon_id, "pairable": i.pairable },
+            }],
+        },
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
         "skills": [{
@@ -149,11 +188,35 @@ mod tests {
         assert_eq!(message_text(&user_message("hi", Some("7"), json!({}))), "hi");
     }
 
+    fn info<'a>(url: Option<&'a str>, pairable: bool) -> AgentCardInfo<'a> {
+        AgentCardInfo { name: "A", description: "d", url, version: "0", daemon_id: "6f1c-0a", pairable }
+    }
+
     #[test]
     fn the_card_advertises_jsonrpc_only_when_reachable() {
-        let c = agent_card(&AgentCardInfo { name: "A", description: "d", url: Some("http://h:1/"), version: "0" });
+        let c = agent_card(&info(Some("http://h:1/"), false));
         assert_eq!(c["supportedInterfaces"][0]["url"], "http://h:1/a2a");
-        let c = agent_card(&AgentCardInfo { name: "A", description: "d", url: None, version: "0" });
+        let c = agent_card(&info(None, false));
         assert!(c["supportedInterfaces"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_card_tells_pairing_who_it_is_and_foreign_cards_are_not_ours() {
+        let id = card_identity(&agent_card(&info(None, true))).unwrap();
+        assert_eq!((id.name.as_str(), id.daemon_id.as_str(), id.pairable), ("A", "6f1c-0a", true));
+        assert!(!card_identity(&agent_card(&info(None, false))).unwrap().pairable);
+
+        // Another A2A agent, a page that is not a card, and a SenClaw card without the extension.
+        let mut other = agent_card(&info(None, false));
+        other["provider"]["organization"] = json!("Someone");
+        assert!(card_identity(&other).is_none());
+        assert!(card_identity(&json!({ "name": "x" })).is_none());
+        let mut bare = agent_card(&info(None, false));
+        bare["capabilities"] = json!({ "streaming": false });
+        assert!(card_identity(&bare).is_none());
+        // A daemon id that is not printable is refused rather than shown.
+        let mut bad = agent_card(&info(None, false));
+        bad["capabilities"]["extensions"][0]["params"]["daemonId"] = json!("<b>x</b>");
+        assert!(card_identity(&bad).is_none());
     }
 }

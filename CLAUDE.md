@@ -1446,6 +1446,35 @@ run unaccelerated on the CPU.
 
 Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).
 
+## SLink — two SenClaws on the local network (`src/sen_link/`)
+
+A2A v1.0 over plain HTTP between two daemons on a private network; one-time invite code to pair; incoming tasks become cards on the `SLink` kanban board. The
+UI says **SLink**; the code name `sen-link` stays in every path, key and folder (`/api/sen-link/*`, `senLink`, `~/.senclaw/sen-link/`, `senclaw-link`). User guide:
+[docs/sen-link.md](docs/sen-link.md); the design and what is still to come (mDNS, a scan, a sealed channel): `plans/261020-1116-sen-link-lan-only/`.
+
+Rules for Claude:
+
+- **The A2A surface lives on its own listener and nowhere else** (`listener::router`: the Agent Card, `/a2a`, `/a2a/pair`; default `0.0.0.0:18791`, opened while
+  `senLink.enabled`). Never mount those routes on the UI router: that is how receiving a task used to need `SENCLAW_UI_BIND_HOST`, which also exposed `/api` and
+  the WS gateway. The management API (`/api/sen-link/*`) stays on the UI server behind the token.
+- **"LAN" is one function, `lan::is_lan_addr`**, applied to an inbound source (middleware, before any byte of the request is read), to an IP literal and to every
+  address a name resolves to (`LanOnly` resolver; reqwest connects to the address that was checked). `100.64.0.0/10` and `fd7a:115c:a1e0::/48` count on purpose:
+  that is Tailscale. It means a private network, not a trusted one.
+- **Every outbound call goes through `LinkState::http` (`lan::client()`).** No system proxy (a proxy would resolve the name itself), no redirects. Never build
+  another client for a peer and never `unwrap_or_default()` this one: a default client has no LAN rule and nothing fails.
+- **`Peer.addr` is stored as typed** — an IP or a DNS name — so a name keeps following DNS. The inviter learns the pairing peer's address from the source of the
+  connection plus the port in the request; there is no public URL. A scope id (`fe80::1%en0`) is refused: the URL type cannot carry it.
+- **The listener closes gracefully** (`Running::shutdown`, a cancelled token), never by dropping the task: an aborted `axum::serve` leaves its connection tasks
+  alive, and a peer's pooled connection kept answering — 404 once SLink was off — after the socket was supposed to be closed.
+- **A peer's trust is the operator's** and unchanged: tasks wait in Triage, `autoRun` is per peer, the assignee is never the peer's to pick. `autoRun` with
+  `claude-code` gives that peer a shell on this machine.
+- **The link is not encrypted yet** (bearer tokens in clear HTTP), and `/a2a/pair` has no attempt limit. Both are stated in the docs; do not describe SLink as
+  secure on an untrusted network until the sealed channel lands.
+- The board and card label were `sen-link` before the rename: `tasks::find_board` finds the old board for the default title and `ensure_board` renames it in
+  place. The card **tenant** stays `sen-link:<peer-id>` — it is data old cards carry.
+- Hub leftovers in `peers.json` (v0.2.0) are cleaned at startup with a `peers.json.bak-<time>` copy (`PeerStore::migrate_hub_leftovers`); peers paired directly
+  keep their old `…:18788` address and show as `legacy` until paired again.
+
 ## Code v2: checkpoints, repo map, LSP, worktrees, edit formats, ACP, trajectories
 
 Coding runs **inside the ordinary chat agent** (the separate code engine was
