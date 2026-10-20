@@ -1450,7 +1450,7 @@ Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).
 
 A2A v1.0 over plain HTTP between two daemons on a private network; one-time invite code to pair; incoming tasks become cards on the `SLink` kanban board. The
 UI says **SLink**; the code name `sen-link` stays in every path, key and folder (`/api/sen-link/*`, `senLink`, `~/.senclaw/sen-link/`, `senclaw-link`). User guide:
-[docs/sen-link.md](docs/sen-link.md); the design and what is still to come (mDNS, a scan, a sealed channel): `plans/261020-1116-sen-link-lan-only/`.
+[docs/sen-link.md](docs/sen-link.md); the design and what is still to come (a sealed channel): `plans/261020-1116-sen-link-lan-only/`.
 
 Rules for Claude:
 
@@ -1464,6 +1464,13 @@ Rules for Claude:
   another client for a peer and never `unwrap_or_default()` this one: a default client has no LAN rule and nothing fails.
 - **`Peer.addr` is stored as typed** — an IP or a DNS name — so a name keeps following DNS. The inviter learns the pairing peer's address from the source of the
   connection plus the port in the request; there is no public URL. A scope id (`fe80::1%en0`) is refused: the URL type cannot carry it.
+- **Finding peers is two sources into one table, `discovery::Discovery`, keyed by the other daemon's id.** mDNS (`_senclaw-link._tcp`, browsed while enabled,
+  announced only while discoverable and listening on a non-loopback address) and a scan a person starts (`scan.rs`: IPv4 only, ≤1024 addresses, 128 at a
+  time, TCP connect then Agent Card, never automatic — a sweep can trip an IDS). An entry is a claim, never an identity: the pairing code is. The mDNS
+  responder reports names lowercased in a goodbye, so the table is keyed case-insensitively (a case-sensitive key kept a daemon listed after it left).
+  `PeerView.online` and the address follow-up in `client::call` read this table; only an IP-literal address follows, and only after a *connect* failure
+  (a timeout may mean the request was delivered).
+- **Pairing by id checks the Agent Card before sending the code** (`probe::identity_at`), so an address another daemon has since taken does not receive it.
 - **The listener closes gracefully** (`Running::shutdown`, a cancelled token), never by dropping the task: an aborted `axum::serve` leaves its connection tasks
   alive, and a peer's pooled connection kept answering — 404 once SLink was off — after the socket was supposed to be closed.
 - **A peer's trust is the operator's** and unchanged: tasks wait in Triage, `autoRun` is per peer, the assignee is never the peer's to pick. `autoRun` with

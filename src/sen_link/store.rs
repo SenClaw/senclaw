@@ -57,7 +57,16 @@ pub struct PeerView {
     /// Paired by an earlier build: its address is the old UI port and it has
     /// no id, so it works only while the other side still serves `/a2a` there.
     pub legacy: bool,
+    /// Seen on the network lately (mDNS or a scan). Only a peer with an id can be.
+    pub online: bool,
     pub created_at: String,
+}
+
+impl PeerView {
+    pub fn with_online(mut self, online: bool) -> Self {
+        self.online = online;
+        self
+    }
 }
 
 impl From<&Peer> for PeerView {
@@ -70,6 +79,7 @@ impl From<&Peer> for PeerView {
             auto_run: p.auto_run,
             assignee: p.assignee.clone(),
             legacy: p.daemon_id.is_none(),
+            online: false,
             created_at: p.created_at.clone(),
         }
     }

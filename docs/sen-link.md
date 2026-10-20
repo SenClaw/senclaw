@@ -43,6 +43,44 @@ resolves to (no LAN address → error; no redirects; no system proxy). "LAN" mea
    POST /api/sen-link/peers/pair   {"addr": "192.168.1.20", "code": "K7MQ2XRP"}
    ```
 
+### Finding peers without typing
+
+While SLink is on, the daemon finds other SenClaws by itself, and a person can ask it to look harder.
+
+**Announcements (mDNS / DNS-SD).** While enabled, the daemon browses `_senclaw-link._tcp` on the LAN. While it is also
+`discoverable` and listening on a real interface (not loopback), it announces itself: the TXT record carries `v=1`,
+`id` (its daemon id), `name` and `pair` (`1` while an invite can be redeemed), and the SRV record the listener's port.
+No Bonjour or Avahi is needed. Only interfaces with a LAN address are used. Turning SLink off sends a goodbye, so the
+others drop it at once. `GET /api/sen-link/discovered` lists what has been seen:
+
+```json
+{"discovered": [{"daemonId": "3b1b316d-…", "name": "Mac A", "addrs": ["192.168.0.82"], "port": 51791,
+                 "pairable": true, "sources": ["mdns"], "seenSecsAgo": 3}],
+ "browsing": true, "advertising": true, "error": null}
+```
+
+An entry is a *claim*: anyone on the network can announce any name. What proves who is on the other end is the pairing
+code, not the list. Pair from the list with `{"daemonId": "…", "code": "…"}` instead of an address; the daemon tries each
+address the id was seen at, reads the Agent Card first and refuses to send the code to a daemon with a different id.
+
+**Scan.** `POST /api/sen-link/scan` walks subnets looking for SLinks, and only when asked — it never runs by itself,
+because a TCP sweep can set off an IDS on a managed network. By default it walks the subnets this machine is on (a
+subnet wider than a /22 is narrowed to the /24 around the address, and the reply says so). Point-to-point interfaces — a
+VPN, Tailscale — are left out, so an unaimed scan never sweeps the far end of a tunnel; type its range if you want it. `{"cidr": "192.168.1.0/24", "port": 18791}` walks a
+range of your choice instead: it must be inside the LAN and hold at most 1024 addresses. IPv4 only. Each address gets a
+TCP connect (400 ms) and, if the port is open, an Agent Card request (1.5 s); only a SenClaw card with the SLink
+extension counts. 128 at a time, so a /24 takes about a second. One scan at a time (a second start is a 409); poll
+`GET /api/sen-link/scan/:id` for `{state: running|done|canceled, scanned, total, ranges, notes, found}` and stop it with
+`POST /api/sen-link/scan/:id/cancel`. Hits join the `discovered` list for five minutes. A tailnet cannot be walked
+(~4 million addresses): type a Tailscale address or MagicDNS name instead.
+
+`discoverable: false` hides this daemon from both: no announcement, no Agent Card. It can still be paired by a typed address.
+
+macOS 15 asks once for permission to use the local network, and shows the text from the app's `Info.plist`
+(`NSLocalNetworkUsageDescription`, with `NSBonjourServices` = `_senclaw-link._tcp`); the desktop app carries both. Where
+multicast does not cross (a guest Wi-Fi that isolates clients, a VLAN, a Docker bridge), announcements find nothing —
+scan, or type the address.
+
 ### Typing the address
 
 `addr` is `host[:port]` — port `18791` if omitted:
@@ -58,8 +96,10 @@ A pasted `http://host:port/` is accepted. A name is judged by what it resolves t
 that points into `192.168.x.x` works; any name that resolves only outside the LAN is refused. `.local` names go through
 the operating system's resolver (built in on macOS; Linux needs `nss-mdns`).
 
-The address is stored **as typed**, so a name keeps following DNS when the machine's IP changes; an IP literal does not
-(re-pair, or type the name).
+The address is stored **as typed**, so a name keeps following DNS when the machine's IP changes. An IP literal that stops
+answering follows the daemon instead: if the network has seen the same daemon id elsewhere (an announcement or a scan),
+the call is repeated there and the stored address is updated. A name is never rewritten. Nothing authenticates an
+announcement yet, so until the sealed channel exists this trusts the LAN as far as the rest of the link does.
 
 `probe` answers `{ok, code, addr, resolved, reachable, hidden, card, error}` with `code` one of `ok`, `bad_address`,
 `unresolved`, `not_lan`, `unreachable`, `not_slink`, and an `error` sentence for a person. `card` carries the peer's
@@ -94,14 +134,17 @@ control, and prefer Triage — a person reads the task before moving it to Ready
 | Route (on the sending daemon) | A2A call |
 |---|---|
 | `POST /api/sen-link/probe` `{addr}` | — (checks an address) |
-| `POST /api/sen-link/peers/pair` `{addr, code}` | pairing |
+| `GET /api/sen-link/discovered` | — (what announcements and scans have shown) |
+| `POST /api/sen-link/scan` `{cidr?, port?}`, `GET /api/sen-link/scan/:id`, `POST /api/sen-link/scan/:id/cancel` | — (walks subnets) |
+| `POST /api/sen-link/peers/pair` `{addr \| daemonId, code}` | pairing |
 | `POST /api/sen-link/peers/:id/messages` `{text, taskId?, worktree?}` | `SendMessage` (new task, or follow-up when `taskId` is set) |
 | `GET /api/sen-link/peers/:id/tasks` | `ListTasks` |
 | `GET /api/sen-link/peers/:id/tasks/:taskId` | `GetTask` |
 | `POST /api/sen-link/peers/:id/tasks/:taskId/cancel` | `CancelTask` (queued tasks only) |
 
-Also: `GET /api/sen-link/status` (settings, this daemon's id and LAN addresses, where it listens and why not, peers
-dropped by the upgrade), `GET /api/sen-link/peers`, `PATCH/DELETE /api/sen-link/peers/:id`.
+Also: `GET /api/sen-link/status` (settings, this daemon's id and LAN addresses, where it listens and why not, whether it
+is browsing and announcing, peers dropped by the upgrade), `GET /api/sen-link/peers` (each with `online`: the network has
+seen it lately), `PATCH/DELETE /api/sen-link/peers/:id`.
 
 ### From an agent (`senclaw-link` tools)
 
@@ -109,7 +152,7 @@ Agents delegate without the UI through the bundled `senclaw-link` MCP server (in
 has it, and Claude Code gets it through `/mcp/core`): `link_peers`, `link_send {peer, text, worktree?, task_id?}`,
 `link_task {peer, task_id}`, `link_tasks {peer}`, `link_cancel {peer, task_id}`. `peer` is a name (case-insensitive)
 or id. Results are compact: `state` is one word — `submitted | working | input_required | completed | failed |
-canceled` — and `results` carry the peer's summary and branch.
+canceled` — and `results` carry the peer's summary and branch. `link_peers` also says which peers are `online`.
 
 To be woken when a delegated task finishes, arm a watch instead of polling in the turn:
 
@@ -154,7 +197,7 @@ sees cards it created (card tenant `sen-link:<peer-id>`).
 | `name`, `description` | `SenClaw`, … | shown in the Agent Card and to peers |
 | `listenHost` | `0.0.0.0` | an IP address; which interface(s) the listener binds |
 | `listenPort` | `18791` | |
-| `discoverable` | true | false: no Agent Card, so probes and scans find nothing; pairing by typed address still works |
+| `discoverable` | true | false: no announcement and no Agent Card, so probes, scans and listeners find nothing; pairing by typed address still works |
 | `boardTitle` | `SLink` | board incoming tasks land on (created on first use); an empty value or the old default `sen-link` means `SLink` |
 | `workspaceDir` | — | that board's workspace dir (where workers run) |
 | `defaultAssignee` | — | when the peer has no assignee of its own |
@@ -176,5 +219,5 @@ taken, `GET /api/sen-link/status` reports `listenError` and the listener retries
 
 ## Not yet
 
-Finding peers without typing an address (mDNS, a network scan), a sealed channel, streaming
-(`SendStreamingMessage`), push notifications, and shared boards/memory sync.
+A sealed channel (until then the link is plain HTTP with bearer tokens, and `/a2a/pair` does not limit attempts),
+streaming (`SendStreamingMessage`), push notifications, and shared boards/memory sync.

@@ -4,6 +4,7 @@
 //! listener instead (`listener.rs`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -13,11 +14,11 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::lan::{self, DEFAULT_PORT};
+use super::lan::{self, Endpoint, DEFAULT_PORT};
 use super::server::PairRequest;
 use super::settings::SenLinkSettings;
 use super::store::{clean_daemon_id, random_token, sha256_hex, Peer, PeerView};
-use super::{a2a, client, probe, LinkState};
+use super::{a2a, client, probe, scan, LinkState};
 
 pub fn routes() -> Router<Arc<LinkState>> {
     Router::new()
@@ -25,6 +26,10 @@ pub fn routes() -> Router<Arc<LinkState>> {
         .route("/api/sen-link/settings", get(settings_get).put(settings_put))
         .route("/api/sen-link/invites", post(invite))
         .route("/api/sen-link/probe", post(probe_addr))
+        .route("/api/sen-link/discovered", get(discovered))
+        .route("/api/sen-link/scan", post(scan_start))
+        .route("/api/sen-link/scan/:id", get(scan_get))
+        .route("/api/sen-link/scan/:id/cancel", post(scan_cancel))
         .route("/api/sen-link/peers", get(peers))
         .route("/api/sen-link/peers/pair", post(pair))
         .route("/api/sen-link/peers/:id", axum::routing::patch(peer_patch).delete(peer_delete))
@@ -40,6 +45,11 @@ fn err(code: StatusCode, e: impl std::fmt::Display) -> Response {
 
 fn need_enabled(st: &LinkState) -> Option<Response> {
     (!st.settings().enabled).then(|| err(StatusCode::CONFLICT, "SLink is disabled (senLink.enabled)"))
+}
+
+/// A peer as the API shows it: with whether the network has seen it lately.
+fn view(st: &LinkState, p: &Peer) -> PeerView {
+    PeerView::from(p).with_online(p.daemon_id.as_deref().is_some_and(|id| st.discovery.contains(id)))
 }
 
 /// This machine's LAN addresses, for "type this on the other machine".
@@ -67,6 +77,7 @@ async fn status(State(st): State<Arc<LinkState>>) -> Response {
         "listenError": listen.error,
         "addresses": local_addresses(),
         "migrated": st.migrated,
+        "discovery": { "browsing": st.discovery.browsing(), "advertising": st.discovery.advertising(), "error": st.discovery.error() },
     }))
     .into_response()
 }
@@ -82,8 +93,9 @@ async fn settings_put(State(st): State<Arc<LinkState>>, Json(body): Json<SenLink
     };
     match crate::gateway::group_manager::save_sen_link_settings(st.config_path(), &s) {
         Ok(()) => {
-            // Open, move or close the LAN socket now rather than at the next look.
+            // Open, move or close the LAN socket, and change what is announced, now rather than at the next look.
             st.wake.notify_one();
+            st.discovery_wake.notify_one();
             Json(s).into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -98,6 +110,8 @@ async fn invite(State(st): State<Arc<LinkState>>) -> Response {
     let s = st.settings();
     match st.store.create_invite(crate::kanban::api::now()) {
         Ok((code, expires_at)) => {
+            // The announcement says a code can be redeemed here now.
+            st.discovery_wake.notify_one();
             let listen = st.listen_status();
             Json(json!({
                 "code": code,
@@ -124,27 +138,40 @@ async fn probe_addr(State(st): State<Arc<LinkState>>, Json(b): Json<ProbeBody>) 
 }
 
 async fn peers(State(st): State<Arc<LinkState>>) -> Response {
-    let list: Vec<PeerView> = st.store.peers().iter().map(PeerView::from).collect();
+    let list: Vec<PeerView> = st.store.peers().iter().map(|p| view(&st, p)).collect();
     Json(json!({ "peers": list })).into_response()
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PairBody {
     /// The other daemon: an IP or a DNS name, optionally `:port`. (`url` is what
     /// the same field was called before.)
-    #[serde(alias = "url")]
-    addr: String,
+    #[serde(default, alias = "url")]
+    addr: Option<String>,
+    /// Or the id of a daemon the network has shown (`GET /discovered`).
+    #[serde(default)]
+    daemon_id: Option<String>,
     code: String,
 }
 
-/// Pair with the daemon at `addr` using its invite `code`.
+/// Pair with the daemon at `addr` — or the one `daemonId` names, tried at each
+/// address the network saw it on — using its invite `code`.
 async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Response {
     if let Some(r) = need_enabled(&st) {
         return r;
     }
-    let ep = match lan::parse_endpoint(&b.addr, DEFAULT_PORT) {
-        Ok(ep) => ep,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    let want_id = b.daemon_id.as_deref().filter(|d| !d.trim().is_empty()).map(str::to_string);
+    let targets: Vec<Endpoint> = match (b.addr.as_deref().filter(|a| !a.trim().is_empty()), want_id.as_deref()) {
+        (Some(addr), _) => match lan::parse_endpoint(addr, DEFAULT_PORT) {
+            Ok(ep) => vec![ep],
+            Err(e) => return err(StatusCode::BAD_REQUEST, e),
+        },
+        (None, Some(id)) => match st.discovery.find(id) {
+            Some(d) => d.endpoints(),
+            None => return err(StatusCode::NOT_FOUND, "no SLink with that id has been seen on the network; scan, or type its address"),
+        },
+        (None, None) => return err(StatusCode::BAD_REQUEST, "give addr (an IP or a name) or daemonId"),
     };
     let s = st.settings();
     let ours = random_token();
@@ -155,11 +182,41 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
         daemon_id: Some(st.store.daemon_id().to_string()),
         token: Some(ours.clone()),
     };
-    let reply = match client::pair(&st.http, &ep, &req).await {
-        Ok(v) => v,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+    let mut reply = None;
+    let mut last = String::new();
+    for ep in &targets {
+        // Chosen by id: be sure it is that daemon before the code goes out. An
+        // address the network saw it on may since have been given to another.
+        if let Some(wanted) = want_id.as_deref() {
+            match probe::identity_at(&st.http, ep, Duration::from_secs(3)).await {
+                Some(id) if id.daemon_id == wanted => {}
+                Some(other) => {
+                    last = format!("another SLink (\"{}\") answers at {ep} now", other.name);
+                    continue;
+                }
+                None => {
+                    last = format!("no SLink answers at {ep}");
+                    continue;
+                }
+            }
+        }
+        match client::pair(&st.http, ep, &req).await {
+            Ok(v) => {
+                reply = Some((v, ep.clone()));
+                break;
+            }
+            // Something answered and said no: another address will not change that.
+            Err(e) if e.reached => return err(StatusCode::BAD_GATEWAY, e),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    let Some((reply, ep)) = reply else {
+        return err(StatusCode::BAD_GATEWAY, last);
     };
     let daemon_id = reply["daemonId"].as_str().and_then(clean_daemon_id);
+    if want_id.is_some() && daemon_id != want_id {
+        return err(StatusCode::BAD_GATEWAY, "the SLink at that address is not the one that was chosen");
+    }
     // The same daemon again is the same peer: new tokens and address, same id
     // (its tasks are filed under it) and the trust we gave it.
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
@@ -176,10 +233,72 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
         daemon_id,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let view = PeerView::from(&peer);
+    let out = view(&st, &peer);
     match st.store.upsert(peer) {
-        Ok(()) => Json(view).into_response(),
+        Ok(()) => Json(out).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// What the network has shown: announcements and scan hits, folded by daemon.
+async fn discovered(State(st): State<Arc<LinkState>>) -> Response {
+    Json(json!({
+        "discovered": st.discovery.list(),
+        "browsing": st.discovery.browsing(),
+        "advertising": st.discovery.advertising(),
+        "error": st.discovery.error(),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize, Default)]
+struct ScanBody {
+    /// A range to walk, `a.b.c.d/len`; by default the subnets this machine is on.
+    #[serde(default)]
+    cidr: Option<String>,
+    /// The port to look on; by default this daemon's own listen port.
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+/// Start walking the network for SLinks. One at a time; poll `GET /scan/:id`.
+async fn scan_start(State(st): State<Arc<LinkState>>, body: Option<Json<ScanBody>>) -> Response {
+    if let Some(r) = need_enabled(&st) {
+        return r;
+    }
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let (ifaces, own) = scan::local_ipv4();
+    let targets = match b.cidr.as_deref().filter(|c| !c.trim().is_empty()) {
+        Some(c) => match scan::range_targets(c) {
+            Ok(t) => t,
+            Err(e) => return err(StatusCode::BAD_REQUEST, e),
+        },
+        None => scan::interface_targets(&ifaces, &own),
+    };
+    if targets.hosts.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "this machine is on no private network that can be walked; give a range (cidr) to scan");
+    }
+    let port = b.port.filter(|p| *p != 0).unwrap_or(st.settings().listen_port);
+    match st.scans.start(&st, targets, port) {
+        Ok(job) => (StatusCode::ACCEPTED, Json(job.view())).into_response(),
+        Err(scan::StartError::Busy(id)) => (StatusCode::CONFLICT, Json(json!({ "error": "a scan is already running", "scanId": id }))).into_response(),
+    }
+}
+
+async fn scan_get(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
+    match st.scans.get(&id) {
+        Some(job) => Json(job.view()).into_response(),
+        None => err(StatusCode::NOT_FOUND, "no such scan"),
+    }
+}
+
+async fn scan_cancel(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
+    match st.scans.get(&id) {
+        Some(job) => {
+            job.cancel();
+            Json(job.view()).into_response()
+        }
+        None => err(StatusCode::NOT_FOUND, "no such scan"),
     }
 }
 
@@ -205,7 +324,7 @@ async fn peer_patch(State(st): State<Arc<LinkState>>, Path(id): Path<String>, Js
         }
     });
     match r {
-        Ok(Some(peer)) => Json(PeerView::from(&peer)).into_response(),
+        Ok(Some(peer)) => Json(view(&st, &peer)).into_response(),
         Ok(None) => err(StatusCode::NOT_FOUND, "no such peer"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -280,55 +399,15 @@ async fn task_cancel(State(st): State<Arc<LinkState>>, Path((id, task_id)): Path
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
     use tokio::net::TcpListener;
-    use tokio::task::JoinHandle;
     use tower::ServiceExt;
 
     use super::*;
-    use crate::sen_link::store::PeerStore;
-    use crate::sen_link::{api_router, listener};
-
-    /// A daemon on loopback: its own config, peers, kanban, and a LAN listener
-    /// on a free port (what `listener::start` would open).
-    struct Node {
-        st: Arc<LinkState>,
-        port: u16,
-        server: JoinHandle<()>,
-        _dir: tempfile::TempDir,
-    }
-
-    impl Drop for Node {
-        fn drop(&mut self) {
-            self.server.abort();
-        }
-    }
-
-    async fn node(name: &str, extra: Value) -> Node {
-        let dir = tempfile::tempdir().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr: SocketAddr = listener.local_addr().unwrap();
-        let mut cfg = json!({ "enabled": true, "name": name, "listenHost": "127.0.0.1", "listenPort": addr.port() });
-        for (k, v) in extra.as_object().into_iter().flatten() {
-            cfg[k] = v.clone();
-        }
-        let path = dir.path().join("config.json");
-        std::fs::write(&path, json!({ "senLink": cfg }).to_string()).unwrap();
-        let st = Arc::new(LinkState::new_at(
-            path,
-            Arc::new(crate::kanban::db::Db::open(&dir.path().join("kanban.db")).unwrap()),
-            PeerStore::new(dir.path().join("sen-link/peers.json")),
-        ));
-        st.set_listen(Some(addr), None);
-        let served = Arc::clone(&st);
-        let server = tokio::spawn(async move {
-            let _ = listener::serve_on(listener, served).await;
-        });
-        Node { st, port: addr.port(), server, _dir: dir }
-    }
+    use crate::sen_link::api_router;
+    use crate::sen_link::discovery::{Found, Source};
+    use crate::sen_link::testkit::{free_port, node, Node};
 
     async fn call(app: &Router, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
         let req = Request::builder()
@@ -341,10 +420,6 @@ mod tests {
         let status = resp.status();
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
-    }
-
-    fn free_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
     }
 
     fn cards_on_slink_board(n: &Node) -> i64 {
@@ -508,5 +583,137 @@ mod tests {
         assert_eq!((st["daemonId"].as_str(), st["peerCount"].as_u64()), (Some(a.st.store.daemon_id()), Some(0)));
         assert!(st["addresses"].is_array() && st["migrated"].as_array().unwrap().is_empty());
         assert_eq!(st["settings"]["boardTitle"], "SLink");
+    }
+
+    async fn list_tasks_of(a: &Node, id: &str) -> anyhow::Result<Value> {
+        let peer = a.st.store.get(id).unwrap();
+        client::call(&a.st, &peer, "ListTasks", json!({})).await
+    }
+
+    async fn wait_for_scan(app: &Router, id: &str) -> Value {
+        for _ in 0..100 {
+            let (s, v) = call(app, "GET", &format!("/api/sen-link/scan/{id}"), None).await;
+            assert_eq!(s, StatusCode::OK);
+            if v["state"] != "running" {
+                return v;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the scan did not finish");
+    }
+
+    #[tokio::test]
+    async fn a_scan_finds_a_slink_and_the_list_pairs_it_by_id() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (api_a, api_b) = (api_router(Arc::clone(&a.st)), api_router(Arc::clone(&b.st)));
+
+        // Nothing is known until someone looks.
+        let (_, d) = call(&api_a, "GET", "/api/sen-link/discovered", None).await;
+        assert!(d["discovered"].as_array().unwrap().is_empty());
+
+        let (s, job) = call(&api_a, "POST", "/api/sen-link/scan", Some(json!({ "cidr": "127.0.0.1/32", "port": b.port }))).await;
+        assert_eq!(s, StatusCode::ACCEPTED, "{job}");
+        assert_eq!((job["total"].as_u64(), job["port"].as_u64()), (Some(1), Some(b.port as u64)));
+        let done = wait_for_scan(&api_a, job["scanId"].as_str().unwrap()).await;
+        assert_eq!((done["state"].as_str(), done["scanned"].as_u64()), (Some("done"), Some(1)), "{done}");
+        assert_eq!(done["found"][0]["name"], "Mac B");
+        assert_eq!(done["found"][0]["daemonId"], b.st.store.daemon_id());
+
+        let (_, d) = call(&api_a, "GET", "/api/sen-link/discovered", None).await;
+        let seen = &d["discovered"][0];
+        assert_eq!((seen["name"].as_str(), seen["addrs"][0].as_str(), seen["port"].as_u64(), seen["pairable"].as_bool()), (Some("Mac B"), Some("127.0.0.1"), Some(b.port as u64), Some(false)));
+        assert_eq!(seen["sources"], json!(["scan"]));
+
+        // Pair it by the id the list gave, with the code B shows.
+        let (_, inv) = call(&api_b, "POST", "/api/sen-link/invites", None).await;
+        let id = seen["daemonId"].as_str().unwrap();
+        let (s, view) = call(&api_a, "POST", "/api/sen-link/peers/pair", Some(json!({ "daemonId": id, "code": inv["code"] }))).await;
+        assert_eq!(s, StatusCode::OK, "{view}");
+        assert_eq!((view["name"].as_str(), view["addr"].as_str(), view["online"].as_bool()), (Some("Mac B"), Some(format!("127.0.0.1:{}", b.port).as_str()), Some(true)));
+        let (_, peers) = call(&api_a, "GET", "/api/sen-link/peers", None).await;
+        assert_eq!(peers["peers"][0]["online"], true, "a peer the network has seen is online");
+
+        // Looking at its own port finds nothing: a daemon does not list itself.
+        let (_, job) = call(&api_a, "POST", "/api/sen-link/scan", Some(json!({ "cidr": "127.0.0.1/32", "port": a.port }))).await;
+        let done = wait_for_scan(&api_a, job["scanId"].as_str().unwrap()).await;
+        assert!(done["found"].as_array().unwrap().is_empty(), "{done}");
+    }
+
+    #[tokio::test]
+    async fn a_scan_says_no_to_what_it_may_not_walk() {
+        let a = node("Mac A", json!({})).await;
+        let api_a = api_router(Arc::clone(&a.st));
+        for (range, why) in [("8.8.8.0/24", "private network"), ("192.168.0.0/16", "too large"), ("nonsense", "not a range")] {
+            let (s, e) = call(&api_a, "POST", "/api/sen-link/scan", Some(json!({ "cidr": range }))).await;
+            assert_eq!(s, StatusCode::BAD_REQUEST, "{range}: {e}");
+            assert!(e["error"].as_str().unwrap().contains(why), "{range}: {e}");
+        }
+        assert_eq!(call(&api_a, "GET", "/api/sen-link/scan/unknown", None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&api_a, "POST", "/api/sen-link/scan/unknown/cancel", None).await.0, StatusCode::NOT_FOUND);
+        let off = node("Off", json!({ "enabled": false })).await;
+        assert_eq!(call(&api_router(Arc::clone(&off.st)), "POST", "/api/sen-link/scan", None).await.0, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn pairing_by_id_does_not_send_the_code_to_a_different_daemon_or_to_nobody() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (api_a, api_b) = (api_router(Arc::clone(&a.st)), api_router(Arc::clone(&b.st)));
+        let (_, inv) = call(&api_b, "POST", "/api/sen-link/invites", None).await;
+        let sighting = |id: &str, port: u16| Found { daemon_id: id.into(), name: "Ghost".into(), addrs: vec!["127.0.0.1".parse().unwrap()], port, pairable: true };
+        let pair = |id: &'static str| {
+            let (api_a, code) = (api_a.clone(), inv["code"].clone());
+            async move { call(&api_a, "POST", "/api/sen-link/peers/pair", Some(json!({ "daemonId": id, "code": code }))).await }
+        };
+
+        // The id was last seen at B's address, but B is a different daemon.
+        a.st.discovery.upsert(Source::Mdns, sighting("someone-else", b.port));
+        let (s, e) = pair("someone-else").await;
+        assert_eq!(s, StatusCode::BAD_GATEWAY);
+        assert!(e["error"].as_str().unwrap().contains("another SLink"), "{e}");
+        assert!(b.st.store.has_live_invite(crate::kanban::api::now()), "the code was never sent");
+        assert!(b.st.store.peers().is_empty());
+
+        // Seen at an address where nothing answers now.
+        a.st.discovery.upsert(Source::Mdns, sighting("gone", free_port()));
+        let (s, e) = pair("gone").await;
+        assert_eq!(s, StatusCode::BAD_GATEWAY);
+        assert!(e["error"].as_str().unwrap().contains("no SLink answers"), "{e}");
+
+        // Never seen at all, and neither an address nor an id.
+        assert_eq!(pair("never-seen").await.0, StatusCode::NOT_FOUND);
+        let (s, _) = call(&api_a, "POST", "/api/sen-link/peers/pair", Some(json!({ "code": "X" }))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_peer_that_moved_is_found_again_and_its_address_follows_but_a_name_is_left_to_dns() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (api_a, api_b) = (api_router(Arc::clone(&a.st)), api_router(Arc::clone(&b.st)));
+        let (_, inv) = call(&api_b, "POST", "/api/sen-link/invites", None).await;
+        let (s, view) = call(&api_a, "POST", "/api/sen-link/peers/pair", Some(json!({ "addr": format!("127.0.0.1:{}", b.port), "code": inv["code"] }))).await;
+        assert_eq!(s, StatusCode::OK, "{view}");
+        let id = view["id"].as_str().unwrap().to_string();
+        let b_id = b.st.store.daemon_id().to_string();
+        let moved_to = |port: u16| Found { daemon_id: b_id.clone(), name: "Mac B".into(), addrs: vec!["127.0.0.1".parse().unwrap()], port, pairable: false };
+
+        // The address it was paired at stops answering; discovery has seen it where it really is.
+        let dead = free_port();
+        a.st.store.update(&id, |p| p.addr = Some(format!("127.0.0.1:{dead}"))).unwrap();
+        a.st.discovery.upsert(Source::Mdns, moved_to(b.port));
+        list_tasks_of(&a, &id).await.unwrap();
+        assert_eq!(a.st.store.get(&id).unwrap().addr, Some(format!("127.0.0.1:{}", b.port)), "the stored address followed the daemon");
+
+        // Nothing known about where it went: the failure is reported, the address stays.
+        a.st.discovery.clear_source(Source::Mdns);
+        a.st.store.update(&id, |p| p.addr = Some(format!("127.0.0.1:{dead}"))).unwrap();
+        let e = list_tasks_of(&a, &id).await.unwrap_err().to_string();
+        assert!(e.contains("reach peer `Mac B`"), "{e}");
+        assert_eq!(a.st.store.get(&id).unwrap().addr, Some(format!("127.0.0.1:{dead}")));
+
+        // A name the person typed is never rewritten from an announcement.
+        a.st.discovery.upsert(Source::Mdns, moved_to(b.port));
+        a.st.store.update(&id, |p| p.addr = Some(format!("localhost:{dead}"))).unwrap();
+        assert!(list_tasks_of(&a, &id).await.is_err());
+        assert_eq!(a.st.store.get(&id).unwrap().addr, Some(format!("localhost:{dead}")));
     }
 }

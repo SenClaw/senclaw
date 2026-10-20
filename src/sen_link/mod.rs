@@ -8,18 +8,24 @@
 //! The A2A surface is served by its own listener ([`listener`]); the
 //! management API (`/api/sen-link/*`) stays on the UI server behind the
 //! daemon's token. There is no relay and no public URL: a peer is an address
-//! on the LAN that a person typed or a scan found ([`lan`]).
+//! on the LAN ([`lan`]) that a person typed, that mDNS announced
+//! ([`discovery`]) or that a scan found ([`scan`]).
 
 pub mod a2a;
 pub mod api;
 pub mod client;
+pub mod discovery;
 pub mod lan;
 pub mod listener;
 pub mod probe;
+pub mod scan;
 pub mod server;
 pub mod settings;
 pub mod store;
 pub mod tasks;
+
+#[cfg(test)]
+pub(crate) mod testkit;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -38,6 +44,12 @@ pub struct LinkState {
     pub migrated: Vec<String>,
     /// Wakes the listener supervisor after a settings change.
     pub wake: Arc<Notify>,
+    /// Other SLinks seen on the network (mDNS and scans).
+    pub discovery: Arc<discovery::Discovery>,
+    /// Wakes the mDNS supervisor when what it announces may have changed.
+    pub discovery_wake: Arc<Notify>,
+    /// The network scan, one at a time.
+    pub scans: scan::Scans,
     listen: Mutex<listener::ListenStatus>,
 }
 
@@ -54,6 +66,7 @@ impl LinkState {
         if !migrated.is_empty() {
             tracing::warn!(peers = ?migrated, "[slink] dropped peers that only a hub reached; pair them again over the LAN");
         }
+        let discovery = Arc::new(discovery::Discovery::new(store.daemon_id().to_string()));
         Self {
             config_path,
             kanban,
@@ -61,6 +74,9 @@ impl LinkState {
             http: lan::client(),
             migrated,
             wake: Arc::new(Notify::new()),
+            discovery,
+            discovery_wake: Arc::new(Notify::new()),
+            scans: scan::Scans::default(),
             listen: Mutex::new(listener::ListenStatus::default()),
         }
     }

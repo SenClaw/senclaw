@@ -131,7 +131,7 @@ impl McpLinkServer {
             .as_array()
             .map(|a| {
                 a.iter()
-                    .map(|p| json!({ "id": p["id"], "name": p["name"], "can_send": p["canSend"], "addr": p["addr"] }))
+                    .map(|p| json!({ "id": p["id"], "name": p["name"], "can_send": p["canSend"], "online": p["online"], "addr": p["addr"] }))
                     .collect()
             })
             .unwrap_or_default();

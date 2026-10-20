@@ -3489,6 +3489,8 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 // SLink's A2A surface listens on its own LAN port while enabled;
                 // only the management API rides the UI server.
                 sen_link::listener::start(&link_state);
+                // ... and finds, and is found by, other SLinks on the LAN while enabled.
+                sen_link::discovery::start(&link_state);
                 sen_link::api_router(link_state)
             });
         let ui_router = gateway::ui_server::build_router(ui_state)

@@ -1,6 +1,6 @@
 # Plan: sen-link chỉ qua LAN, bỏ hub
 
-Status: **P1 xong và đã commit, chưa push** (2026-10-20) · P2, P3 chưa làm · Repo: `senclaw` + `web-app` + `desktop`, nhánh `feat/slink-lan` trong `.worktrees/*-slink-lan` · Thay thế phần "Through the hub" của `../261009-2330-claude-code-cowork-sen-link/plan.md` (Round 2)
+Status: **P1 và P2 đã commit, chưa push** (2026-10-20) · P3 chưa làm · Repo: `senclaw` + `web-app` + `desktop`, nhánh `feat/slink-lan` trong `.worktrees/*-slink-lan`, chưa push · Thay thế phần "Through the hub" của `../261009-2330-claude-code-cowork-sen-link/plan.md` (Round 2)
 Tài liệu hiện hành: `docs/sen-link.md` · Code: `src/sen_link/`
 
 ## Outcome
@@ -126,7 +126,7 @@ Không đổi: Agent Card `name` (tên máy do người dùng đặt, mặc đ�
 | # | Giai đoạn | Kết quả | Phụ thuộc |
 |---|---|---|---|
 | P1 ✅ | Bỏ hub + listener LAN riêng + `lan.rs` (`is_lan_addr`, `parse_endpoint`, `LanOnly`) + **nhập tay IP/DNS + `probe`** + settings/di trú + 2 client + đổi tên hiển thị SLink (D8) + docs | LAN (cả Tailscale) chạy bằng IP hoặc tên DNS gõ tay, bearer/HTTP như cũ; không còn phải bind UI ra ngoài | — |
-| P2 | Tìm tự động: mDNS (quảng bá, duyệt, tự cập nhật địa chỉ IP) + **quét mạng** (job, tiến độ, huỷ) + danh sách "Gần đây" + Info.plist + `if-addrs` | Không cần gõ IP trong LAN thường | P1 |
+| P2 ✅ | Tìm tự động: mDNS (quảng bá, duyệt, tự cập nhật địa chỉ IP) + **quét mạng** (job, tiến độ, huỷ) + danh sách "Gần đây" + Info.plist + `if-addrs` | Không cần gõ IP trong LAN thường | P1 |
 | P3 | SPAKE2 + phong bì + replay (`seal.rs`) + khoá lời mời theo số lần sai | Kênh LAN mã hoá; peer cũ hiện "chưa mã hoá" | P1 (P2 không bắt buộc) |
 
 ## Kiểm thử và nghiệm thu
@@ -179,6 +179,27 @@ Lệch so với thiết kế (đã chọn, cần biết):
 Chưa kiểm chứng được: hai máy thật trong LAN thật, tailnet thật (IP `100.x`, tên MagicDNS), tên `.local`; cửa sổ app desktop thật (chỉ widget test); tiếng Việt trên giao diện web chỉ kiểm bằng script (mọi chuỗi đều có bản dịch), không xem bằng mắt.
 
 Còn lại: P2 (mDNS + quét mạng + danh sách "Gần đây" + Info.plist), P3 (SPAKE2 + phong bì). Cho tới P3, kênh là HTTP + bearer trên LAN và `/a2a/pair` không giới hạn số lần thử mã.
+
+## Kết quả P2 (2026-10-20)
+
+Đã làm đủ phạm vi P2 ở cả ba repo (chưa commit, nằm trên hai commit P1): `discovery.rs` (mDNS `_senclaw-link._tcp`: duyệt khi bật, quảng bá khi `discoverable` và nghe trên địa chỉ không phải loopback; bảng `discovered` gộp theo `daemonId`, nguồn `mdns`/`scan`), `scan.rs` (job quét IPv4, tối đa 1024 địa chỉ, 128 song song, một job một lúc, tiến độ, huỷ), `GET /discovered`, `POST /scan`, `GET /scan/:id`, `POST /scan/:id/cancel`, ghép nối bằng `daemonId`, `online` ở peer/MCP, tự cập nhật địa chỉ IP khi peer đổi chỗ, danh sách "Gần đây" + nút Quét mạng ở web và desktop, `NSLocalNetworkUsageDescription`/`NSBonjourServices` ở `Info.plist`.
+
+Kiểm chứng:
+- `cargo test --lib`: 3351 qua, 0 lỗi (64 test `sen_link`, chạy ba lần liền không lệch).
+- Hai daemon thật trên LAN thật của máy này (nghe `192.168.0.82`, chặn cổng thật bằng Seatbelt): mỗi bên thấy bên kia qua mDNS trong ≤8 s; `dns-sd -B/-L` của macOS thấy cả hai instance với TXT `v=1 id=… name=… pair=0|1`; `pair=1` đến bên kia sau ~1 s khi có lời mời; ghép nối chỉ bằng `daemonId`; quét đúng một địa chỉ thấy peer; peer đổi cổng 52791→52792: bảng cập nhật sau ~6 s, lần gọi kế tiếp nối được và địa chỉ lưu tự đổi; tắt SLink → bên kia bỏ khỏi danh sách trong ~1 s, bật lại → hiện lại sau ~6 s; sau khi dừng không còn bản ghi nào của `_senclaw-link` trong mạng.
+- Web: trang thật hiện "Nearby SenClaws", peer có nhãn `online`, nút Use điền địa chỉ và chạy Kiểm tra. `npm run build` xanh. Desktop: `flutter analyze` sạch, 513 test qua (có test Nearby/Scan/online).
+
+Lệch so với thiết kế / điều cần biết:
+1. Dependency mới `mdns-sd` 0.21 (Apache-2.0 OR MIT; kéo thêm `flume`, `socket-pktinfo`; `if-addrs` dùng chung). Chỉ dùng interface có địa chỉ LAN, không loopback, không IPv6 link-local.
+2. Quét mặc định **bỏ interface point-to-point** (VPN, Tailscale) và địa chỉ của chính máy này; nên không bao giờ tự quét đầu kia của một đường hầm. Muốn quét thì gõ `cidr`. Dải gõ tay **không** loại địa chỉ của máy này (daemon tự bỏ chính nó theo `daemonId`), nên tìm được một daemon thứ hai trên cùng máy.
+3. Nút "Use" ở UI điền địa chỉ rồi chạy Kiểm tra, ghép bằng `addr`; ghép bằng `daemonId` có ở API (và có test) cho agent/script. Ghép theo id đọc Agent Card trước khi gửi mã và từ chối nếu là daemon khác.
+4. `online` = bảng khám phá đang có peer (mDNS còn hiệu lực, hoặc một lần quét trong 5 phút): một peer thấy qua quét có thể còn `online` tới 5 phút sau khi rời.
+5. Tự đổi địa chỉ chỉ cho địa chỉ IP literal và chỉ sau khi **kết nối** thất bại (timeout có thể là yêu cầu đã tới nơi, không thử lại ở nơi khác). Thông báo mDNS chưa được xác thực: tới P3, kẻ trong LAN có thể nhận lời gọi (và bearer token) của một peer đang không trả lời. Đã ghi trong docs.
+6. Lỗi tìm ra khi chạy thật và đã sửa: lời tạm biệt mDNS báo tên viết thường, bảng khoá phân biệt hoa thường nên peer rời đi vẫn nằm trong danh sách; bảng giờ khoá không phân biệt hoa thường (có test).
+
+Chưa kiểm chứng: nút "Quét mạng" mặc định chạy thật trên LAN nhà (chỉ test đơn vị phần chọn mục tiêu và quét một dải loopback; tôi không tự quét mạng của bạn); hộp thoại quyền Local Network trên macOS 15 với bản app thật (chỉ `plutil -lint` cho Info.plist); hai máy thật; Windows/Linux; Docker bridge.
+
+Còn lại: P3 (SPAKE2 + phong bì + giới hạn số lần thử mã mời).
 
 ## Câu hỏi mở
 1. **Mức bảo mật kênh**: làm P3 (khuyến nghị) hay dừng ở HTTP + bearer cho "LAN tin cậy"? Dừng ở P2 vẫn đúng yêu cầu "chỉ LAN, không hub" nhưng task có thể mang prompt chạy shell, đọc được trên LAN.

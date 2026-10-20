@@ -17,7 +17,7 @@ use super::lan::{self, Endpoint, Host};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 /// An Agent Card is a few KB; anything bigger is not one.
-const MAX_CARD_BYTES: usize = 64 * 1024;
+pub(super) const MAX_CARD_BYTES: usize = 64 * 1024;
 
 struct Answer<'a> {
     addr: &'a str,
@@ -70,6 +70,17 @@ fn why_unreachable(ep: &Endpoint, e: &reqwest::Error) -> String {
     } else {
         format!("cannot talk to {ep}: {}", lan::error_chain(e))
     }
+}
+
+/// Who answers at `ep`: its Agent Card, read and checked, or `None` when
+/// nothing answers, the answer is not a SenClaw card, or the card is hidden.
+pub(super) async fn identity_at(http: &reqwest::Client, ep: &Endpoint, timeout: Duration) -> Option<a2a::CardIdentity> {
+    let resp = http.get(ep.url("/.well-known/agent-card.json")).timeout(timeout).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let card: Value = serde_json::from_slice(&read_limited(resp, MAX_CARD_BYTES).await?).ok()?;
+    a2a::card_identity(&card)
 }
 
 pub async fn probe(http: &reqwest::Client, input: &str, default_port: u16) -> Value {

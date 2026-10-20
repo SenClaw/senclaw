@@ -130,6 +130,8 @@ rand = "0.8"
 
 # This machine's own LAN addresses (SLink shows them so the other side can type one)
 if-addrs = "0.15"
+# SLink finds other SenClaws on the LAN by DNS-SD (`_senclaw-link._tcp`); no Bonjour/Avahi needed
+mdns-sd = { version = "0.21", features = ["async"] }
 
 tokio-stream = "0.1"
 portable-pty = "0.8"
