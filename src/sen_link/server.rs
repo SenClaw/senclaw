@@ -137,6 +137,8 @@ pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Res
     // tasks are filed under, and what we let it do), instead of adding a twin.
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
     let name: String = offer.name.trim().chars().take(80).collect();
+    // Pairing again keeps what the operator allowed this peer to read, as it keeps auto-run.
+    let knowledge = known.as_ref().map(|k| k.knowledge.clone()).unwrap_or_default();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.is_empty() { "peer".into() } else { name },
@@ -147,6 +149,7 @@ pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Res
         assignee: known.and_then(|k| k.assignee),
         daemon_id,
         key: Some(seal::encode_key(&pending.keys.pair)),
+        knowledge,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let accept = pairing::Accept { peer_id: peer.id.clone(), name: s.name, daemon_id: st.store.daemon_id().to_string(), token: theirs };
@@ -299,6 +302,10 @@ pub fn handle(st: &LinkState, peer: &Peer, method: &str, params: &Value) -> RpcR
             let card = db.card_row(card.id).map_err(internal)?.ok_or((a2a::TASK_NOT_FOUND, "task vanished".to_string()))?;
             tasks::task_for(db, &card).map_err(internal)
         }
+        super::knowledge::METHOD_RECALL => match &st.knowledge {
+            Some(k) => k.answer(&peer.id, &peer.knowledge, params).map_err(super::knowledge::RecallError::into_rpc),
+            None => Err((a2a::METHOD_NOT_FOUND, format!("method `{method}` is not supported"))),
+        },
         other => Err((a2a::METHOD_NOT_FOUND, format!("method `{other}` is not supported"))),
     }
 }
@@ -333,6 +340,7 @@ mod tests {
             assignee: Some("claude-code".into()),
             daemon_id: None,
             key: None,
+            knowledge: Default::default(),
             created_at: String::new(),
         }
     }
@@ -445,13 +453,18 @@ mod tests {
     async fn pairing_again_replaces_the_record_keeps_what_the_operator_allowed_and_retires_the_old_key() {
         let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
         let (at_a, at_b) = paired(&a, &b).await;
-        b.st.store.update(&at_b.id, |p| {
-            p.auto_run = true;
-            p.assignee = Some("claude-code".into());
-        })
-        .unwrap();
+        let shared = super::super::knowledge::KnowledgePolicy { facts: true, profiles: vec!["main".into()], ..Default::default() };
+        b.st.store
+            .update(&at_b.id, |p| {
+                p.auto_run = true;
+                p.assignee = Some("claude-code".into());
+                p.knowledge = shared.clone();
+            })
+            .unwrap();
+        a.st.store.update(&at_a.id, |p| p.knowledge = shared.clone()).unwrap();
 
         let (at_a2, at_b2) = paired(&a, &b).await;
+        assert_eq!((&at_a2.knowledge, &at_b2.knowledge), (&shared, &shared), "what a peer may read survives pairing again, on both sides");
         assert_eq!((at_a2.id.as_str(), at_b2.id.as_str()), (at_a.id.as_str(), at_b.id.as_str()), "the same peers, not twins");
         assert_eq!((b.st.store.peers().len(), a.st.store.peers().len()), (1, 1));
         assert!(at_b2.auto_run && at_b2.assignee.as_deref() == Some("claude-code"));

@@ -208,6 +208,9 @@ pub enum Scope<'a> {
     Agent,
     /// What the conversation with this chat JID may see.
     Chat(&'a str),
+    /// Only what belongs to the whole agent (`origin` empty): what a paired
+    /// SLink peer may be shown, never anything said in one particular chat.
+    AgentWide,
 }
 
 /// How many times more rows a scoped query reads than it returns, so that
@@ -219,6 +222,7 @@ impl Scope<'_> {
     pub fn allows(self, bank: &str, origin: &str) -> bool {
         match self {
             Scope::Agent => true,
+            Scope::AgentWide => origin.is_empty(),
             Scope::Chat(chat) => {
                 crate::memory::curated::memory_session_rank(origin, chat, bank) >= 0
             }
@@ -228,7 +232,7 @@ impl Scope<'_> {
     fn fetch(self, limit: usize) -> usize {
         match self {
             Scope::Agent => limit,
-            Scope::Chat(_) => limit.saturating_mul(SCOPE_OVERFETCH),
+            Scope::Chat(_) | Scope::AgentWide => limit.saturating_mul(SCOPE_OVERFETCH),
         }
     }
 
@@ -1810,6 +1814,23 @@ mod tests {
         assert!(!Scope::Chat("web:a").allows("main", "web:b"));
         assert!(!Scope::Chat("").allows("main", "web:b"));
         assert!(Scope::Agent.allows("main", "web:b"));
+    }
+
+    #[test]
+    fn agent_wide_scope_shows_only_facts_said_to_no_chat_in_particular() {
+        assert!(Scope::AgentWide.allows("main", ""));
+        // Not even a folder name or a legacy tag: only an empty origin is the whole agent's.
+        assert!(!Scope::AgentWide.allows("main", "main"));
+        assert!(!Scope::AgentWide.allows("main", "web:a"));
+
+        let s = store();
+        s.insert("main", &fact("The office wifi is called Hanoi5", &["office"])).unwrap();
+        let mut in_chat = fact("The office alarm code was shared in the family chat", &["office"]);
+        in_chat.origin = "web:family".into();
+        s.insert("main", &in_chat).unwrap();
+        let seen = s.search_keyword("main", "office", None, 10, Scope::AgentWide).unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].text.contains("wifi"));
     }
 
     #[test]

@@ -50,6 +50,9 @@ pub struct Peer {
     /// be called nor call, and should be paired again.
     #[serde(default)]
     pub key: Option<String>,
+    /// What this peer may read of our knowledge. Closed until a person opens it.
+    #[serde(default)]
+    pub knowledge: super::knowledge::KnowledgePolicy,
     pub created_at: String,
 }
 
@@ -68,6 +71,8 @@ pub struct PeerView {
     pub legacy: bool,
     /// Seen on the network lately (mDNS or a scan). Only a peer with an id can be.
     pub online: bool,
+    /// What it may read of our knowledge.
+    pub knowledge: super::knowledge::KnowledgePolicy,
     pub created_at: String,
 }
 
@@ -89,6 +94,7 @@ impl From<&Peer> for PeerView {
             assignee: p.assignee.clone(),
             legacy: p.daemon_id.is_none() || p.key.is_none(),
             online: false,
+            knowledge: p.knowledge.clone(),
             created_at: p.created_at.clone(),
         }
     }
@@ -381,8 +387,28 @@ mod tests {
             assignee: None,
             daemon_id: None,
             key: None,
+            knowledge: Default::default(),
             created_at: "now".into(),
         }
+    }
+
+    #[test]
+    fn what_a_peer_may_read_is_kept_in_the_file_and_an_old_file_means_nothing() {
+        let (t, s) = store();
+        let mut p = peer("k");
+        p.knowledge = super::super::knowledge::KnowledgePolicy { notes: true, profiles: vec!["main".into()], note_types: vec!["project".into()], ..Default::default() };
+        s.upsert(p.clone()).unwrap();
+        // A fresh store on the same file, as after a restart.
+        let again = PeerStore::new(t.path().join("sen-link/peers.json"));
+        assert_eq!(again.get("k").unwrap().knowledge, p.knowledge);
+        assert_eq!(PeerView::from(&again.get("k").unwrap()).knowledge, p.knowledge);
+
+        // A peers.json written before the field existed opens as a closed policy.
+        let path = t.path().join("sen-link/peers.json");
+        let mut v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        v["peers"][0].as_object_mut().unwrap().remove("knowledge");
+        std::fs::write(&path, v.to_string()).unwrap();
+        assert!(!PeerStore::new(path).get("k").unwrap().knowledge.open());
     }
 
     #[test]

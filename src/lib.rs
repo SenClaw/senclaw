@@ -3482,10 +3482,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 api_auth.token.clone(),
             )))
             .merge({
-                let link_state = Arc::new(sen_link::LinkState::new(
-                    &cfg,
-                    std::sync::Arc::clone(&kanban_state.db),
-                ));
+                let link_state = Arc::new(
+                    sen_link::LinkState::new(&cfg, std::sync::Arc::clone(&kanban_state.db))
+                        .with_knowledge(Arc::clone(&db), cfg.paths.profiles_dir.clone()),
+                );
                 // SLink's A2A surface listens on its own LAN port while enabled;
                 // only the management API rides the UI server.
                 sen_link::listener::start(&link_state);

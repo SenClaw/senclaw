@@ -15,6 +15,7 @@ pub mod a2a;
 pub mod api;
 pub mod client;
 pub mod discovery;
+pub mod knowledge;
 pub mod lan;
 pub mod listener;
 pub mod pairing;
@@ -56,6 +57,9 @@ pub struct LinkState {
     pub sessions: pairing::Sessions,
     /// Request ids served lately, so a captured request cannot run twice.
     pub replay: seal::ReplayGuard,
+    /// What a peer may ask this daemon about what it knows; absent where the daemon has no
+    /// memory to answer from (tests, tools).
+    pub knowledge: Option<Arc<knowledge::Knowledge>>,
     listen: Mutex<listener::ListenStatus>,
 }
 
@@ -85,8 +89,15 @@ impl LinkState {
             scans: scan::Scans::default(),
             sessions: pairing::Sessions::default(),
             replay: seal::ReplayGuard::default(),
+            knowledge: None,
             listen: Mutex::new(listener::ListenStatus::default()),
         }
+    }
+
+    /// Let paired peers ask this daemon what it knows (within each peer's policy).
+    pub fn with_knowledge(mut self, db: Arc<crate::db::Db>, profiles_dir: PathBuf) -> Self {
+        self.knowledge = Some(Arc::new(knowledge::Knowledge::new(db, profiles_dir)));
+        self
     }
 
     pub fn settings(&self) -> settings::SenLinkSettings {

@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::knowledge::{self, KnowledgePolicy};
 use super::lan::{self, Endpoint, DEFAULT_PORT};
 use super::pairing::Offer;
 use super::settings::SenLinkSettings;
@@ -34,6 +35,8 @@ pub fn routes() -> Router<Arc<LinkState>> {
         .route("/api/sen-link/peers/pair", post(pair))
         .route("/api/sen-link/peers/:id", axum::routing::patch(peer_patch).delete(peer_delete))
         .route("/api/sen-link/peers/:id/messages", post(send))
+        .route("/api/sen-link/peers/:id/knowledge", get(knowledge_get))
+        .route("/api/sen-link/peers/:id/recall", post(recall))
         .route("/api/sen-link/peers/:id/tasks", get(tasks_list))
         .route("/api/sen-link/peers/:id/tasks/:task_id", get(task_get))
         .route("/api/sen-link/peers/:id/tasks/:task_id/cancel", post(task_cancel))
@@ -215,6 +218,7 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
     // (its tasks are filed under it) and the trust we gave it.
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
     let name: String = paired.name.chars().take(80).collect();
+    let knowledge = known.as_ref().map(|k| k.knowledge.clone()).unwrap_or_default();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.trim().is_empty() { "peer".into() } else { name },
@@ -226,6 +230,7 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
         assignee: known.and_then(|k| k.assignee),
         daemon_id,
         key: Some(seal::encode_key(&paired.key)),
+        knowledge,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let out = view(&st, &peer);
@@ -302,12 +307,30 @@ async fn scan_cancel(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -
 struct PeerPatch {
     name: Option<String>,
     auto_run: Option<bool>,
+    /// What this peer may read of our knowledge.
+    knowledge: Option<KnowledgePolicy>,
     /// `""` clears it.
     assignee: Option<String>,
 }
 
 async fn peer_patch(State(st): State<Arc<LinkState>>, Path(id): Path<String>, Json(p): Json<PeerPatch>) -> Response {
+    // Checked before anything is changed, so a bad policy leaves the peer as it was.
+    let knowledge = match p.knowledge {
+        None => None,
+        Some(k) => {
+            let Some(kn) = st.knowledge.as_ref() else {
+                return err(StatusCode::NOT_IMPLEMENTED, "this daemon cannot share knowledge");
+            };
+            match k.validated(|name| kn.profile_exists(name)) {
+                Ok(k) => Some(k),
+                Err(e) => return err(StatusCode::BAD_REQUEST, e),
+            }
+        }
+    };
     let r = st.store.update(&id, |peer| {
+        if let Some(k) = knowledge {
+            peer.knowledge = k;
+        }
         if let Some(n) = p.name.filter(|n| !n.trim().is_empty()) {
             peer.name = n.trim().chars().take(80).collect();
         }
@@ -389,6 +412,71 @@ async fn task_cancel(State(st): State<Arc<LinkState>>, Path((id, task_id)): Path
     match with_peer(&st, &id).await {
         Ok(p) => relay(&st, &p, "CancelTask", json!({ "id": task_id })).await,
         Err(r) => r,
+    }
+}
+
+/// What this peer may read of our knowledge, what that would expose right now,
+/// and the profiles that could be offered.
+async fn knowledge_get(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
+    let Some(peer) = st.store.get(&id) else {
+        return err(StatusCode::NOT_FOUND, "no such peer");
+    };
+    let Some(kn) = st.knowledge.as_ref() else {
+        return err(StatusCode::NOT_IMPLEMENTED, "this daemon cannot share knowledge");
+    };
+    Json(json!({
+        "policy": peer.knowledge,
+        "preview": kn.preview(&peer.knowledge),
+        "profiles": kn.profiles(),
+        "noteTypes": knowledge::SHAREABLE_TYPES,
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct RecallBody {
+    query: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+/// Ask a peer what it knows about something. Hits come from the peer's own
+/// facts and notes, within what its owner allowed us to read.
+async fn recall(State(st): State<Arc<LinkState>>, Path(id): Path<String>, Json(b): Json<RecallBody>) -> Response {
+    let peer = match with_peer(&st, &id).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if b.query.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "query: must not be empty");
+    }
+    let mut params = json!({ "query": b.query });
+    if let Some(n) = b.limit {
+        params["limit"] = json!(n);
+    }
+    if let Some(p) = b.profile.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        params["profile"] = json!(p);
+    }
+    match client::call(&st, &peer, knowledge::METHOD_RECALL, params).await {
+        Ok(mut v) => {
+            // Words from another machine: say so where an agent will read them.
+            v["from"] = json!(peer.name);
+            v["untrusted"] = json!(true);
+            Json(v).into_response()
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            let msg = if msg.contains("(-32601)") {
+                format!("`{}` does not answer knowledge requests; update SenClaw on that machine", peer.name)
+            } else if msg.contains(&format!("({})", a2a::KNOWLEDGE_NOT_SHARED)) {
+                format!("`{}` has not shared its knowledge with this machine; its owner can allow it in Settings → SLink", peer.name)
+            } else {
+                msg
+            };
+            err(StatusCode::BAD_GATEWAY, msg)
+        }
     }
 }
 

@@ -152,6 +152,34 @@ The assignee is always yours to set (per peer, else `defaultAssignee`); a peer c
 worker that runs with `Bash` as you (see `app-workers.md` and the app-claude README). Use it only for peers you
 control, and prefer Triage — a person reads the task before moving it to Ready.
 
+## Sharing what this SenClaw knows
+
+A paired peer can **ask** this SenClaw a question and get the best few matches from its facts and notes. Nothing is
+copied to the peer and nothing is written on either side. It is **closed by default**: until you open it for a peer,
+every question is refused with "has not shared its knowledge with you".
+
+`PATCH /api/sen-link/peers/:id {"knowledge": {"facts": true, "notes": true, "profiles": ["main"], "noteTypes": ["project", "reference"]}}`
+
+| Field | Meaning |
+|---|---|
+| `profiles` | Profile folders (the agent's name on disk) the switches below apply to. None named = nothing shared. Must exist; `GET …/knowledge` lists the choices |
+| `facts` | Facts of those profiles that belong to the whole agent: not said in one particular chat, not replaced |
+| `notes` | Curated notes of those profiles (`profiles/<name>/memory/*.md` with frontmatter) of the chosen types |
+| `noteTypes` | A subset of `project`, `reference`, `feedback`; empty means `project` + `reference`. `user` (notes about you) can never be shared |
+
+Whatever the policy says, these **never** leave: raw day logs (`YYYY-MM-DD.md`), `conversation-summary-*` notes, notes
+written in one particular chat (`originSessionId` is a chat JID), notes of type `user`, files that are links or larger
+than 256 KB, and the profile files (`USER.md`, `AGENTS.md`, SOUL). Secrets in a text are redacted before it goes out.
+`GET /api/sen-link/peers/:id/knowledge` shows the policy and a **preview computed by the same rules as an answer**: counts
+of what would be shared per profile, five sample titles, and how many items each excluded class holds. Read it before
+switching a peer on: a real install had a customer's email address in an ordinary reference note.
+
+Asking: `POST /api/sen-link/peers/:id/recall {query, limit?, profile?}` (the `link_recall` tool does the same for an
+agent). Search is by words, no model and no embedding, so a question never costs the answering machine a model call.
+At most 10 hits, each text cut at 600 characters, 30 questions a minute per peer. Answers carry `untrusted: true` and
+`from`: they are text another machine wrote, to weigh and not to obey. A peer that predates this (or has it off) answers
+"update SenClaw on that machine"; one that has not shared says so.
+
 ## Delegating
 
 | Route (on the sending daemon) | A2A call |
@@ -161,6 +189,8 @@ control, and prefer Triage — a person reads the task before moving it to Ready
 | `POST /api/sen-link/scan` `{cidr?, port?}`, `GET /api/sen-link/scan/:id`, `POST /api/sen-link/scan/:id/cancel` | — (walks subnets) |
 | `POST /api/sen-link/peers/pair` `{addr \| daemonId, code}` | pairing |
 | `POST /api/sen-link/peers/:id/messages` `{text, taskId?, worktree?}` | `SendMessage` (new task, or follow-up when `taskId` is set) |
+| `POST /api/sen-link/peers/:id/recall` `{query, limit?, profile?}` | `knowledge/recall` (see above) |
+| `GET /api/sen-link/peers/:id/knowledge` | — (policy, preview, profiles to choose from; local) |
 | `GET /api/sen-link/peers/:id/tasks` | `ListTasks` |
 | `GET /api/sen-link/peers/:id/tasks/:taskId` | `GetTask` |
 | `POST /api/sen-link/peers/:id/tasks/:taskId/cancel` | `CancelTask` (queued tasks only) |
@@ -173,7 +203,7 @@ seen it lately), `PATCH/DELETE /api/sen-link/peers/:id`.
 
 Agents delegate without the UI through the bundled `senclaw-link` MCP server (in `senclaw-core`, so every SenClaw chat
 has it, and Claude Code gets it through `/mcp/core`): `link_peers`, `link_send {peer, text, worktree?, task_id?}`,
-`link_task {peer, task_id}`, `link_tasks {peer}`, `link_cancel {peer, task_id}`. `peer` is a name (case-insensitive)
+`link_task {peer, task_id}`, `link_tasks {peer}`, `link_cancel {peer, task_id}`, `link_recall {peer, query, limit?, profile?}`. `peer` is a name (case-insensitive)
 or id. Results are compact: `state` is one word — `submitted | working | input_required | completed | failed |
 canceled` — and `results` carry the peer's summary and branch. `link_peers` also says which peers are `online`.
 
@@ -191,14 +221,14 @@ The tools are loopback calls to `/api/sen-link/*` (registered as a daemon-wide b
 | Path | Auth | |
 |---|---|---|
 | `GET /.well-known/agent-card.json` | none | Agent Card; `supportedInterfaces` names the address the caller used. 404 while SLink is off or `discoverable` is false |
-| `POST /a2a` | a sealed envelope under the pair key, sender named in `X-SLink-From`, token inside | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted); anything that does not open, is stale or replayed, or carries the wrong token is a bare 401 |
+| `POST /a2a` | a sealed envelope under the pair key, sender named in `X-SLink-From`, token inside | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted), `knowledge/recall` (error `-32010` when not shared, `-32011` over the limit); anything that does not open, is stale or replayed, or carries the wrong token is a bare 401 |
 | `POST /a2a/pair/begin` | the live invite's code (as the handshake's password) | `{msg}` → `{sid, msg}`; 403 with no live invite, 429 with too many handshakes open |
 | `POST /a2a/pair/finish` | the sealed offer | `{sid, sealed}` → the sealed answer; a wrong code is a 403 and counts against the invite |
 
 All of them answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
 
 The Agent Card says who is behind it in an A2A extension, `capabilities.extensions[]` with uri
-`https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable}`; that is how `probe` recognises a
+`https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable, knowledge}` (`knowledge` is the version of the knowledge methods it answers; absent on older builds); that is how `probe` recognises a
 SLink and tells it from any other web server.
 
 ### Task mapping
@@ -244,5 +274,5 @@ taken, `GET /api/sen-link/status` reports `listenError` and the listener retries
 
 ## Not yet
 
-Streaming (`SendStreamingMessage`), push notifications, shared boards/memory sync, and a limit on how many handshakes one
+Streaming (`SendStreamingMessage`), push notifications, copying knowledge between machines (a read-only mirror per peer is the design, see `plans/reports/research-261020-2247-slink-knowledge-sync.md`), a screen for the sharing policy in the web and desktop apps (REST only for now), and a limit on how many handshakes one
 machine may open (a flood can fill the 16 handshake slots for a minute; it cannot pair).

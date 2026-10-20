@@ -1486,6 +1486,12 @@ Rules for Claude:
 - **A SPAKE2 session is single-use and short**: `Sessions` keeps at most 16 for 60 s and `take` removes the entry, so a finish cannot be tried twice with one begin.
 - **Pairing by id reads the Agent Card first** (`probe::identity_at`) and sends nothing to a daemon with another id. This is a guard against a reused address, not
   against a spoofer — the code only works against whoever knows it.
+- **Knowledge is asked for, never copied, and closed by default** (`knowledge.rs`, method `knowledge/recall`). `Peer.knowledge` says which profiles, and whether facts and/or
+  notes, a peer may read; an empty policy refuses with `-32010`. What can never leave is decided in two places only: `classify_note` (raw day logs, `conversation-summary-*`,
+  notes without frontmatter, type `user`, notes written in one chat) and `Scope::AgentWide` (facts with an `origin`). `preview` and `answer` call the same code, so what a person
+  sees before switching a peer on is what that peer gets; a new thing that can leave goes through them. `user` is not in `SHAREABLE_TYPES` and `validated` rejects it. Search is by
+  words (no model, no embedding), answers are cut (10 hits, 600 characters, 30 questions a minute per peer), text is run through `defense::scrub`, and the REST/MCP answer is marked
+  `untrusted` — the words came from another machine. Do not let this path write to the fact store or the notes: a mirror, if built, is a separate read-only bank.
 - The board and card label were `sen-link` before the rename: `tasks::find_board` finds the old board for the default title and `ensure_board` renames it in
   place. The card **tenant** stays `sen-link:<peer-id>` — it is data old cards carry.
 - Hub leftovers in `peers.json` (v0.2.0) are cleaned at startup with a `peers.json.bak-<time>` copy (`PeerStore::migrate_hub_leftovers`); peers paired directly

@@ -32,6 +32,11 @@ impl Drop for Node {
 /// A SLink that is on, named `name`, listening on `127.0.0.1` at a free port.
 /// `extra` overrides keys of its `senLink` settings.
 pub async fn node(name: &str, extra: Value) -> Node {
+    node_with(name, extra, |st| st).await
+}
+
+/// [`node`], with `build` given the state before it is shared (to attach what a test needs).
+pub async fn node_with(name: &str, extra: Value, build: impl FnOnce(LinkState) -> LinkState) -> Node {
     let dir = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
@@ -41,11 +46,11 @@ pub async fn node(name: &str, extra: Value) -> Node {
     }
     let path = dir.path().join("config.json");
     std::fs::write(&path, json!({ "senLink": cfg }).to_string()).unwrap();
-    let st = Arc::new(LinkState::new_at(
+    let st = Arc::new(build(LinkState::new_at(
         path,
         Arc::new(crate::kanban::db::Db::open(&dir.path().join("kanban.db")).unwrap()),
         PeerStore::new(dir.path().join("sen-link/peers.json")),
-    ));
+    )));
     st.set_listen(Some(addr), None);
     let served = Arc::clone(&st);
     let server = tokio::spawn(async move {

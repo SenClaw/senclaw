@@ -14,6 +14,10 @@ pub const INVALID_PARAMS: i64 = -32602;
 pub const INTERNAL_ERROR: i64 = -32603;
 pub const TASK_NOT_FOUND: i64 = -32001;
 pub const TASK_NOT_CANCELABLE: i64 = -32002;
+/// The peer asked for knowledge this daemon has not shared with it.
+pub const KNOWLEDGE_NOT_SHARED: i64 = -32010;
+/// Too many requests of one kind in a minute.
+pub const TOO_MANY_REQUESTS: i64 = -32011;
 
 /// v1.0 method name for `method` (pre-1.0 aliases mapped).
 pub fn canonical_method(method: &str) -> &str {
@@ -113,6 +117,8 @@ pub struct CardIdentity {
     pub version: String,
     pub daemon_id: String,
     pub pairable: bool,
+    /// Version of the knowledge methods it answers; 0 when it has none.
+    pub knowledge: u32,
 }
 
 pub fn card_identity(card: &Value) -> Option<CardIdentity> {
@@ -125,6 +131,7 @@ pub fn card_identity(card: &Value) -> Option<CardIdentity> {
         version: card["version"].as_str().unwrap_or_default().chars().take(40).collect(),
         daemon_id: super::store::clean_daemon_id(ext["params"]["daemonId"].as_str()?)?,
         pairable: ext["params"]["pairable"].as_bool().unwrap_or(false),
+        knowledge: ext["params"]["knowledge"].as_u64().unwrap_or(0).min(1000) as u32,
     })
 }
 
@@ -153,7 +160,7 @@ pub fn agent_card(i: &AgentCardInfo<'_>) -> Value {
                 "uri": SLINK_EXTENSION_URI,
                 "description": "SLink: a SenClaw reachable on the local network",
                 "required": false,
-                "params": { "daemonId": i.daemon_id, "pairable": i.pairable },
+                "params": { "daemonId": i.daemon_id, "pairable": i.pairable, "knowledge": super::knowledge::KNOWLEDGE_VERSION },
             }],
         },
         "defaultInputModes": ["text/plain"],
@@ -214,6 +221,11 @@ mod tests {
         let mut bare = agent_card(&info(None, false));
         bare["capabilities"] = json!({ "streaming": false });
         assert!(card_identity(&bare).is_none());
+        // The card says which knowledge methods this daemon answers; an older card says nothing.
+        assert_eq!(card_identity(&agent_card(&info(None, false))).unwrap().knowledge, super::super::knowledge::KNOWLEDGE_VERSION);
+        let mut old_card = agent_card(&info(None, false));
+        old_card["capabilities"]["extensions"][0]["params"].as_object_mut().unwrap().remove("knowledge");
+        assert_eq!(card_identity(&old_card).unwrap().knowledge, 0);
         // A daemon id that is not printable is refused rather than shown.
         let mut bad = agent_card(&info(None, false));
         bad["capabilities"]["extensions"][0]["params"]["daemonId"] = json!("<b>x</b>");

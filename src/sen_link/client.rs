@@ -222,6 +222,7 @@ mod tests {
             assignee: None,
             daemon_id: None,
             key: None,
+            knowledge: Default::default(),
             created_at: String::new(),
         }
     }
