@@ -1470,6 +1470,11 @@ Rules for Claude:
   responder reports names lowercased in a goodbye, so the table is keyed case-insensitively (a case-sensitive key kept a daemon listed after it left).
   `PeerView.online` and the address follow-up in `client::call` read this table; only an IP-literal address follows, and only after a *connect* failure
   (a timeout may mean the request was delivered).
+- **An entry expires `SEEN_TTL` (300 s) after its last sighting, but mDNS only reports a *change*** — an unchanged daemon is never re-announced, so the clock alone
+  dropped a reachable peer (`online: false`, empty Nearby) exactly 300 s after it appeared. `revalidate_loop` therefore asks entries quieter than 150 s for their Agent Card
+  (`probe::identity_at` through `LinkState::http`, ≤4 entries per 15 s pass, ≤4 addresses each, 3 s each, only while enabled) and a card with the **same daemon id**
+  refreshes that entry's clocks; its source labels stay. No answer (including a hidden daemon, which has no card) or another id → it ages out as before. Do not make
+  an mDNS sighting immortal and do not turn this into a scan.
 - **Pairing by id checks the Agent Card before sending the code** (`probe::identity_at`), so an address another daemon has since taken does not receive it.
 - **The listener closes gracefully** (`Running::shutdown`, a cancelled token), never by dropping the task: an aborted `axum::serve` leaves its connection tasks
   alive, and a peer's pooled connection kept answering — 404 once SLink was off — after the socket was supposed to be closed.

@@ -52,7 +52,11 @@ While SLink is on, the daemon finds other SenClaws by itself, and a person can a
 `discoverable` and listening on a real interface (not loopback), it announces itself: the TXT record carries `v=1`,
 `id` (its daemon id), `name` and `pair` (`1` while an invite can be redeemed), and the SRV record the listener's port.
 No Bonjour or Avahi is needed. Only interfaces with a LAN address are used. Turning SLink off sends a goodbye, so the
-others drop it at once. `GET /api/sen-link/discovered` lists what has been seen:
+others drop it at once. A daemon that is not heard from again is dropped after five minutes. An unchanged announcement is
+not repeated, so a daemon that is still there is asked rather than waited for: once its last sighting is over 2½ minutes
+old, the daemon requests its Agent Card at the addresses it was seen at (every 15 s, at most four daemons at a time, 3 s
+each) and a card with the same id counts as a sighting. One that does not answer, or answers as another daemon, is
+dropped on schedule. `GET /api/sen-link/discovered` lists what has been seen:
 
 ```json
 {"discovered": [{"daemonId": "3b1b316d-…", "name": "Mac A", "addrs": ["192.168.0.82"], "port": 51791,
@@ -72,7 +76,7 @@ range of your choice instead: it must be inside the LAN and hold at most 1024 ad
 TCP connect (400 ms) and, if the port is open, an Agent Card request (1.5 s); only a SenClaw card with the SLink
 extension counts. 128 at a time, so a /24 takes about a second. One scan at a time (a second start is a 409); poll
 `GET /api/sen-link/scan/:id` for `{state: running|done|canceled, scanned, total, ranges, notes, found}` and stop it with
-`POST /api/sen-link/scan/:id/cancel`. Hits join the `discovered` list for five minutes. A tailnet cannot be walked
+`POST /api/sen-link/scan/:id/cancel`. Hits join the `discovered` list for five minutes, and stay while they keep answering. A tailnet cannot be walked
 (~4 million addresses): type a Tailscale address or MagicDNS name instead.
 
 `discoverable: false` hides this daemon from both: no announcement, no Agent Card. It can still be paired by a typed address.
