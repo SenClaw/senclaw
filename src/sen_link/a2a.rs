@@ -165,7 +165,7 @@ pub fn agent_card(i: &AgentCardInfo<'_>) -> Value {
             "tags": ["kanban", "code", "research"],
         }],
         "securitySchemes": {
-            "bearer": { "httpAuthSecurityScheme": { "scheme": "Bearer", "description": "Token issued when the peers paired (sen-link invite)." } }
+            "bearer": { "httpAuthSecurityScheme": { "scheme": "Bearer", "description": "Requests are sealed under the key made when the peers paired (SLink invite); the token issued then travels inside the envelope." } }
         },
         "securityRequirements": [{ "schemes": { "bearer": { "list": [] } } }],
     })

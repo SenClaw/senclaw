@@ -1,9 +1,10 @@
-//! Inbound A2A: the Agent Card, the JSON-RPC endpoint peers call, and the
-//! pairing handshake. Only the LAN listener serves them (`listener.rs`), and
-//! all three answer 404 while SLink is disabled. These paths live outside
-//! `/api`, so the daemon's API token gate does not apply; `/a2a`
-//! authenticates the peer token itself and `/a2a/pair` requires a live
-//! one-time invite code.
+//! Inbound A2A: the Agent Card, the sealed JSON-RPC endpoint peers call, and
+//! the two steps of the pairing handshake. Only the LAN listener serves them
+//! (`listener.rs`), and all of them answer 404 while SLink is disabled. These
+//! paths live outside `/api`, so the daemon's API token gate does not apply:
+//! `/a2a` opens only what is sealed under a pair key (`seal.rs`) and
+//! `/a2a/pair/*` only completes for whoever knows the live invite's code
+//! (`pairing.rs`).
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -11,14 +12,17 @@ use std::sync::Arc;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
+use base64::Engine as _;
 use axum::Json;
 use serde_json::{json, Value};
 
 use super::a2a::{self, TaskState};
 use super::lan::{self, Endpoint, Host};
 use super::store::{clean_daemon_id, random_token, sha256_hex, Peer};
-use super::{tasks, LinkState};
+use super::{pairing, seal, tasks, LinkState};
 use crate::kanban::api::now;
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
 fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
@@ -48,71 +52,107 @@ pub async fn agent_card(State(st): State<Arc<LinkState>>, headers: HeaderMap) ->
     .into_response()
 }
 
-/// Body of `POST /a2a/pair`.
-#[derive(serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairRequest {
-    pub code: String,
-    pub name: String,
-    /// Port of the caller's own SLink listener. With the address this call
-    /// came from it tells us where to send the caller tasks.
-    #[serde(default)]
-    pub port: Option<u16>,
-    /// The caller's id (`PeerStore::daemon_id`).
-    #[serde(default)]
-    pub daemon_id: Option<String>,
-    /// Token we present when calling the caller.
-    #[serde(default)]
-    pub token: Option<String>,
+/// The header that names the sender of a sealed request: its daemon id, which
+/// is no secret. The receiver uses it to find the pair key to try.
+pub const FROM_HEADER: &str = "x-slink-from";
+
+fn unauthorized() -> Response {
+    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response()
+}
+
+fn error_body(code: StatusCode, msg: impl Into<String>) -> Response {
+    (code, Json(json!({ "error": msg.into() }))).into_response()
 }
 
 fn internal_err(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-/// Redeem an invite and record the caller as a peer. `source` is the address
-/// the request came from; it is the peer's address unless it is paired already.
-pub fn pair_with(st: &LinkState, req: PairRequest, source: IpAddr) -> Result<Value, (StatusCode, String)> {
-    let s = st.settings();
-    match st.store.redeem_invite(&req.code, now()) {
-        Ok(true) => {}
-        Ok(false) => return Err((StatusCode::FORBIDDEN, "invalid or expired invite code".into())),
-        Err(e) => return Err(internal_err(e)),
+const NO_INVITE: &str = "invalid or expired invite code";
+
+/// `POST /a2a/pair/begin` — the first message of the pairing handshake. There
+/// is one live invite at a time, so there is one password it can be for.
+pub async fn pair_begin(State(st): State<Arc<LinkState>>, Json(b): Json<pairing::Begin>) -> Response {
+    if !st.settings().enabled {
+        return not_found();
     }
+    let Some(invite) = st.store.live_invite(now()) else {
+        return error_body(StatusCode::FORBIDDEN, NO_INVITE);
+    };
+    let Ok(msg_a) = B64.decode(&b.msg) else {
+        return error_body(StatusCode::BAD_REQUEST, "the handshake message is not base64");
+    };
+    let (msg_b, keys) = match pairing::respond(&invite.code, &msg_a) {
+        Ok(x) => x,
+        Err(e) => return error_body(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+    let Some(sid) = st.sessions.insert(keys, invite.id) else {
+        return error_body(StatusCode::TOO_MANY_REQUESTS, "too many pairings are in flight; try again in a minute");
+    };
+    Json(pairing::BeginReply { sid, msg: B64.encode(msg_b) }).into_response()
+}
+
+/// `POST /a2a/pair/finish` — the second message: A's offer, sealed under the
+/// key the code made. Opening it is the proof that A knew the code.
+pub async fn pair_finish(State(st): State<Arc<LinkState>>, ConnectInfo(from): ConnectInfo<SocketAddr>, Json(f): Json<pairing::Finish>) -> Response {
+    if !st.settings().enabled {
+        return not_found();
+    }
+    match finish_pairing(&st, f, from.ip()) {
+        Ok(sealed) => Json(sealed).into_response(),
+        Err((code, msg)) => error_body(code, msg),
+    }
+}
+
+/// Finish a handshake: check the code, record the caller as a peer, and seal
+/// what it needs to know. `source` is the address the request came from — the
+/// peer's address, unless it is paired already.
+pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Result<seal::Sealed, (StatusCode, String)> {
+    let refused = || (StatusCode::FORBIDDEN, NO_INVITE.to_string());
+    let pending = st.sessions.take(&f.sid).ok_or_else(refused)?;
+    // The invite this began for must still be the one that can be redeemed.
+    let invite = st.store.live_invite(now()).filter(|i| i.id == pending.invite_id).ok_or_else(refused)?;
+    let plain = match seal::open(&pending.keys.a_to_b, &pairing::offer_aad(&f.sid), &f.sealed) {
+        Ok(p) => p,
+        Err(_) => {
+            // Sealed under another key: the sender did not know the code. That
+            // was a guess, and the invite only allows so many.
+            let still_good = st.store.note_wrong_code(&invite.id).map_err(internal_err)?;
+            st.discovery_wake.notify_one();
+            tracing::warn!(from = %source, still_good, "[slink] a pairing attempt used a wrong code");
+            return Err(refused());
+        }
+    };
+    let offer: pairing::Offer = serde_json::from_slice(&plain).map_err(|_| (StatusCode::BAD_REQUEST, "malformed offer".to_string()))?;
+    if !st.store.redeem_invite(&invite.id, now()).map_err(internal_err)? {
+        return Err(refused());
+    }
+    // The announcement stops saying a code can be redeemed.
+    st.discovery_wake.notify_one();
+
+    let s = st.settings();
     let theirs = random_token();
-    let daemon_id = req.daemon_id.as_deref().and_then(clean_daemon_id);
+    let daemon_id = offer.daemon_id.as_deref().and_then(clean_daemon_id);
     // The same daemon pairing again replaces its record (and keeps the id its
     // tasks are filed under, and what we let it do), instead of adding a twin.
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
-    let name: String = req.name.trim().chars().take(80).collect();
+    let name: String = offer.name.trim().chars().take(80).collect();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.is_empty() { "peer".into() } else { name },
-        addr: req
-            .port
-            .filter(|p| *p != 0)
-            .map(|port| Endpoint { host: Host::Ip(source.to_canonical()), port }.to_string()),
-        outbound_token: req.token.filter(|t| !t.is_empty()),
+        addr: offer.port.filter(|p| *p != 0).map(|port| Endpoint { host: Host::Ip(source.to_canonical()), port }.to_string()),
+        outbound_token: Some(offer.token).filter(|t| !t.is_empty()),
         inbound_token_hash: sha256_hex(&theirs),
         auto_run: known.as_ref().is_some_and(|k| k.auto_run),
         assignee: known.and_then(|k| k.assignee),
         daemon_id,
+        key: Some(seal::encode_key(&pending.keys.pair)),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
-    let id = peer.id.clone();
+    let accept = pairing::Accept { peer_id: peer.id.clone(), name: s.name, daemon_id: st.store.daemon_id().to_string(), token: theirs };
     st.store.upsert(peer).map_err(internal_err)?;
-    tracing::info!(peer = %id, "[slink] paired by invite");
-    Ok(json!({ "peerId": id, "name": s.name, "token": theirs, "daemonId": st.store.daemon_id() }))
-}
-
-pub async fn pair(State(st): State<Arc<LinkState>>, ConnectInfo(from): ConnectInfo<SocketAddr>, Json(req): Json<PairRequest>) -> Response {
-    if !st.settings().enabled {
-        return not_found();
-    }
-    match pair_with(&st, req, from.ip()) {
-        Ok(v) => Json(v).into_response(),
-        Err((code, e)) => (code, Json(json!({ "error": e }))).into_response(),
-    }
+    tracing::info!(peer = %accept.peer_id, "[slink] paired by invite");
+    seal::seal_json(&pending.keys.b_to_a, &pairing::accept_aad(&f.sid), &accept).map_err(internal_err)
 }
 
 /// Answer one JSON-RPC request body for `peer`.
@@ -127,19 +167,39 @@ pub fn rpc_reply(st: &LinkState, peer: &Peer, req: &Value) -> Value {
     }
 }
 
-/// `POST /a2a` — JSON-RPC 2.0, A2A v1.0 methods.
+/// `POST /a2a` — a sealed JSON-RPC 2.0 request (A2A v1.0 methods) and its
+/// sealed answer. Anything that is not exactly that is a bare 401: a wrong
+/// sender, a wrong key, a replay, a stale clock and a wrong token look alike.
 pub async fn rpc(State(st): State<Arc<LinkState>>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     if !st.settings().enabled {
         return not_found();
     }
-    let peer = match crate::gateway::ui_server::auth::token_from_headers(&headers).and_then(|t| st.store.by_inbound_token(&t)) {
-        Some(p) => p,
-        None => return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response(),
-    };
-    match serde_json::from_slice::<Value>(&body) {
-        Ok(req) => Json(rpc_reply(&st, &peer, &req)).into_response(),
-        Err(e) => Json(a2a::rpc_error(&Value::Null, a2a::PARSE_ERROR, &e.to_string())).into_response(),
+    match serve_sealed(&st, &headers, &body) {
+        Some(sealed) => Json(sealed).into_response(),
+        None => unauthorized(),
     }
+}
+
+fn serve_sealed(st: &LinkState, headers: &HeaderMap, body: &[u8]) -> Option<seal::Sealed> {
+    let from = headers.get(FROM_HEADER).and_then(|v| v.to_str().ok()).and_then(clean_daemon_id)?;
+    let peer = st.store.by_daemon_id(&from)?;
+    let key = seal::decode_key(peer.key.as_deref()?).ok()?;
+    let own = st.store.daemon_id().to_string();
+    let sealed: seal::Sealed = serde_json::from_slice(body).ok()?;
+    let req: seal::Request = seal::open_json(&key, &seal::aad("req", &from, &own), &sealed).ok()?;
+    if !st.replay.accept(&peer.id, &req.id, req.ts, chrono::Utc::now().timestamp_millis()) {
+        tracing::warn!(peer = %peer.id, "[slink] refused a stale or replayed request");
+        return None;
+    }
+    // The token is the second lock: a sealed request without it is still refused.
+    if !crate::gateway::ui_server::auth::ct_eq(&peer.inbound_token_hash, &sha256_hex(&req.token)) {
+        return None;
+    }
+    let mut rpc = rpc_reply(st, &peer, &req.rpc);
+    if serde_json::to_vec(&rpc).map_or(0, |b| b.len()) > seal::MAX_REPLY_BYTES {
+        rpc = a2a::rpc_error(req.rpc.get("id").unwrap_or(&Value::Null), a2a::INTERNAL_ERROR, "the answer is too large to send");
+    }
+    seal::seal_json(&key, &seal::aad("resp", &own, &from), &seal::Reply { id: req.id, rpc }).ok()
 }
 
 type RpcResult = Result<Value, (i64, String)>;
@@ -247,6 +307,8 @@ pub fn handle(st: &LinkState, peer: &Peer, method: &str, params: &Value) -> RpcR
 mod tests {
     use super::*;
     use crate::sen_link::store::PeerStore;
+    use crate::sen_link::testkit::{node, paired, Node};
+    use crate::sen_link::{client, lan, pairing};
 
     fn state() -> (tempfile::TempDir, LinkState) {
         let t = tempfile::tempdir().unwrap();
@@ -270,6 +332,7 @@ mod tests {
             auto_run,
             assignee: Some("claude-code".into()),
             daemon_id: None,
+            key: None,
             created_at: String::new(),
         }
     }
@@ -329,78 +392,154 @@ mod tests {
         assert_eq!(st.kanban.card_role(tid).unwrap().as_deref(), Some("ready"));
     }
 
-    fn req(code: &str, port: Option<u16>, daemon_id: Option<&str>) -> PairRequest {
-        PairRequest { code: code.into(), name: "  Mac mini  ".into(), port, daemon_id: daemon_id.map(str::to_string), token: Some("slk_theirs".into()) }
+    #[tokio::test]
+    async fn pairing_records_the_caller_at_the_address_it_came_from_and_both_sides_hold_one_key() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (at_a, at_b) = paired(&a, &b).await;
+
+        assert_eq!((at_b.name.as_str(), at_b.addr.clone()), ("Mac A", Some(format!("127.0.0.1:{}", a.port))));
+        assert_eq!(at_b.daemon_id.as_deref(), Some(a.st.store.daemon_id()));
+        assert_eq!(at_a.daemon_id.as_deref(), Some(b.st.store.daemon_id()));
+        assert!(!at_b.auto_run, "a new peer waits in Triage until a person trusts it");
+        let key = seal::decode_key(at_a.key.as_deref().unwrap()).unwrap();
+        assert_eq!(at_a.key, at_b.key, "both sides derived the same pair key");
+        assert_eq!(key.len(), 32);
+        // The invite is spent.
+        assert!(!b.st.store.has_live_invite(now()));
     }
 
-    #[test]
-    fn pairing_records_the_caller_at_the_address_it_came_from() {
-        let (_t, st) = state();
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        let from: IpAddr = "192.168.1.9".parse().unwrap();
-        let reply = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), from).unwrap();
-
-        let p = st.store.get(reply["peerId"].as_str().unwrap()).unwrap();
-        assert_eq!(p.addr.as_deref(), Some("192.168.1.9:18791"));
-        assert_eq!(p.name, "Mac mini");
-        assert_eq!(p.daemon_id.as_deref(), Some("6f1c-0a"));
-        assert_eq!(p.outbound_token.as_deref(), Some("slk_theirs"));
-        assert!(!p.auto_run, "a new peer waits in Triage until a person trusts it");
-        assert_eq!(reply["daemonId"], st.store.daemon_id());
-        // The token we handed back is the one that now opens /a2a for that peer.
-        assert_eq!(st.store.by_inbound_token(reply["token"].as_str().unwrap()).unwrap().id, p.id);
-        // One code, one pairing.
-        assert_eq!(pair_with(&st, req(&code, Some(18791), None), from).unwrap_err().0, StatusCode::FORBIDDEN);
-        assert_eq!(st.store.peers().len(), 1);
+    async fn try_code(a: &Node, ep: &Endpoint, code: &str) -> Result<client::Paired, client::PairError> {
+        let offer = pairing::Offer { name: "A".into(), port: Some(a.port), daemon_id: Some(a.st.store.daemon_id().into()), token: "slk_a".into() };
+        client::pair(&a.st.http, ep, code, &offer).await
     }
 
-    #[test]
-    fn the_source_address_is_read_as_the_plain_ip_and_a_missing_port_leaves_no_address() {
-        let (_t, st) = state();
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        let mapped: IpAddr = "::ffff:192.168.1.9".parse().unwrap();
-        let r = pair_with(&st, req(&code, Some(7000), None), mapped).unwrap();
-        assert_eq!(st.store.get(r["peerId"].as_str().unwrap()).unwrap().addr.as_deref(), Some("192.168.1.9:7000"));
+    #[tokio::test]
+    async fn a_wrong_code_pairs_nobody_and_the_third_wrong_one_kills_the_invite() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let ep = lan::parse_endpoint(&format!("127.0.0.1:{}", b.port), lan::DEFAULT_PORT).unwrap();
 
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        let r = pair_with(&st, req(&code, None, Some("<b>")), mapped).unwrap();
-        let p = st.store.get(r["peerId"].as_str().unwrap()).unwrap();
-        assert_eq!((p.addr, p.daemon_id), (None, None), "no port: nowhere to send; unprintable id: dropped");
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        assert!(pair_with(&st, req(&code, Some(0), None), mapped).unwrap()["peerId"].is_string());
+        // No invite at all: nothing to guess.
+        let e = try_code(&a, &ep, "K7MQ2XRP").await.unwrap_err();
+        assert!(e.reached && e.to_string().contains("invalid or expired invite code"), "{e}");
+
+        // Two wrong guesses, and the invite still works.
+        let (code, _) = b.st.store.create_invite(now()).unwrap();
+        for wrong in ["AAAAAAAA", "BBBBBBBB"] {
+            let e = try_code(&a, &ep, wrong).await.unwrap_err();
+            assert!(e.reached && e.to_string().contains("invalid or expired invite code"), "{e}");
+        }
+        assert!(b.st.store.has_live_invite(now()));
+        assert!(b.st.store.peers().is_empty(), "a wrong code recorded nobody");
+        assert!(try_code(&a, &ep, &code).await.is_ok(), "the right code still pairs after two wrong ones");
+
+        // Three wrong guesses kill it: even the right code is no use after that.
+        let (code, _) = b.st.store.create_invite(now()).unwrap();
+        for wrong in ["AAAAAAAA", "BBBBBBBB", "CCCCCCCC"] {
+            assert!(try_code(&a, &ep, wrong).await.is_err());
+        }
+        assert!(!b.st.store.has_live_invite(now()), "the invite is gone");
+        assert!(try_code(&a, &ep, &code).await.is_err(), "the right code, too late");
     }
 
-    #[test]
-    fn a_wrong_or_stale_code_pairs_nobody() {
-        let (_t, st) = state();
-        let from: IpAddr = "10.0.0.2".parse().unwrap();
-        assert_eq!(pair_with(&st, req("NOPE2345", Some(1), None), from).unwrap_err().0, StatusCode::FORBIDDEN);
-        assert!(st.store.peers().is_empty());
-    }
-
-    #[test]
-    fn pairing_again_replaces_the_record_and_keeps_what_the_operator_allowed() {
-        let (_t, st) = state();
-        let from: IpAddr = "192.168.1.9".parse().unwrap();
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        let first = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), from).unwrap();
-        let id = first["peerId"].as_str().unwrap().to_string();
-        st.store.update(&id, |p| {
+    #[tokio::test]
+    async fn pairing_again_replaces_the_record_keeps_what_the_operator_allowed_and_retires_the_old_key() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (at_a, at_b) = paired(&a, &b).await;
+        b.st.store.update(&at_b.id, |p| {
             p.auto_run = true;
             p.assignee = Some("claude-code".into());
         })
         .unwrap();
 
-        let new_ip: IpAddr = "192.168.1.77".parse().unwrap();
-        let (code, _) = st.store.create_invite(now()).unwrap();
-        let again = pair_with(&st, req(&code, Some(18791), Some("6f1c-0a")), new_ip).unwrap();
-        assert_eq!(again["peerId"], first["peerId"]);
-        assert_ne!(again["token"], first["token"]);
-        let peers = st.store.peers();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].addr.as_deref(), Some("192.168.1.77:18791"));
-        assert!(peers[0].auto_run && peers[0].assignee.as_deref() == Some("claude-code"));
-        assert!(st.store.by_inbound_token(first["token"].as_str().unwrap()).is_none(), "the old token stops working");
+        let (at_a2, at_b2) = paired(&a, &b).await;
+        assert_eq!((at_a2.id.as_str(), at_b2.id.as_str()), (at_a.id.as_str(), at_b.id.as_str()), "the same peers, not twins");
+        assert_eq!((b.st.store.peers().len(), a.st.store.peers().len()), (1, 1));
+        assert!(at_b2.auto_run && at_b2.assignee.as_deref() == Some("claude-code"));
+        assert_ne!(at_a2.key, at_a.key, "a new pairing is a new key");
+
+        // The old key no longer opens anything at B: a request sealed under it is refused.
+        let old = seal::decode_key(at_a.key.as_deref().unwrap()).unwrap();
+        let (status, _) = raw_request(&b, &a, &old, at_a.outbound_token.as_deref().unwrap(), json!({ "jsonrpc": "2.0", "id": 1, "method": "ListTasks", "params": {} }), None).await;
+        assert_eq!(status, 401);
+    }
+
+    /// A request sealed the way `client::call` seals one, sent raw so a test can
+    /// bend it. `ts` overrides the clock.
+    async fn raw_request(to: &Node, from: &Node, key: &seal::Key, token: &str, rpc: Value, ts: Option<i64>) -> (u16, Value) {
+        let (own, theirs) = (from.st.store.daemon_id(), to.st.store.daemon_id());
+        let req = seal::Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            ts: ts.unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+            token: token.into(),
+            rpc,
+        };
+        let body = serde_json::to_vec(&seal::seal_json(key, &seal::aad("req", own, theirs), &req).unwrap()).unwrap();
+        post_raw(to, Some(own), body).await
+    }
+
+    async fn post_raw(to: &Node, from_header: Option<&str>, body: Vec<u8>) -> (u16, Value) {
+        let mut r = to.st.http.post(format!("http://127.0.0.1:{}/a2a", to.port)).header("content-type", "application/json");
+        if let Some(f) = from_header {
+            r = r.header(FROM_HEADER, f);
+        }
+        let resp = r.body(body).send().await.unwrap();
+        let status = resp.status().as_u16();
+        (status, resp.json().await.unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn only_a_request_sealed_under_the_pair_key_with_the_right_token_is_answered() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (at_a, at_b) = paired(&a, &b).await;
+        let key = seal::decode_key(at_b.key.as_deref().unwrap()).unwrap();
+        let token = at_a.outbound_token.clone().unwrap();
+        let list = json!({ "jsonrpc": "2.0", "id": 7, "method": "ListTasks", "params": {} });
+        let own = a.st.store.daemon_id().to_string();
+
+        // The real thing: answered, and the answer is sealed for us and carries our request's id.
+        let req = seal::Request { id: "r-1".into(), ts: chrono::Utc::now().timestamp_millis(), token: token.clone(), rpc: list.clone() };
+        let wire = serde_json::to_vec(&seal::seal_json(&key, &seal::aad("req", &own, b.st.store.daemon_id()), &req).unwrap()).unwrap();
+        let (status, answer) = post_raw(&b, Some(&own), wire.clone()).await;
+        assert_eq!(status, 200);
+        let sealed: seal::Sealed = serde_json::from_value(answer.clone()).unwrap();
+        assert!(answer.get("result").is_none() && answer.get("jsonrpc").is_none(), "nothing readable: {answer}");
+        let reply: seal::Reply = seal::open_json(&key, &seal::aad("resp", b.st.store.daemon_id(), &own), &sealed).unwrap();
+        assert_eq!((reply.id.as_str(), reply.rpc["id"].as_i64(), reply.rpc["result"]["totalSize"].as_i64()), ("r-1", Some(7), Some(0)));
+
+        // The same bytes again: a replay.
+        assert_eq!(post_raw(&b, Some(&own), wire).await.0, 401, "a captured request cannot run twice");
+
+        // Everything else is the same bare refusal.
+        assert_eq!(raw_request(&b, &a, &key, &token, list.clone(), Some(chrono::Utc::now().timestamp_millis() - 3 * 60_000)).await.0, 401, "a stale clock");
+        assert_eq!(raw_request(&b, &a, &key, &token, list.clone(), Some(chrono::Utc::now().timestamp_millis() + 3 * 60_000)).await.0, 401, "a clock from the future");
+        assert_eq!(raw_request(&b, &a, &key, "slk_not_the_token", list.clone(), None).await.0, 401, "the right key, the wrong token");
+        assert_eq!(raw_request(&b, &a, &[9u8; 32], &token, list.clone(), None).await.0, 401, "another key");
+        assert_eq!(post_raw(&b, None, b"{}".to_vec()).await.0, 401, "no sender");
+        assert_eq!(post_raw(&b, Some("someone-else"), b"{}".to_vec()).await.0, 401, "an unknown sender");
+        assert_eq!(post_raw(&b, Some(&own), serde_json::to_vec(&list).unwrap()).await.0, 401, "a plain JSON-RPC request, as before the conversation was sealed");
+        assert_eq!(post_raw(&b, Some(&own), b"not json".to_vec()).await.0, 401);
+
+        // An envelope for another direction or another receiver does not open here.
+        let req = seal::Request { id: "r-2".into(), ts: chrono::Utc::now().timestamp_millis(), token: token.clone(), rpc: list.clone() };
+        let turned = serde_json::to_vec(&seal::seal_json(&key, &seal::aad("resp", &own, b.st.store.daemon_id()), &req).unwrap()).unwrap();
+        assert_eq!(post_raw(&b, Some(&own), turned).await.0, 401, "sealed as an answer");
+        let elsewhere = serde_json::to_vec(&seal::seal_json(&key, &seal::aad("req", &own, "a-third-daemon"), &req).unwrap()).unwrap();
+        assert_eq!(post_raw(&b, Some(&own), elsewhere).await.0, 401, "sealed for another daemon");
+    }
+
+    #[tokio::test]
+    async fn a_peer_paired_before_calls_were_sealed_can_neither_call_nor_be_called() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let (at_a, at_b) = paired(&a, &b).await;
+        let key = seal::decode_key(at_b.key.as_deref().unwrap()).unwrap();
+        let token = at_a.outbound_token.clone().unwrap();
+        // B forgets the key, as if the record were from an older build.
+        b.st.store.update(&at_b.id, |p| p.key = None).unwrap();
+        let (status, _) = raw_request(&b, &a, &key, &token, json!({ "jsonrpc": "2.0", "id": 1, "method": "ListTasks", "params": {} }), None).await;
+        assert_eq!(status, 401);
+        let e = client::call(&b.st, &b.st.store.get(&at_b.id).unwrap(), "ListTasks", json!({})).await.unwrap_err();
+        assert!(e.to_string().contains("pair it again"), "{e}");
+        assert!(crate::sen_link::store::PeerView::from(&b.st.store.get(&at_b.id).unwrap()).legacy);
     }
 
     /// An install from before the rename: board and setting both say `sen-link`.

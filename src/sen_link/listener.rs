@@ -2,9 +2,10 @@
 //!
 //! Before this, receiving a task meant binding the whole UI server beyond
 //! loopback — the daemon's `/api`, its MCP bridge and its WebSocket gateway
-//! went along. This socket carries three routes (`GET /.well-known/agent-card.json`,
-//! `POST /a2a`, `POST /a2a/pair`) and refuses any connection whose source is
-//! not a LAN address before a byte of its request is read.
+//! went along. This socket carries four routes (`GET /.well-known/agent-card.json`,
+//! `POST /a2a`, `POST /a2a/pair/begin`, `POST /a2a/pair/finish`) and refuses
+//! any connection whose source is not a LAN address before a byte of its
+//! request is read.
 //!
 //! A supervisor opens it while `senLink.enabled`, moves it when the host or
 //! port changes, closes it when SLink is turned off, and retries a bind that
@@ -45,7 +46,8 @@ pub fn router(st: Arc<LinkState>) -> Router {
     Router::new()
         .route("/.well-known/agent-card.json", get(server::agent_card))
         .route("/a2a", post(server::rpc))
-        .route("/a2a/pair", post(server::pair))
+        .route("/a2a/pair/begin", post(server::pair_begin))
+        .route("/a2a/pair/finish", post(server::pair_finish))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(middleware::from_fn(lan_only))
         .with_state(st)
@@ -199,7 +201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_lan_socket_serves_the_three_a2a_routes_and_nothing_else() {
+    async fn the_lan_socket_serves_the_a2a_routes_and_nothing_else() {
         let t = tempfile::tempdir().unwrap();
         let app = router(link_state(t.path(), json!({ "enabled": true, "name": "Mac" })));
         let lan = "192.168.1.5:50000";
@@ -208,7 +210,12 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(card["name"], "Mac");
         assert_eq!(ask(&app, lan, "POST", "/a2a", Some(json!({}))).await.0, StatusCode::UNAUTHORIZED);
-        assert_eq!(ask(&app, lan, "POST", "/a2a/pair", Some(json!({}))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(ask(&app, lan, "POST", "/a2a/pair/begin", Some(json!({}))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(ask(&app, lan, "POST", "/a2a/pair/finish", Some(json!({}))).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+        // The old one-step pairing is gone, and so is anything else under /a2a.
+        for path in ["/a2a/pair", "/a2a/other"] {
+            assert_eq!(ask(&app, lan, "POST", path, Some(json!({}))).await.0, StatusCode::NOT_FOUND, "{path}");
+        }
 
         // None of the daemon's other surfaces exist on this port.
         for path in ["/api/sen-link/status", "/api/sen-link/settings", "/api/kanban/boards", "/api/auth/status", "/mcp/core", "/"] {
@@ -222,7 +229,7 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let app = router(link_state(t.path(), json!({ "enabled": true })));
         for from in ["8.8.8.8:5000", "203.0.113.9:5000", "[2001:4860:4860::8888]:5000", "[::ffff:8.8.8.8]:5000"] {
-            for (m, p) in [("GET", "/.well-known/agent-card.json"), ("POST", "/a2a"), ("POST", "/a2a/pair"), ("GET", "/nothing")] {
+            for (m, p) in [("GET", "/.well-known/agent-card.json"), ("POST", "/a2a"), ("POST", "/a2a/pair/begin"), ("POST", "/a2a/pair/finish"), ("GET", "/nothing")] {
                 assert_eq!(ask(&app, from, m, p, Some(json!({}))).await.0, StatusCode::FORBIDDEN, "{from} {m} {p}");
             }
         }
@@ -239,15 +246,16 @@ mod tests {
 
         let off = router(link_state(t.path(), json!({ "enabled": false })));
         assert_eq!(ask(&off, lan, "GET", "/.well-known/agent-card.json", None).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(ask(&off, lan, "POST", "/a2a/pair", Some(json!({ "code": "X", "name": "n" }))).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(ask(&off, lan, "POST", "/a2a/pair/begin", Some(json!({ "msg": "AA==" }))).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(ask(&off, lan, "POST", "/a2a", Some(json!({}))).await.0, StatusCode::NOT_FOUND);
 
         let t2 = tempfile::tempdir().unwrap();
         let hidden = router(link_state(t2.path(), json!({ "enabled": true, "discoverable": false })));
         assert_eq!(ask(&hidden, lan, "GET", "/.well-known/agent-card.json", None).await.0, StatusCode::NOT_FOUND);
         assert_eq!(
-            ask(&hidden, lan, "POST", "/a2a/pair", Some(json!({ "code": "WRONG123", "name": "n" }))).await.0,
+            ask(&hidden, lan, "POST", "/a2a/pair/begin", Some(json!({ "msg": "AA==" }))).await.0,
             StatusCode::FORBIDDEN,
-            "the pairing door is open (and refuses a wrong code)"
+            "the pairing door is open (and has no invite to answer for)"
         );
     }
 

@@ -17,8 +17,10 @@ pub mod client;
 pub mod discovery;
 pub mod lan;
 pub mod listener;
+pub mod pairing;
 pub mod probe;
 pub mod scan;
+pub mod seal;
 pub mod server;
 pub mod settings;
 pub mod store;
@@ -50,6 +52,10 @@ pub struct LinkState {
     pub discovery_wake: Arc<Notify>,
     /// The network scan, one at a time.
     pub scans: scan::Scans,
+    /// Pairing handshakes this daemon has answered and not yet seen finish.
+    pub sessions: pairing::Sessions,
+    /// Request ids served lately, so a captured request cannot run twice.
+    pub replay: seal::ReplayGuard,
     listen: Mutex<listener::ListenStatus>,
 }
 
@@ -77,6 +83,8 @@ impl LinkState {
             discovery,
             discovery_wake: Arc::new(Notify::new()),
             scans: scan::Scans::default(),
+            sessions: pairing::Sessions::default(),
+            replay: seal::ReplayGuard::default(),
             listen: Mutex::new(listener::ListenStatus::default()),
         }
     }

@@ -1448,13 +1448,13 @@ Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).
 
 ## SLink — two SenClaws on the local network (`src/sen_link/`)
 
-A2A v1.0 over plain HTTP between two daemons on a private network; one-time invite code to pair; incoming tasks become cards on the `SLink` kanban board. The
+A2A v1.0 over HTTP between two daemons on a private network, sealed under a key the pairing makes; one-time invite code to pair; incoming tasks become cards on the `SLink` kanban board. The
 UI says **SLink**; the code name `sen-link` stays in every path, key and folder (`/api/sen-link/*`, `senLink`, `~/.senclaw/sen-link/`, `senclaw-link`). User guide:
-[docs/sen-link.md](docs/sen-link.md); the design and what is still to come (a sealed channel): `plans/261020-1116-sen-link-lan-only/`.
+[docs/sen-link.md](docs/sen-link.md); the design and what was decided: `plans/261020-1116-sen-link-lan-only/`.
 
 Rules for Claude:
 
-- **The A2A surface lives on its own listener and nowhere else** (`listener::router`: the Agent Card, `/a2a`, `/a2a/pair`; default `0.0.0.0:18791`, opened while
+- **The A2A surface lives on its own listener and nowhere else** (`listener::router`: the Agent Card, `/a2a`, `/a2a/pair/begin`, `/a2a/pair/finish`; default `0.0.0.0:18791`, opened while
   `senLink.enabled`). Never mount those routes on the UI router: that is how receiving a task used to need `SENCLAW_UI_BIND_HOST`, which also exposed `/api` and
   the WS gateway. The management API (`/api/sen-link/*`) stays on the UI server behind the token.
 - **"LAN" is one function, `lan::is_lan_addr`**, applied to an inbound source (middleware, before any byte of the request is read), to an IP literal and to every
@@ -1475,8 +1475,17 @@ Rules for Claude:
   alive, and a peer's pooled connection kept answering — 404 once SLink was off — after the socket was supposed to be closed.
 - **A peer's trust is the operator's** and unchanged: tasks wait in Triage, `autoRun` is per peer, the assignee is never the peer's to pick. `autoRun` with
   `claude-code` gives that peer a shell on this machine.
-- **The link is not encrypted yet** (bearer tokens in clear HTTP), and `/a2a/pair` has no attempt limit. Both are stated in the docs; do not describe SLink as
-  secure on an untrusted network until the sealed channel lands.
+- **Nothing is sent or accepted unsealed after pairing, and there is no plaintext fallback** (`seal.rs`: AES-256-GCM under the pair key; the additional data names
+  the direction and both daemons; a request carries an id and a clock, checked against a two-minute window and a replay guard; an answer carries the id it answers;
+  every failure is the same bare 401). Do not add a route or a branch that takes a bearer token alone: a peer without a key is `legacy` and must pair again.
+  `seal.rs` uses `aes_gcm` directly, not `util::crypto::Crypto`, because that helper has no additional data.
+- **The invite code is the password of a SPAKE2 exchange, never an input to a hash** (`pairing.rs`). Sending any function of the code that a listener could test a
+  guess against — a hash, a MAC, a confirmation — turns 40 bits into an offline search. There is one live invite at a time (a new code replaces the last; the
+  handshake needs to know which password to answer for), it keeps its code in `peers.json` (0600; the handshake needs the password itself), and the third wrong
+  code removes it (`note_wrong_code`). A wrong code is recognised by the offer not opening; that is the only thing that counts as a guess.
+- **A SPAKE2 session is single-use and short**: `Sessions` keeps at most 16 for 60 s and `take` removes the entry, so a finish cannot be tried twice with one begin.
+- **Pairing by id reads the Agent Card first** (`probe::identity_at`) and sends nothing to a daemon with another id. This is a guard against a reused address, not
+  against a spoofer — the code only works against whoever knows it.
 - The board and card label were `sen-link` before the rename: `tasks::find_board` finds the old board for the default title and `ensure_board` renames it in
   place. The card **tenant** stays `sen-link:<peer-id>` — it is data old cards carry.
 - Hub leftovers in `peers.json` (v0.2.0) are cleaned at startup with a `peers.json.bak-<time>` copy (`PeerStore::migrate_hub_leftovers`); peers paired directly

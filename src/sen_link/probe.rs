@@ -135,7 +135,7 @@ pub async fn probe(http: &reqwest::Client, input: &str, default_port: u16) -> Va
     if status == StatusCode::NOT_FOUND {
         // A hidden SLink has no card but still has a pairing door; an empty
         // body is a malformed pairing request, which only that door answers 422.
-        let door = http.post(ep.url("/a2a/pair")).json(&json!({})).timeout(TIMEOUT).send().await;
+        let door = http.post(ep.url("/a2a/pair/begin")).json(&json!({})).timeout(TIMEOUT).send().await;
         if door.is_ok_and(|r| r.status() == StatusCode::UNPROCESSABLE_ENTITY) {
             return a.with("ok", true, true, None, None);
         }

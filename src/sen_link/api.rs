@@ -15,10 +15,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::lan::{self, Endpoint, DEFAULT_PORT};
-use super::server::PairRequest;
+use super::pairing::Offer;
 use super::settings::SenLinkSettings;
-use super::store::{clean_daemon_id, random_token, sha256_hex, Peer, PeerView};
-use super::{a2a, client, probe, scan, LinkState};
+use super::store::{random_token, sha256_hex, Peer, PeerView};
+use super::{a2a, client, probe, scan, seal, LinkState};
 
 pub fn routes() -> Router<Arc<LinkState>> {
     Router::new()
@@ -175,14 +175,8 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
     };
     let s = st.settings();
     let ours = random_token();
-    let req = PairRequest {
-        code: b.code,
-        name: s.name.clone(),
-        port: Some(s.listen_port),
-        daemon_id: Some(st.store.daemon_id().to_string()),
-        token: Some(ours.clone()),
-    };
-    let mut reply = None;
+    let offer = Offer { name: s.name.clone(), port: Some(s.listen_port), daemon_id: Some(st.store.daemon_id().to_string()), token: ours.clone() };
+    let mut paired = None;
     let mut last = String::new();
     for ep in &targets {
         // Chosen by id: be sure it is that daemon before the code goes out. An
@@ -200,9 +194,9 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
                 }
             }
         }
-        match client::pair(&st.http, ep, &req).await {
-            Ok(v) => {
-                reply = Some((v, ep.clone()));
+        match client::pair(&st.http, ep, &b.code, &offer).await {
+            Ok(p) => {
+                paired = Some((p, ep.clone()));
                 break;
             }
             // Something answered and said no: another address will not change that.
@@ -210,27 +204,28 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
             Err(e) => last = e.to_string(),
         }
     }
-    let Some((reply, ep)) = reply else {
+    let Some((paired, ep)) = paired else {
         return err(StatusCode::BAD_GATEWAY, last);
     };
-    let daemon_id = reply["daemonId"].as_str().and_then(clean_daemon_id);
+    let daemon_id = Some(paired.daemon_id.clone());
     if want_id.is_some() && daemon_id != want_id {
         return err(StatusCode::BAD_GATEWAY, "the SLink at that address is not the one that was chosen");
     }
     // The same daemon again is the same peer: new tokens and address, same id
     // (its tasks are filed under it) and the trust we gave it.
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
-    let name: String = reply["name"].as_str().unwrap_or("peer").chars().take(80).collect();
+    let name: String = paired.name.chars().take(80).collect();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.trim().is_empty() { "peer".into() } else { name },
         // As typed: a name keeps following DNS.
         addr: Some(ep.to_string()),
-        outbound_token: reply["token"].as_str().map(str::to_string),
+        outbound_token: Some(paired.token),
         inbound_token_hash: sha256_hex(&ours),
         auto_run: known.as_ref().is_some_and(|k| k.auto_run),
         assignee: known.and_then(|k| k.assignee),
         daemon_id,
+        key: Some(seal::encode_key(&paired.key)),
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let out = view(&st, &peer);
@@ -407,7 +402,7 @@ mod tests {
     use super::*;
     use crate::sen_link::api_router;
     use crate::sen_link::discovery::{Found, Source};
-    use crate::sen_link::testkit::{free_port, node, Node};
+    use crate::sen_link::testkit::{free_port, node, tap, Node};
 
     async fn call(app: &Router, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
         let req = Request::builder()
@@ -715,5 +710,34 @@ mod tests {
         a.st.store.update(&id, |p| p.addr = Some(format!("localhost:{dead}"))).unwrap();
         assert!(list_tasks_of(&a, &id).await.is_err());
         assert_eq!(a.st.store.get(&id).unwrap().addr, Some(format!("localhost:{dead}")));
+    }
+
+    /// What someone watching the network between two SenClaws sees: that they
+    /// talk, and nothing they say.
+    #[tokio::test]
+    async fn a_sniffer_on_the_wire_sees_neither_the_code_nor_the_tokens_nor_the_task() {
+        let (a, b) = (node("Mac A", json!({})).await, node("Mac B", json!({})).await);
+        let wire = tap(b.port).await;
+        let api_a = api_router(Arc::clone(&a.st));
+        let (code, _) = b.st.store.create_invite(crate::kanban::api::now()).unwrap();
+
+        let (s, view) = call(&api_a, "POST", "/api/sen-link/peers/pair", Some(json!({ "addr": format!("127.0.0.1:{}", wire.port), "code": code }))).await;
+        assert_eq!(s, StatusCode::OK, "{view}");
+        let id = view["id"].as_str().unwrap();
+        let (s, sent) = call(&api_a, "POST", &format!("/api/sen-link/peers/{id}/messages"), Some(json!({ "text": "Rotate the production database password" }))).await;
+        assert_eq!(s, StatusCode::OK, "{sent}");
+        assert_eq!(sent["task"]["metadata"]["title"], "Rotate the production database password", "the task did arrive");
+        let (s, listed) = call(&api_a, "GET", &format!("/api/sen-link/peers/{id}/tasks"), None).await;
+        assert_eq!((s, listed["totalSize"].as_u64()), (StatusCode::OK, Some(1)));
+
+        let seen = wire.text();
+        // The capture is real: it holds the requests, so what is missing is hidden, not unseen.
+        for visible in ["POST /a2a/pair/begin", "POST /a2a/pair/finish", "POST /a2a HTTP", "x-slink-from"] {
+            assert!(seen.to_lowercase().contains(&visible.to_lowercase()), "the tap should have seen {visible:?}");
+        }
+        let key = a.st.store.get(id).unwrap().key.unwrap();
+        for secret in [code.as_str(), "slk_", "Rotate", "password", "release", "Mac A", "Mac B", "claude-code", key.as_str()] {
+            assert!(!seen.contains(secret), "{secret:?} crossed the wire in the clear");
+        }
     }
 }

@@ -132,6 +132,9 @@ rand = "0.8"
 if-addrs = "0.15"
 # SLink finds other SenClaws on the LAN by DNS-SD (`_senclaw-link._tcp`); no Bonjour/Avahi needed
 mdns-sd = { version = "0.21", features = ["async"] }
+# SLink pairing: the invite code is a password, and a PAKE keeps a listener from guessing it offline
+spake2 = "0.4"
+hkdf = "0.12"
 
 tokio-stream = "0.1"
 portable-pty = "0.8"

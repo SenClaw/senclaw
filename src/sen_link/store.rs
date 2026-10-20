@@ -1,7 +1,8 @@
-//! Paired peers and pending invites, in `~/.senclaw/sen-link/peers.json`
+//! Paired peers and the pending invite, in `~/.senclaw/sen-link/peers.json`
 //! (0600), and this daemon's identity beside it. Outbound tokens (what we
 //! present to a peer) are kept as given; inbound tokens (what a peer presents
-//! to us) only as SHA-256.
+//! to us) only as SHA-256. Each peer also has the pair key both sides derived
+//! when they paired; it seals everything they say to each other (`seal.rs`).
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -13,6 +14,9 @@ use sha2::{Digest, Sha256};
 
 /// Invite lifetime.
 pub const INVITE_TTL_SECS: i64 = 10 * 60;
+/// Wrong codes an invite survives. Each one is a guess someone made at the
+/// code; the third kills the invite.
+pub const INVITE_MAX_FAILURES: u8 = 3;
 /// Unambiguous alphabet for spoken/typed invite codes.
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
@@ -41,6 +45,11 @@ pub struct Peer {
     /// existed has none and should be paired again.
     #[serde(default)]
     pub daemon_id: Option<String>,
+    /// Base64 of the 32-byte key both sides derived when they paired. A peer
+    /// without one was paired before the conversation was sealed: it can neither
+    /// be called nor call, and should be paired again.
+    #[serde(default)]
+    pub key: Option<String>,
     pub created_at: String,
 }
 
@@ -54,8 +63,8 @@ pub struct PeerView {
     pub can_send: bool,
     pub auto_run: bool,
     pub assignee: Option<String>,
-    /// Paired by an earlier build: its address is the old UI port and it has
-    /// no id, so it works only while the other side still serves `/a2a` there.
+    /// Paired by an earlier build, before ids and the pair key: it cannot be
+    /// called and cannot call. Pair again.
     pub legacy: bool,
     /// Seen on the network lately (mDNS or a scan). Only a peer with an id can be.
     pub online: bool,
@@ -75,21 +84,39 @@ impl From<&Peer> for PeerView {
             id: p.id.clone(),
             name: p.name.clone(),
             addr: p.addr.clone(),
-            can_send: p.addr.is_some() && p.outbound_token.is_some(),
+            can_send: p.addr.is_some() && p.outbound_token.is_some() && p.key.is_some() && p.daemon_id.is_some(),
             auto_run: p.auto_run,
             assignee: p.assignee.clone(),
-            legacy: p.daemon_id.is_none(),
+            legacy: p.daemon_id.is_none() || p.key.is_none(),
             online: false,
             created_at: p.created_at.clone(),
         }
     }
 }
 
+/// The invite code is the password of the pairing handshake, so it is kept as
+/// it is (0600, ten minutes), not hashed: the handshake needs the password
+/// itself. Files from before the handshake hold only a hash; those invites are
+/// ignored and expire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Invite {
-    code_hash: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    code: String,
     pub expires_at: i64,
+    /// Wrong codes tried against it.
+    #[serde(default)]
+    pub failures: u8,
+}
+
+/// The one invite that can be redeemed now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveInvite {
+    pub id: String,
+    /// The normalised code: the handshake's password.
+    pub code: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -123,7 +150,8 @@ fn random_code() -> String {
     (0..8).map(|_| CODE_ALPHABET[r.gen_range(0..CODE_ALPHABET.len())] as char).collect()
 }
 
-fn normalize_code(code: &str) -> String {
+/// The code as the handshake uses it: letters and digits only, upper case.
+pub fn normalize_code(code: &str) -> String {
     code.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase()
 }
 
@@ -254,44 +282,58 @@ impl PeerStore {
         self.peers().into_iter().find(|p| p.daemon_id.as_deref() == Some(daemon_id))
     }
 
-    /// The peer presenting `token`.
-    pub fn by_inbound_token(&self, token: &str) -> Option<Peer> {
-        let h = sha256_hex(token);
-        self.peers()
-            .into_iter()
-            .find(|p| crate::gateway::ui_server::auth::ct_eq(&p.inbound_token_hash, &h))
-    }
-
-    /// A one-time pairing code, valid for [`INVITE_TTL_SECS`].
+    /// A one-time pairing code, valid for [`INVITE_TTL_SECS`]. There is one at a
+    /// time: a new code replaces the last, so the daemon always knows which
+    /// password a pairing attempt is for.
     pub fn create_invite(&self, now: i64) -> Result<(String, i64)> {
         let code = random_code();
         let expires_at = now + INVITE_TTL_SECS;
-        let h = sha256_hex(&code);
-        self.edit(|d| {
-            d.invites.retain(|i| i.expires_at > now);
-            d.invites.push(Invite { code_hash: h, expires_at });
-        })?;
+        let invite = Invite { id: uuid::Uuid::new_v4().to_string(), code: code.clone(), expires_at, failures: 0 };
+        self.edit(|d| d.invites = vec![invite])?;
         Ok((code, expires_at))
+    }
+
+    /// The invite someone could still redeem, if there is one.
+    pub fn live_invite(&self, now: i64) -> Option<LiveInvite> {
+        let _g = self.lock.lock().unwrap();
+        self.read()
+            .invites
+            .into_iter()
+            .find(|i| i.expires_at > now && !i.code.is_empty() && !i.id.is_empty() && i.failures < INVITE_MAX_FAILURES)
+            .map(|i| LiveInvite { id: i.id, code: normalize_code(&i.code) })
     }
 
     /// Is there an invite someone could still redeem?
     pub fn has_live_invite(&self, now: i64) -> bool {
-        let _g = self.lock.lock().unwrap();
-        self.read().invites.iter().any(|i| i.expires_at > now)
+        self.live_invite(now).is_some()
     }
 
-    /// Consume an invite; `true` when `code` was live. A miss writes nothing,
-    /// so unauthenticated guesses cannot churn the file.
-    pub fn redeem_invite(&self, code: &str, now: i64) -> Result<bool> {
-        let h = sha256_hex(&normalize_code(code));
+    /// Use up invite `id`. `true` when it was live: of two pairings racing on
+    /// one code, only one gets `true`.
+    pub fn redeem_invite(&self, id: &str, now: i64) -> Result<bool> {
         let _g = self.lock.lock().unwrap();
         let mut d = self.read();
-        if !d.invites.iter().any(|i| i.expires_at > now && i.code_hash == h) {
+        if !d.invites.iter().any(|i| i.id == id && i.expires_at > now && i.failures < INVITE_MAX_FAILURES) {
             return Ok(false);
         }
-        d.invites.retain(|i| i.expires_at > now && i.code_hash != h);
+        d.invites.retain(|i| i.id != id);
         self.write(&d)?;
         Ok(true)
+    }
+
+    /// A wrong code was tried against invite `id`. Returns whether the invite
+    /// is still good; the third wrong code removes it.
+    pub fn note_wrong_code(&self, id: &str) -> Result<bool> {
+        let _g = self.lock.lock().unwrap();
+        let mut d = self.read();
+        let Some(i) = d.invites.iter_mut().find(|i| i.id == id) else { return Ok(false) };
+        i.failures = i.failures.saturating_add(1);
+        let alive = i.failures < INVITE_MAX_FAILURES;
+        if !alive {
+            d.invites.retain(|i| i.id != id);
+        }
+        self.write(&d)?;
+        Ok(alive)
     }
 
     pub fn upsert(&self, peer: Peer) -> Result<()> {
@@ -338,40 +380,90 @@ mod tests {
             auto_run: false,
             assignee: None,
             daemon_id: None,
+            key: None,
             created_at: "now".into(),
         }
     }
 
     #[test]
-    fn an_invite_is_single_use_and_expires() {
+    fn an_invite_is_single_use_expires_and_a_new_one_replaces_the_last() {
         let (_t, s) = store();
         let (code, exp) = s.create_invite(1000).unwrap();
         assert_eq!(code.len(), 8);
         assert_eq!(exp, 1000 + INVITE_TTL_SECS);
+        let live = s.live_invite(1001).unwrap();
+        assert_eq!(live.code, code, "the handshake's password is the code as shown");
         assert!(s.has_live_invite(1001));
-        let typed = format!("{}-{}", &code[..4], code[4..].to_lowercase());
-        assert!(s.redeem_invite(&typed, 1001).unwrap());
-        assert!(!s.redeem_invite(&code, 1002).unwrap());
+        assert!(s.redeem_invite(&live.id, 1001).unwrap());
+        assert!(!s.redeem_invite(&live.id, 1002).unwrap(), "single use");
         assert!(!s.has_live_invite(1002));
+
         let (late, _) = s.create_invite(2000).unwrap();
-        assert!(!s.redeem_invite(&late, 2000 + INVITE_TTL_SECS + 1).unwrap());
-        assert!(!s.has_live_invite(2000 + INVITE_TTL_SECS + 1));
+        let id = s.live_invite(2000).unwrap().id;
+        assert!(!s.redeem_invite(&id, 2000 + INVITE_TTL_SECS + 1).unwrap(), "expired");
+        assert!(s.live_invite(2000 + INVITE_TTL_SECS + 1).is_none());
+
+        // One at a time: a new code takes the place of the last, so there is one password to answer for.
+        let (first, _) = s.create_invite(3000).unwrap();
+        let (second, _) = s.create_invite(3001).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(s.live_invite(3002).unwrap().code, second);
+        let _ = late;
     }
 
     #[test]
-    fn inbound_tokens_are_matched_by_hash_and_never_stored() {
+    fn a_wrong_code_counts_and_the_third_one_removes_the_invite() {
+        let (_t, s) = store();
+        s.create_invite(1000).unwrap();
+        let id = s.live_invite(1000).unwrap().id;
+        assert!(s.note_wrong_code(&id).unwrap());
+        assert!(s.note_wrong_code(&id).unwrap());
+        assert!(s.has_live_invite(1001), "two wrong codes: still good");
+        assert!(!s.note_wrong_code(&id).unwrap(), "the third is the last");
+        assert!(!s.has_live_invite(1001));
+        assert!(!s.redeem_invite(&id, 1001).unwrap());
+        // A wrong code against an invite that is already gone changes nothing.
+        assert!(!s.note_wrong_code(&id).unwrap());
+        assert!(!s.note_wrong_code("never-existed").unwrap());
+    }
+
+    #[test]
+    fn an_invite_from_before_the_handshake_has_no_code_to_use_and_is_ignored() {
+        let (t, s) = store();
+        std::fs::create_dir_all(t.path().join("sen-link")).unwrap();
+        std::fs::write(t.path().join("sen-link/peers.json"), r#"{"peers": [], "invites": [{"codeHash": "abc", "expiresAt": 9999999999}]}"#).unwrap();
+        assert!(s.live_invite(1).is_none());
+        assert!(!s.has_live_invite(1));
+    }
+
+    #[test]
+    fn inbound_tokens_are_kept_only_as_a_hash() {
         let (t, s) = store();
         let tok = random_token();
         let mut p = peer("p1");
         p.inbound_token_hash = sha256_hex(&tok);
         s.upsert(p).unwrap();
-        assert_eq!(s.by_inbound_token(&tok).unwrap().id, "p1");
-        assert!(s.by_inbound_token("slk_other").is_none());
         let raw = std::fs::read_to_string(t.path().join("sen-link/peers.json")).unwrap();
         assert!(!raw.contains(&tok));
+        assert!(raw.contains(&sha256_hex(&tok)));
         assert!(!PeerView::from(&s.get("p1").unwrap()).can_send);
         assert!(s.remove("p1").unwrap());
         assert!(s.peers().is_empty());
+    }
+
+    #[test]
+    fn a_peer_can_be_called_only_with_an_address_a_token_an_id_and_a_pair_key() {
+        let mut p = peer("p");
+        let view = |p: &Peer| PeerView::from(p);
+        assert!(view(&p).legacy && !view(&p).can_send);
+        p.addr = Some("192.168.1.9:18791".into());
+        p.outbound_token = Some("t".into());
+        p.daemon_id = Some("6f1c-0a".into());
+        assert!(view(&p).legacy && !view(&p).can_send, "an id without a key: paired before calls were sealed");
+        p.key = Some("a2V5".into());
+        assert!(!view(&p).legacy && view(&p).can_send);
+        p.daemon_id = None;
+        assert!(view(&p).legacy && !view(&p).can_send);
     }
 
     #[test]
@@ -405,7 +497,7 @@ mod tests {
         let p = s.get("a").unwrap();
         assert_eq!(p.addr.as_deref(), Some("http://192.168.1.9:18788"));
         let view = PeerView::from(&p);
-        assert!(view.legacy && view.can_send);
+        assert!(view.legacy && !view.can_send, "no id, no key: it must be paired again");
     }
 
     #[test]

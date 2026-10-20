@@ -1,6 +1,6 @@
 # Plan: sen-link chỉ qua LAN, bỏ hub
 
-Status: **P1 và P2 đã commit, chưa push** (2026-10-20) · P3 chưa làm · Repo: `senclaw` + `web-app` + `desktop`, nhánh `feat/slink-lan` trong `.worktrees/*-slink-lan`, chưa push · Thay thế phần "Through the hub" của `../261009-2330-claude-code-cowork-sen-link/plan.md` (Round 2)
+Status: **P1 và P2 đã commit; P3 xong chưa commit** (2026-10-20) · Repo: `senclaw` + `web-app` + `desktop`, nhánh `feat/slink-lan` trong `.worktrees/*-slink-lan`, chưa push · Thay thế phần "Through the hub" của `../261009-2330-claude-code-cowork-sen-link/plan.md` (Round 2)
 Tài liệu hiện hành: `docs/sen-link.md` · Code: `src/sen_link/`
 
 ## Outcome
@@ -127,7 +127,7 @@ Không đổi: Agent Card `name` (tên máy do người dùng đặt, mặc đ�
 |---|---|---|---|
 | P1 ✅ | Bỏ hub + listener LAN riêng + `lan.rs` (`is_lan_addr`, `parse_endpoint`, `LanOnly`) + **nhập tay IP/DNS + `probe`** + settings/di trú + 2 client + đổi tên hiển thị SLink (D8) + docs | LAN (cả Tailscale) chạy bằng IP hoặc tên DNS gõ tay, bearer/HTTP như cũ; không còn phải bind UI ra ngoài | — |
 | P2 ✅ | Tìm tự động: mDNS (quảng bá, duyệt, tự cập nhật địa chỉ IP) + **quét mạng** (job, tiến độ, huỷ) + danh sách "Gần đây" + Info.plist + `if-addrs` | Không cần gõ IP trong LAN thường | P1 |
-| P3 | SPAKE2 + phong bì + replay (`seal.rs`) + khoá lời mời theo số lần sai | Kênh LAN mã hoá; peer cũ hiện "chưa mã hoá" | P1 (P2 không bắt buộc) |
+| P3 ✅ | SPAKE2 + phong bì + replay (`seal.rs`) + khoá lời mời theo số lần sai | Kênh LAN mã hoá; peer cũ hiện "chưa mã hoá" | P1 (P2 không bắt buộc) |
 
 ## Kiểm thử và nghiệm thu
 Unit (`#[cfg(test)]` cạnh code):
@@ -200,6 +200,25 @@ Lệch so với thiết kế / điều cần biết:
 Chưa kiểm chứng: nút "Quét mạng" mặc định chạy thật trên LAN nhà (chỉ test đơn vị phần chọn mục tiêu và quét một dải loopback; tôi không tự quét mạng của bạn); hộp thoại quyền Local Network trên macOS 15 với bản app thật (chỉ `plutil -lint` cho Info.plist); hai máy thật; Windows/Linux; Docker bridge.
 
 Còn lại: P3 (SPAKE2 + phong bì + giới hạn số lần thử mã mời).
+
+## Kết quả P3 (2026-10-20)
+
+Đã làm đủ phạm vi P3: `seal.rs` (phong bì AES-256-GCM, AAD gắn chiều + hai daemon, id + đồng hồ + bộ chống phát lại, câu trả lời mang id của yêu cầu), `pairing.rs` (SPAKE2/Ed25519 + HKDF: hai bước `begin`/`finish`, mã mời là mật khẩu, khoá mỗi chiều + **khoá cặp**), một lời mời sống tại một thời điểm, mã sai lần thứ ba xoá lời mời, tối đa 16 phiên bắt tay đang mở trong 60 s, `/a2a` chỉ mở phong bì và trả 401 trơn cho mọi thất bại, **không còn đường bearer trần** (route `/a2a/pair` cũ bị bỏ). Peer chưa có khoá là `legacy`: không gọi được, không nhận được, phải ghép lại. Dependency mới `spake2` 0.4 (MIT OR Apache-2.0) và `hkdf` 0.12 (đã có trong lockfile; `spake2` không kéo thêm gói nào khác).
+
+Kiểm chứng:
+- `cargo test --lib`: 3369 qua, 0 lỗi (82 test `sen_link`, ba lần liền như nhau). Có test sniff trong tiến trình: một relay TCP ghi mọi byte giữa hai daemon trong lúc ghép nối và giao việc; mã mời, `slk_`, nội dung task, tên hai máy, khoá cặp đều **không** xuất hiện, còn tên route và `x-slink-from` thì có (chứng tỏ bắt được).
+- Hai daemon thật, cùng kiểu sniff bằng relay python: 5926 byte chỉ có `POST /a2a/pair/begin|finish`, `POST /a2a` và các phong bì; không thấy mã, token, task, tên, khoá. Hai lần gõ sai rồi mã đúng vẫn ghép được; ba lần sai xoá lời mời, mã đúng ngay sau đó bị từ chối (log: `still_good=false`). Route cũ `/a2a/pair` → 404; JSON-RPC trần + Bearer → 401. Ghép bằng `daemonId` qua mDNS trên LAN thật; ghép lại thay bản ghi (một peer, không bản sao); peer đổi cổng 52791→52792 và cuộc gọi niêm phong vẫn theo sang địa chỉ mới.
+- Desktop: `flutter analyze` sạch, 513 test qua. Web build xanh, mọi chuỗi có bản dịch. Cả hai client thêm một dòng ở lời mời: chỉ mã mới nhất dùng được, hết hiệu lực sau ba lần sai.
+
+Lệch so với thiết kế / điều cần biết:
+1. **Chỉ một lời mời sống một lúc** (mã mới thay mã cũ). Thiết kế cũ cho nhiều mã song song; PAKE cần biết mật khẩu nào để trả lời, mà người gõ mã không được lộ mã mình dùng.
+2. **Mã mời nay lưu nguyên văn** trong `peers.json` (0600, 10 phút) thay vì băm, vì bắt tay cần chính mật khẩu. Lời mời cũ chỉ có băm bị bỏ qua và tự hết hạn.
+3. Bỏ hẳn bearer trần và route `/a2a/pair` thay vì giữ đường cũ cho peer chưa có khoá: giữ lại nghĩa là cho phép hạ cấp. Hệ quả: hai bên phải cùng chạy bản này, peer từ bản trước phải ghép lại.
+4. Sửa lại điều đã ghi ở P2: tự theo địa chỉ khi peer đổi chỗ **giờ an toàn** — yêu cầu được niêm phong, nên thứ trả lời ở địa chỉ mới hoặc có khoá, hoặc không đọc được gì và không trả lời hợp lệ được.
+5. Không dùng `util::crypto::Crypto` vì nó không có additional data; `seal.rs` dùng `aes_gcm` trực tiếp.
+6. Hai máy phải lệch đồng hồ dưới hai phút (cửa sổ chống phát lại); thông báo lỗi 401 phía gọi nói rõ điều này.
+
+Chưa làm: giới hạn số handshake một máy được mở (một luồng `begin` có thể chiếm 16 chỗ trong một phút, không ghép được nhưng làm phiền); không giới hạn tốc độ theo nguồn. Chưa kiểm chứng: hai máy thật, đồng hồ lệch thật, kiểm toán mật mã độc lập — SPAKE2 và AES-GCM dùng crate RustCrypto, phần ghép là mã mới viết ở đây (`seal.rs`, `pairing.rs`) nên nên được một người đọc kỹ trước khi coi là đã kiểm toán.
 
 ## Câu hỏi mở
 1. **Mức bảo mật kênh**: làm P3 (khuyến nghị) hay dừng ở HTTP + bearer cho "LAN tin cậy"? Dừng ở P2 vẫn đúng yêu cầu "chỉ LAN, không hub" nhưng task có thể mang prompt chạy shell, đọc được trên LAN.

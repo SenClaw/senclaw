@@ -8,7 +8,8 @@ Incoming tasks become **kanban cards** on the `SLink` board, so the existing dis
 Claude Code (assignee `claude-code`, run by the `app-claude` app worker — see `app-workers.md`) — does the work, and the result goes back as the
 A2A task's artifacts.
 
-There is no relay and no public URL. Two daemons talk to each other directly, and only inside a private network.
+There is no relay and no public URL. Two daemons talk to each other directly, only inside a private network, and
+everything they say after pairing is sealed (see [What is private](#what-is-private)).
 
 ## What counts as the LAN
 
@@ -32,7 +33,7 @@ resolves to (no LAN address → error; no redirects; no system proxy). "LAN" mea
 1. On both machines: Settings → **SLink** → enable, and give each a name. (`PUT /api/sen-link/settings` with
    `{"enabled": true, "name": "Benji's SenClaw"}`.) This opens the **LAN listener**, port `18791` by default
    (`listenPort`, bound to `listenHost`, `0.0.0.0` by default). Nothing else about the daemon is exposed: the listener
-   serves `GET /.well-known/agent-card.json`, `POST /a2a` and `POST /a2a/pair`, and nothing more — no `/api`, no MCP
+   serves `GET /.well-known/agent-card.json`, `POST /a2a` and `POST /a2a/pair/begin|finish`, and nothing more — no `/api`, no MCP
    bridge, no WebSocket gateway. `SENCLAW_UI_BIND_HOST` no longer matters for SLink.
 2. On **B**: `POST /api/sen-link/invites` → `{"code": "K7MQ2XRP", "expiresAt": …, "port": 18791, "addresses": ["192.168.1.20", …]}`
    — a one-time code (10 minutes) and this machine's LAN addresses to type on the other side.
@@ -98,26 +99,48 @@ the operating system's resolver (built in on macOS; Linux needs `nss-mdns`).
 
 The address is stored **as typed**, so a name keeps following DNS when the machine's IP changes. An IP literal that stops
 answering follows the daemon instead: if the network has seen the same daemon id elsewhere (an announcement or a scan),
-the call is repeated there and the stored address is updated. A name is never rewritten. Nothing authenticates an
-announcement yet, so until the sealed channel exists this trusts the LAN as far as the rest of the link does.
+the call is repeated there and the stored address is updated. A name is never rewritten. An announcement is only a
+claim, but following it is safe: the request is sealed under the pair key, so whatever answers at the new address either
+holds the key or learns nothing and cannot answer.
 
 `probe` answers `{ok, code, addr, resolved, reachable, hidden, card, error}` with `code` one of `ok`, `bad_address`,
 `unresolved`, `not_lan`, `unreachable`, `not_slink`, and an `error` sentence for a person. `card` carries the peer's
 name, id and whether it has a live invite; `hidden` means the port is a SLink that does not show its card
 (`discoverable: false`) — it can still be paired by typed address.
 
-### What pairing records
+### How pairing works
 
-Pairing exchanges two random tokens: each side stores the token it presents to the other, and only the SHA-256 of the
-token it accepts (`~/.senclaw/sen-link/peers.json`, mode 0600). The side that issued the invite learns the other's
-address from the connection itself (the source address plus the port the caller says it listens on), so it can send
-tasks back with nothing typed. Each daemon has an id (`~/.senclaw/sen-link/identity.json`); pairing again with the
-same daemon replaces its record, keeping the peer id its tasks are filed under and the trust you gave it.
+The invite code is a *password*, and pairing is a password-authenticated key exchange (SPAKE2, over Ed25519), so the
+code is never sent and nothing sent can be tested against guesses offline:
 
-> **The link is plain HTTP with bearer tokens.** Anyone who can watch traffic on your network segment can read the
-> tasks and the tokens. That is acceptable on a home network or inside Tailscale (which encrypts), and not on a
-> coffee-shop Wi-Fi. Turn SLink off when you do not need it; with it off nothing listens. A sealed channel is the next
-> piece of work.
+1. **A** types B's code. `POST /a2a/pair/begin` carries A's half of the exchange; B answers with its half and a session id.
+2. Each side now holds a key that is the same on both sides *only if the codes were*. A seals its offer — who it is, the
+   port it listens on, its id, and the token B will call it with — under that key and sends `POST /a2a/pair/finish`.
+3. If B can open the offer, A knew the code (a wrong code gives a different key and nothing opens). B records A, uses up
+   the invite, and answers with its own id and the token A will call it with, sealed too. If A can open the answer, B
+   knew the code. Both then derive the **pair key** that seals every later request (`~/.senclaw/sen-link/peers.json`, mode 0600).
+
+Someone who does not know the code gets one guess per handshake and learns only that it was wrong. **There is one invite
+at a time** (a new code replaces the last), and it **stops working after three wrong codes**. The side that issued the
+invite learns the other's address from the connection itself (the source address plus the port in the offer), so it can
+send tasks back with nothing typed. Each daemon has an id (`~/.senclaw/sen-link/identity.json`); pairing again with the
+same daemon replaces its record, keeping the peer id its tasks are filed under and the trust you gave it — and retires
+the old pair key.
+
+## What is private
+
+After pairing, every `/a2a` request and answer is one AES-256-GCM envelope under the pair key. The associated data names
+the direction and both daemons, so an envelope cannot be turned into an answer or carried to a third daemon. A request
+carries an id and the sender's clock: one outside a two-minute window, or an id already served, is refused, so a
+captured request cannot run a task twice (**keep the two machines' clocks within two minutes**). An answer carries the id
+of the request it answers. The token given at pairing travels *inside* the envelope, as a second lock.
+
+On the wire someone watching the network sees: that two machines talk, when, how much, and each sender's daemon id
+(`X-SLink-From`). They do not see the task, the answer, the token or the key — the test suite sniffs a pairing and a
+task through a relay and asserts none of them appears. The Agent Card and the mDNS announcement (name, id, whether an
+invite is open) are plain by design; `discoverable: false` hides both. What the pair key does not protect: someone who
+reads `peers.json` has the key, and someone who is given the invite code in time can pair themselves — handing out the
+code is what trusts them.
 
 ## Trust
 
@@ -168,10 +191,11 @@ The tools are loopback calls to `/api/sen-link/*` (registered as a daemon-wide b
 | Path | Auth | |
 |---|---|---|
 | `GET /.well-known/agent-card.json` | none | Agent Card; `supportedInterfaces` names the address the caller used. 404 while SLink is off or `discoverable` is false |
-| `POST /a2a` | peer bearer token | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted) |
-| `POST /a2a/pair` | one-time invite code | pairing handshake: `{code, name, port, daemonId, token}` |
+| `POST /a2a` | a sealed envelope under the pair key, sender named in `X-SLink-From`, token inside | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted); anything that does not open, is stale or replayed, or carries the wrong token is a bare 401 |
+| `POST /a2a/pair/begin` | the live invite's code (as the handshake's password) | `{msg}` → `{sid, msg}`; 403 with no live invite, 429 with too many handshakes open |
+| `POST /a2a/pair/finish` | the sealed offer | `{sid, sealed}` → the sealed answer; a wrong code is a 403 and counts against the invite |
 
-`/a2a` and `/a2a/pair` answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
+All of them answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
 
 The Agent Card says who is behind it in an A2A extension, `capabilities.extensions[]` with uri
 `https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable}`; that is how `probe` recognises a
@@ -211,13 +235,14 @@ taken, `GET /api/sen-link/status` reports `listenError` and the listener retries
   longer need anything to be reachable but the LAN listener — `SENCLAW_UI_BIND_HOST` can go back to loopback.
 - **Peers that only a hub reached are removed** the first time the new daemon starts; `peers.json` is copied to
   `peers.json.bak-<unix time>` first, and `GET /api/sen-link/status` lists their names under `migrated`. Pair them again.
-- **Peers paired directly keep working in one direction at most.** Their stored address is the other side's old UI port
-  (`…:18788`), and the new daemon no longer serves `/a2a` there. They are marked `legacy` and should be paired again
-  over the LAN (pairing the same daemon replaces the record and keeps its tasks and trust).
+- **Peers paired by an earlier build cannot be used until they are paired again.** They have no pair key (and those
+  from 0.2.0 an old UI-port address), and nothing is sent or accepted unsealed, so there is no way to be downgraded to
+  the old protocol. They are marked `legacy`; pairing the same daemon again replaces the record and keeps its tasks and
+  trust. Both sides must run this version.
 - The kanban board `sen-link` is renamed to `SLink` in place, cards and all. New cards carry the label `SLink`; old ones
   keep theirs.
 
 ## Not yet
 
-A sealed channel (until then the link is plain HTTP with bearer tokens, and `/a2a/pair` does not limit attempts),
-streaming (`SendStreamingMessage`), push notifications, and shared boards/memory sync.
+Streaming (`SendStreamingMessage`), push notifications, shared boards/memory sync, and a limit on how many handshakes one
+machine may open (a flood can fill the 16 handshake slots for a minute; it cannot pair).
