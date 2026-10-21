@@ -31,6 +31,7 @@ Seven cells are `—` with no reason found: background tasks on Web; kanban, wor
 | new chat | ✅ | ✅ | ✅ | `NewChatScreen.tsx` / `chat/new_chat_dialog.dart` / `screens/new_chat_screen.dart` |
 | wiki | ✅ | ✅ | ✅ | `components/wiki/*` / `wiki/wiki_screen.dart` / `wiki/wiki_screen.dart` (tree, search, create, delete) |
 | plugins/marketplace | ✅ | ✅ | 🟡 | Mobile has 6 tabs (skills, subagents, plugins, MCP, marketplace, hooks); missing alias, sandbox, widgets, workflows, cowork, space-apps panels |
+| skill history / usage / shadow badge | ✅ | ✅ | ✅ | Added 2026-10-21: history, diff, scan findings, usage numbers, restore, "overrides bundled" chip — `plugins/SkillHistoryPanel.tsx` (History tab of a skill) / `plugins/skill_history_dialog.dart` / `screens/plugins/skill_history_screen.dart`. Guide: [skill-history.md](skill-history.md) |
 | settings | ✅ | ✅ | 🟡 | Mobile `more/more_screen.dart` covers connection, notifications/sync, theme, language only — no LLM, channels, profiles, tool rules, TTS/OCR/Whisper |
 | space (calendar) | ✅ | ✅ | ✅ | `space/calendar/CalendarView.tsx` / `space/space_screen.dart` `_CalendarTab` / `space/calendar_screen.dart` |
 | space (notes) | ✅ | ✅ | ✅ | `space/notes/*` / `space/note_inline_editor.dart` / `space/notes_screen.dart` |

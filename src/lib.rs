@@ -1376,12 +1376,23 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // very first agent turn.
     tools::tool_alias::reload_from_db(&db);
 
+    // Skill history: catch up with edits made while the daemon was off (CLI
+    // installs, kits, a text editor). Off the startup path; a failure is logged.
+    {
+        let db = Arc::clone(&db);
+        let cfg = cfg.clone();
+        tokio::task::spawn_blocking(move || skills::history::reconcile_logged(&db, &cfg));
+    }
+
     // ===== 1a-0. Token usage accounting =====
     // One recorder shared by every LLM call path (agent loop, bridge,
     // cognitive, embeddings). Non-blocking; batch-flushed to llm_usage_log.
     // Failure ledger writer: one row per run of consecutive failures of the
     // same tool, plus whether it was ever fixed and by whom. Records only.
     failures::start(Arc::clone(&db));
+    // Skill usage ledger: each time a skill is loaded into a chat, and how the
+    // turn ended. Records only.
+    skills::usage::start(Arc::clone(&db));
     let usage_recorder = usage::UsageRecorder::start(Arc::clone(&db));
     usage::set_global(Arc::clone(&usage_recorder));
     usage::aggregate::start(Arc::clone(&db));

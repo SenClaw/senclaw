@@ -343,6 +343,60 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_skill_route_log_at ON skill_route_log(at);
 
+        -- Skill revisions (src/skills/history): one row per change to a skill
+        -- directory — API write, hub install, rollback, removal, or an edit
+        -- found by the reconcile pass. Keyed by (source, skill_key) where
+        -- skill_key is the directory name, because two sources can hold the
+        -- same skill name and a hub slug need not equal the frontmatter name.
+        -- Content lives on disk under <senclaw home>/skill-history; the row
+        -- keeps the hash, the diff against the parent and the scan result.
+        CREATE TABLE IF NOT EXISTS skill_revisions (
+          id            TEXT PRIMARY KEY,
+          skill_key     TEXT NOT NULL,
+          skill_name    TEXT NOT NULL,
+          source        TEXT NOT NULL,
+          parent_id     TEXT,
+          generation    INTEGER NOT NULL DEFAULT 0,
+          origin        TEXT NOT NULL,                -- MANUAL | IMPORTED | ROLLBACK | REMOVED | DETECTED | BASELINE
+          actor         TEXT NOT NULL DEFAULT '',
+          content_hash  TEXT NOT NULL,
+          file_count    INTEGER NOT NULL DEFAULT 0,
+          bytes         INTEGER NOT NULL DEFAULT 0,
+          truncated     INTEGER NOT NULL DEFAULT 0,   -- snapshot hit a size cap: not restorable
+          has_snapshot  INTEGER NOT NULL DEFAULT 0,   -- 0 once pruned, and for REMOVED rows
+          restored_from TEXT,
+          change_summary TEXT NOT NULL DEFAULT '',
+          diff_text     TEXT NOT NULL DEFAULT '',
+          shadows       TEXT,                         -- lower-precedence source this skill overrides
+          scan          TEXT,                         -- JSON: verdict, severity, findings (no evidence text)
+          created_at    INTEGER NOT NULL              -- unix millis
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_revisions_key
+          ON skill_revisions(source, skill_key, created_at);
+
+        -- Skill usage ledger (src/skills/usage): one row each time a skill's
+        -- instructions were loaded into a chat, closed by how the turn ended.
+        -- Records only; nothing reads it back into a prompt. No prompt text, no
+        -- tool arguments: the skill (directory key, name, content hash), how it
+        -- was loaded, and the turn's outcome.
+        CREATE TABLE IF NOT EXISTS skill_usage (
+          id                INTEGER PRIMARY KEY AUTOINCREMENT,
+          at                INTEGER NOT NULL,              -- load time, unix millis
+          chat_jid          TEXT NOT NULL,
+          skill_name        TEXT NOT NULL,
+          skill_key         TEXT NOT NULL,                 -- directory name
+          source            TEXT NOT NULL,
+          content_hash      TEXT,                          -- same hash a skill_revisions row carries
+          how               TEXT NOT NULL,                 -- tool | forced
+          outcome           TEXT NOT NULL DEFAULT 'open',  -- open | completed | errored | interrupted | unknown
+          ended_at          INTEGER,
+          tool_failures     INTEGER NOT NULL DEFAULT 0,
+          first_failed_tool TEXT,
+          loop_stopped      INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_usage_skill ON skill_usage(source, skill_key, at);
+        CREATE INDEX IF NOT EXISTS idx_skill_usage_open ON skill_usage(chat_jid, outcome);
+
         -- Shadow-git checkpoints: one row per commit taken after a tool wrote
         -- into the chat's working directory (src/checkpoints). The commit
         -- itself lives in ~/.senclaw/checkpoints/<chat>/, never in the

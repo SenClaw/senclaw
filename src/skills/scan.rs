@@ -236,14 +236,34 @@ fn finish(map: HashMap<String, SkillEntry>, config: &Config) -> Vec<SkillEntry> 
 /// Scan all sources, deduplicate by name (later sources override earlier ones),
 /// and return sorted results.
 pub fn load_all_local_skills(config: &Config) -> Vec<SkillEntry> {
-    let sources = get_source_defs(config);
+    load_all_local_skills_with_shadows(config).0
+}
+
+/// As [`load_all_local_skills`], plus which skills override another source's
+/// skill of the same name: `name → sources that lose` (earlier sources, in scan
+/// order). A skill in the managed directory silently replaces a bundled one of
+/// the same name, so this is what lets a client say so.
+pub fn load_all_local_skills_with_shadows(config: &Config) -> (Vec<SkillEntry>, HashMap<String, Vec<String>>) {
+    let (map, shadows) = merge_sources(&get_source_defs(config));
+    (finish(map, config), shadows)
+}
+
+/// Scan the sources in order; a later source's skill replaces an earlier one's.
+fn merge_sources(sources: &[SourceDef]) -> (HashMap<String, SkillEntry>, HashMap<String, Vec<String>>) {
     let mut map: HashMap<String, SkillEntry> = HashMap::new();
-    for def in &sources {
+    let mut shadows: HashMap<String, Vec<String>> = HashMap::new();
+    for def in sources {
         for entry in scan_source(def) {
-            map.insert(entry.name.clone(), entry);
+            let name = entry.name.clone();
+            let source = entry.source.clone();
+            if let Some(prev) = map.insert(name.clone(), entry) {
+                if prev.source != source {
+                    shadows.entry(name).or_default().push(prev.source);
+                }
+            }
         }
     }
-    finish(map, config)
+    (map, shadows)
 }
 
 /// Load-time gate (OpenClaw-style): drop skills that fail their `os` /
@@ -452,6 +472,30 @@ mod tests {
         assert!(entries.is_empty());
 
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_later_source_wins_and_the_one_it_replaces_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let md = |n: &str, d: &str| format!("---\nname: {n}\ndescription: {d}\n---\n\n# {n}\n");
+        let (bundled, managed) = (tmp.path().join("bundled"), tmp.path().join("managed"));
+        for (dir, name, desc) in [
+            (&bundled, "web-research", "built in"),
+            (&bundled, "wiki", "built in"),
+            (&managed, "web-research", "mine"),
+        ] {
+            fs::create_dir_all(dir.join(name)).unwrap();
+            fs::write(dir.join(name).join("SKILL.md"), md(name, desc)).unwrap();
+        }
+        let defs = vec![
+            SourceDef { dir: bundled, source: "bundled".into() },
+            SourceDef { dir: managed, source: "clawhub-managed".into() },
+        ];
+        let (map, shadows) = merge_sources(&defs);
+        assert_eq!(map["web-research"].source, "clawhub-managed");
+        assert_eq!(map["web-research"].description, "mine");
+        assert_eq!(shadows["web-research"], vec!["bundled".to_string()]);
+        assert!(!shadows.contains_key("wiki"), "a skill nobody overrides is not reported");
     }
 
     #[test]

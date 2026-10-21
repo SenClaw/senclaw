@@ -52,8 +52,8 @@ use super::plugins::{
 };
 use super::quicknotes::quicknotes_save;
 use super::skills::{
-    skills_create, skills_install, skills_list, skills_readme, skills_readme_save,
-    skills_remote_search, skills_toggle, skills_uninstall,
+    skills_create, skills_history, skills_history_get, skills_install, skills_list, skills_readme,
+    skills_readme_save, skills_remote_search, skills_rollback, skills_toggle, skills_uninstall,
 };
 use super::spa::spa_fallback;
 use super::space::{
@@ -304,6 +304,9 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/skills/:name/readme",
             get(skills_readme).put(skills_readme_save),
         )
+        .route("/api/skills/:name/history", get(skills_history))
+        .route("/api/skills/:name/history/:rev", get(skills_history_get))
+        .route("/api/skills/:name/rollback/:rev", post(skills_rollback))
         .route("/api/skills/:name/:action", post(skills_toggle))
         // ── Plugins API ──────────────────────────────────────────────────────
         .route("/api/plugins", get(plugins_list))
@@ -1074,6 +1077,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/failures/summary",
             get(super::failures::failures_summary),
+        )
+        // Skill usage ledger: which skills were loaded and how the turn ended
+        // (read-only). Not under /api/skills/: that path has a `:name` capture.
+        .route("/api/skill-usage", get(super::skill_usage::skill_usage_list))
+        .route(
+            "/api/skill-usage/summary",
+            get(super::skill_usage::skill_usage_summary),
         )
         // What the agent remembers: list/search the extracted facts, forget one.
         .merge(super::memory_facts::routes())

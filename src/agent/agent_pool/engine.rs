@@ -313,6 +313,9 @@ impl ZenCoreApi {
                         // happened next. Always on, writes only on failure and
                         // its outcome (see `crate::failures`).
                         crate::failures::record(&jid, &event);
+                        // Skill usage ledger: how the turn a skill was loaded into
+                        // ended. Inert unless the chat has an open row.
+                        crate::skills::usage::record(&jid, &event);
                         // Trace neutral-v1: always on, metadata only (see
                         // `crate::control_plane::trace`).
                         crate::control_plane::trace::record(&jid, &event);

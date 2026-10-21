@@ -48,6 +48,7 @@ mod plugins;
 mod profile_files;
 mod quicknotes;
 pub mod relay_bridge;
+mod skill_usage;
 mod skills;
 mod spa;
 mod space;

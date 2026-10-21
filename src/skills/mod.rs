@@ -4,9 +4,11 @@ pub mod bundled;
 pub mod config;
 pub mod disabled;
 pub mod expand;
+pub mod history;
 pub mod matching;
 pub mod metadata;
 pub mod scan;
+pub mod usage;
 
 use std::collections::HashMap;
 use std::sync::RwLock;

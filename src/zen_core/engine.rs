@@ -267,6 +267,7 @@ impl ZenEngine {
             if let Some(e) = engine_for_skill.upgrade() {
                 if let Some(skill) = e.skill_registry.find(skill_name) {
                     e.apply_skill_activation(&skill);
+                    crate::skills::usage::note_load(&e.instance_id, &skill, crate::skills::usage::Load::Tool);
                 }
             }
         });
@@ -2546,6 +2547,7 @@ reference are already available (no ToolSearch needed).\n\n{}\n\
     fn force_skill_reminder(&self, skill_name: &str) -> Option<String> {
         let skill = self.skill_registry.find(skill_name)?;
         self.apply_skill_activation(&skill);
+        crate::skills::usage::note_load(&self.instance_id, &skill, crate::skills::usage::Load::Forced);
         let params = Self::format_skill_params(&skill.metadata.params);
 
         Some(format!(
@@ -3678,6 +3680,38 @@ mod tests {
         e.set_skill_route(None);
         assert_eq!(e.skill_block_for_turn(prompt, Some("forced".into()), true).as_deref(), Some("forced"));
         assert!(e.skill_block_for_turn(prompt, None, false).unwrap().contains("Skill hint"));
+    }
+
+    /// The usage ledger hears of a skill when its instructions are loaded —
+    /// by the engine (forced) or by the model calling `Skill` — and not when a
+    /// skill is only hinted at.
+    #[tokio::test]
+    async fn a_skill_load_is_noted_for_the_ledger_but_a_hint_is_not() {
+        use crate::skills::usage::{Load, TEST_LOADS};
+        let e = engine_with_skill_meta("ledger-hook", "agent-browser", None, &["giá vàng hôm nay"]);
+        let prompt = "cho tôi giá vàng hôm nay";
+        let seen = || -> Vec<(String, String, Load)> {
+            TEST_LOADS
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(jid, _, _)| jid == "ledger-hook")
+                .cloned()
+                .collect()
+        };
+
+        assert!(e.skill_block_for_turn(prompt, None, false).unwrap().contains("Skill hint"));
+        assert!(seen().is_empty(), "a hint loads nothing");
+
+        assert!(e.skill_block_for_turn(prompt, None, true).unwrap().contains("explicitly invoked"));
+        assert_eq!(seen(), vec![("ledger-hook".to_string(), "agent-browser".to_string(), Load::Forced)]);
+
+        let tool = e.get_tools().into_iter().find(|t| t.name() == "Skill").expect("the Skill tool is registered");
+        tool.call(serde_json::json!({ "skill": "agent-browser" }), &tool_context())
+            .await
+            .unwrap();
+        assert_eq!(seen().last().map(|l| l.2), Some(Load::Tool));
+        assert_eq!(seen().len(), 2);
     }
 
     #[test]

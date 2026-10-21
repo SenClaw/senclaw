@@ -24,4 +24,6 @@ pub use replication::{is_replicating, score, Scores};
 // `Verdict` is deliberately not re-exported: `scan::Verdict` (install decision)
 // and `egress::Verdict` (send decision) are different judgements, and a single
 // unqualified name at this level would blur them. Import them qualified.
-pub use scan::{scan_plugin_dir, scan_space_app, Finding, ScanPolicy, ScanReport, Severity};
+pub use scan::{
+    scan_plugin_dir, scan_skill_dir, scan_space_app, Finding, ScanPolicy, ScanReport, Severity,
+};

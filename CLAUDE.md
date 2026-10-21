@@ -1735,6 +1735,20 @@ prompt. A wrapper tool must forward `permission_name` for the same reason it
 forwards `path_fields`: neither omission fails anything — one silently skips
 the resolution seam, the other silently skips the prompt.
 
+## Skill history (`src/skills/history.rs`)
+
+Every change to a skill through the daemon leaves a revision (row in `skill_revisions` + a content snapshot under `<managed skills dir>/../skill-history/`), `create` and `install` scan the content **before** writing it, and a skill that replaces another source's skill of the same name is flagged (`shadows`). No model is called. Guide, REST table and the measured scan false-positive rate: [docs/skill-history.md](docs/skill-history.md); plan: `plans/261021-1058-skill-history-p0/`.
+
+Rules for Claude:
+
+- **History never gates the operation it records.** A failed recording is a warning and the write goes on (`with_history`); only the scan refuses, and only on `create`, `install` and `rollback`. The readme save scans and reports but does not refuse.
+- **Scan before writing.** `create` scans in a throw-away directory, `install` extracts to `.staging-*` beside the target and `rename`s. Never write first and clean up.
+- **A recorded finding has no matched text** (`scan_summary` drops `evidence`): it can be the secret the rule found.
+- **Key history by directory name, not skill name.** Two sources can hold one name, and a hub slug need not equal the frontmatter name.
+- **Out-of-band edits are found by `reconcile_managed`, not by hooking each writer.** It skips directories with `.senclaw-app.json` (a Space App's or kit's skills).
+- **Never join a key from a request or a row onto the managed directory without `managed_skill_dir`.**
+- **The usage ledger (`src/skills/usage.rs`, `/api/skill-usage*`) only records.** A row per skill load (`Skill` tool or a forced load; always-on skills are not loads), closed by the chat's final answer, an error or an interruption — never by a new input, which can reach the ledger after the load it belongs with. It keeps no prompt, argument or output. Counts are not attribution: a tool failing in a turn where a skill loaded does not make the skill at fault.
+
 ## Control plane (JEV v2.2 P0/P1, `src/control_plane/`)
 
 A typed decision layer above the existing decision gate and pre-skill router:
