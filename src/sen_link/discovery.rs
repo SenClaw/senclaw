@@ -10,20 +10,28 @@
 //!
 //! Neither is authenticated: a name on the list is a claim. What proves who is
 //! on the other end is the pairing code, not this table.
+//!
+//! An entry expires [`SEEN_TTL`] after its last sighting, but a responder that
+//! has not changed is not announced again, so a daemon that is still there would
+//! drop off. Before that happens the daemon asks it (its Agent Card, at the
+//! addresses it was seen at) and a card with the same id counts as a sighting.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use futures::future::join_all;
 use mdns_sd::{IfKind, IfPredicate, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use super::lan::{self, Endpoint, Host};
+use super::probe;
 use super::store::clean_daemon_id;
 use super::LinkState;
 
@@ -34,6 +42,16 @@ const SEEN_TTL: Duration = Duration::from_secs(300);
 /// How often the supervisor looks again when nobody woke it (an invite
 /// expiring changes what is announced).
 const RECHECK: Duration = Duration::from_secs(5);
+/// An entry not seen for this long is asked again instead of waiting for its
+/// time to run out; half of [`SEEN_TTL`] leaves room for several tries.
+const REVALIDATE_AFTER: Duration = Duration::from_secs(150);
+/// How often entries due for that are looked at.
+const REVALIDATE_EVERY: Duration = Duration::from_secs(15);
+/// Entries asked per pass (the longest-unseen first) and addresses tried per entry.
+const REVALIDATE_ENTRIES: usize = 4;
+const REVALIDATE_ADDRS: usize = 4;
+/// One Agent Card request.
+const REVALIDATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -201,6 +219,67 @@ impl Discovery {
             .collect();
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.daemon_id.cmp(&b.daemon_id)));
         out
+    }
+
+    /// Entries whose freshest sighting is old enough to ask about but has not
+    /// yet expired, longest-unseen first, with the endpoints to ask at.
+    fn due_for_revalidation(&self, now: Instant) -> Vec<(String, Vec<Endpoint>)> {
+        let t = self.table.lock().unwrap();
+        let mut due: Vec<(Duration, String, Vec<Endpoint>)> = t
+            .entries
+            .iter()
+            .filter_map(|(id, sources)| {
+                let age = now.saturating_duration_since(sources.values().map(|s| s.at).max()?);
+                if age <= REVALIDATE_AFTER || age > SEEN_TTL {
+                    return None;
+                }
+                let mut at: Vec<(IpAddr, u16)> = sources.values().flat_map(|s| s.found.addrs.iter().map(|ip| (*ip, s.found.port))).collect();
+                at.sort_by_key(|(ip, port)| (ip.is_loopback(), ip.is_ipv6(), *ip, *port));
+                at.dedup();
+                let eps = at.into_iter().take(REVALIDATE_ADDRS).map(|(ip, port)| Endpoint { host: Host::Ip(ip), port }).collect();
+                Some((age, id.clone(), eps))
+            })
+            .collect();
+        due.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        due.into_iter().take(REVALIDATE_ENTRIES).map(|(_, id, eps)| (id, eps)).collect()
+    }
+
+    /// Count a sighting for an entry that is still listed, whatever its source:
+    /// each source keeps its own label and only its clock moves. A goodbye that
+    /// landed while the daemon was being asked is not undone.
+    fn refresh(&self, daemon_id: &str, now: Instant) {
+        if let Some(sources) = self.table.lock().unwrap().entries.get_mut(daemon_id) {
+            for s in sources.values_mut() {
+                s.at = s.at.max(now);
+            }
+        }
+    }
+
+    /// Ask the entries that have gone quiet whether they are still there.
+    /// `ask` returns the daemon id that answers at an endpoint, if any; only the
+    /// *same* id keeps an entry alive, so an address another daemon has taken
+    /// does not. Entries that do not answer are left to age out. Returns how
+    /// many were confirmed.
+    async fn revalidate_at<A, Fut>(&self, now: Instant, ask: A) -> usize
+    where
+        A: Fn(Endpoint) -> Fut,
+        Fut: Future<Output = Option<String>>,
+    {
+        let ask = &ask;
+        let answers = join_all(self.due_for_revalidation(now).into_iter().map(|(id, eps)| async move {
+            for ep in eps {
+                if ask(ep).await.as_deref() == Some(id.as_str()) {
+                    return Some(id);
+                }
+            }
+            None
+        }))
+        .await;
+        let confirmed: Vec<String> = answers.into_iter().flatten().collect();
+        for id in &confirmed {
+            self.refresh(id, now);
+        }
+        confirmed.len()
     }
 
     pub fn find(&self, daemon_id: &str) -> Option<Discovered> {
@@ -399,7 +478,26 @@ fn reconcile(mdns: &mut Option<Mdns>, want: &Want, st: &LinkState) -> anyhow::Re
 /// Start the supervisor: it browses while SLink is on and announces while this
 /// daemon is also discoverable and listening. Abort the handle to stop it.
 pub fn start(st: &Arc<LinkState>) -> JoinHandle<()> {
-    tokio::spawn(supervise(Arc::downgrade(st), Arc::clone(&st.discovery_wake)))
+    let (supervisor, revalidator) = (supervise(Arc::downgrade(st), Arc::clone(&st.discovery_wake)), revalidate_loop(Arc::downgrade(st)));
+    tokio::spawn(async move {
+        tokio::join!(supervisor, revalidator);
+    })
+}
+
+/// Keep daemons that are still on the network from expiring: every
+/// [`REVALIDATE_EVERY`], ask the ones that have gone quiet. Its own loop, so a
+/// slow answer never delays the mDNS supervisor.
+async fn revalidate_loop(weak: Weak<LinkState>) {
+    loop {
+        tokio::time::sleep(REVALIDATE_EVERY).await;
+        let Some(st) = weak.upgrade() else { break };
+        // Nothing is sent while SLink is off.
+        if st.settings().enabled {
+            let http = &st.http;
+            let ask = |ep: Endpoint| async move { probe::identity_at(http, &ep, REVALIDATE_TIMEOUT).await.map(|i| i.daemon_id) };
+            st.discovery.revalidate_at(Instant::now(), ask).await;
+        }
+    }
 }
 
 async fn supervise(weak: Weak<LinkState>, wake: Arc<Notify>) {
@@ -509,6 +607,110 @@ mod tests {
         d.remove_mdns("c-inst");
         d.clear_source(Source::Scan);
         assert!(d.list_at(later).is_empty());
+    }
+
+    /// `ask` for [`Discovery::revalidate_at`]: `answers` maps an address to the id
+    /// that answers there; every endpoint asked is recorded.
+    fn asking(answers: &'static [(&'static str, &'static str)], asked: &Arc<Mutex<Vec<String>>>) -> impl Fn(Endpoint) -> std::future::Ready<Option<String>> {
+        let asked = Arc::clone(asked);
+        move |ep: Endpoint| {
+            asked.lock().unwrap().push(ep.to_string());
+            std::future::ready(answers.iter().find(|(addr, _)| *addr == ep.to_string()).map(|(_, id)| id.to_string()))
+        }
+    }
+
+    fn ids(d: &Discovery, at: Instant) -> Vec<String> {
+        d.list_at(at).into_iter().map(|x| x.daemon_id).collect()
+    }
+
+    #[tokio::test]
+    async fn a_quiet_entry_that_still_answers_outlives_the_ttl_and_one_that_does_not_is_dropped() {
+        let d = Discovery::new("me".into());
+        let t0 = Instant::now();
+        d.upsert_at(Source::Mdns, found("up", "Mac Up", &["192.168.1.20"], 18791, false), t0);
+        d.upsert_at(Source::Mdns, found("down", "Mac Down", &["192.168.1.30"], 18791, false), t0);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+
+        let now = t0 + REVALIDATE_AFTER + Duration::from_secs(1);
+        let n = d.revalidate_at(now, asking(&[("192.168.1.20:18791", "up")], &asked)).await;
+        assert_eq!(n, 1);
+
+        let after_ttl = t0 + SEEN_TTL + Duration::from_secs(1);
+        assert_eq!(ids(&d, after_ttl), vec!["up"], "the answering daemon stays, the silent one ages out");
+        let up = &d.list_at(after_ttl)[0];
+        assert_eq!(up.sources, vec![Source::Mdns], "it is still an announcement, not a scan hit");
+        assert_eq!(up.seen_secs_ago, (after_ttl - now).as_secs());
+
+        // Asked again once the new sighting is itself old, and again after that.
+        let later = now + REVALIDATE_AFTER + Duration::from_secs(1);
+        assert_eq!(d.revalidate_at(later, asking(&[("192.168.1.20:18791", "up")], &asked)).await, 1);
+        assert_eq!(ids(&d, t0 + SEEN_TTL * 2), vec!["up"]);
+    }
+
+    #[tokio::test]
+    async fn another_daemon_at_the_address_does_not_keep_an_entry_alive() {
+        let d = Discovery::new("me".into());
+        let t0 = Instant::now();
+        d.upsert_at(Source::Mdns, found("b", "Mac B", &["192.168.1.20", "192.168.1.21"], 18791, false), t0);
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let now = t0 + REVALIDATE_AFTER + Duration::from_secs(1);
+
+        assert_eq!(d.revalidate_at(now, asking(&[("192.168.1.20:18791", "someone-else")], &asked)).await, 0);
+        assert_eq!(asked.lock().unwrap().len(), 2, "every known address is tried");
+        assert!(ids(&d, t0 + SEEN_TTL + Duration::from_secs(1)).is_empty());
+
+        // The second address is the right daemon: the first answer does not stop the search.
+        d.upsert_at(Source::Mdns, found("b", "Mac B", &["192.168.1.20", "192.168.1.21"], 18791, false), t0);
+        let n = d.revalidate_at(now, asking(&[("192.168.1.20:18791", "someone-else"), ("192.168.1.21:18791", "b")], &asked)).await;
+        assert_eq!(n, 1);
+        assert_eq!(ids(&d, t0 + SEEN_TTL + Duration::from_secs(1)), vec!["b"]);
+    }
+
+    #[tokio::test]
+    async fn only_quiet_unexpired_entries_are_asked_a_few_at_a_time() {
+        let d = Discovery::new("me".into());
+        let t0 = Instant::now();
+        d.upsert_at(Source::Mdns, found("fresh", "Fresh", &["192.168.1.10"], 18791, false), t0 + Duration::from_secs(100));
+        d.upsert_at(Source::Scan, found("expired", "Expired", &["192.168.1.11"], 18791, false), t0 - Duration::from_secs(200));
+        for i in 0..6u8 {
+            // Entry 0 has been quiet longest.
+            d.upsert_at(Source::Mdns, found(&format!("q{i}"), "Quiet", &[&format!("192.168.1.{}", 20 + i)], 18791, false), t0 + Duration::from_secs(u64::from(i)));
+        }
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        d.revalidate_at(t0 + REVALIDATE_AFTER + Duration::from_secs(10), asking(&[], &asked)).await;
+
+        let mut asked = asked.lock().unwrap().clone();
+        asked.sort();
+        assert_eq!(asked, vec!["192.168.1.20:18791", "192.168.1.21:18791", "192.168.1.22:18791", "192.168.1.23:18791"], "the four longest-quiet, not the fresh or the expired");
+    }
+
+    #[tokio::test]
+    async fn a_goodbye_that_arrives_while_asking_is_not_undone_and_a_scan_hit_is_kept_alive_as_a_scan_hit() {
+        let d = Arc::new(Discovery::new("me".into()));
+        let t0 = Instant::now();
+        d.upsert_mdns("b-inst._senclaw-link._tcp.local.", found("b", "Mac B", &["192.168.1.20"], 18791, false));
+        d.upsert_at(Source::Mdns, found("b", "Mac B", &["192.168.1.20"], 18791, false), t0);
+        d.upsert_at(Source::Scan, found("c", "Mac C", &["192.168.1.30"], 18791, false), t0);
+        let now = t0 + REVALIDATE_AFTER + Duration::from_secs(1);
+
+        let dd = Arc::clone(&d);
+        let ask = move |ep: Endpoint| {
+            // The goodbye lands between the question and the answer.
+            dd.remove_mdns("B-INST._senclaw-link._tcp.local.");
+            let id = if ep.to_string().starts_with("192.168.1.20") { "b" } else { "c" };
+            std::future::ready(Some(id.to_string()))
+        };
+        d.revalidate_at(now, ask).await;
+
+        let after_ttl = t0 + SEEN_TTL + Duration::from_secs(1);
+        let list = d.list_at(after_ttl);
+        assert_eq!(list.iter().map(|x| (x.daemon_id.as_str(), x.sources.clone())).collect::<Vec<_>>(), vec![("c", vec![Source::Scan])]);
+    }
+
+    #[test]
+    fn the_revalidation_window_fits_inside_the_ttl_with_room_to_retry() {
+        assert!(REVALIDATE_AFTER * 2 <= SEEN_TTL);
+        assert!(SEEN_TTL - REVALIDATE_AFTER >= REVALIDATE_EVERY * 4);
     }
 
     #[test]
