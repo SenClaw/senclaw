@@ -625,10 +625,186 @@ impl SandboxDecl {
     }
 }
 
+/// What an app tells the daemon about syncing its data with another SenClaw:
+/// which collections, which fields are secret or belong to this machine, how
+/// two records are recognised as the same thing. The `sync` block of the
+/// manifest; the app serves the matching calls under [`SyncDecl::endpoint`].
+///
+/// The daemon uses it to *enforce* — it strips secret and machine-local fields
+/// from what crosses the wire whether or not the app did — and to refuse an app
+/// whose live schema disagrees with what it declared. A malformed block is an
+/// error, not a default: a field silently dropped from `secretFields` would
+/// send a password.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDecl {
+    /// Version of the sync contract the app speaks.
+    pub version: u32,
+    /// Path under the app where `/schema`, `/state`, `/read` and `/apply` live.
+    pub endpoint: String,
+    /// Collections in dependency order: what is pointed at comes first.
+    pub collections: Vec<SyncCollection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncCollection {
+    pub id: String,
+    pub schema_version: u32,
+    pub secret_fields: Vec<String>,
+    pub local_fields: Vec<String>,
+    pub match_key: Vec<String>,
+    pub guard_fields: Vec<String>,
+    /// `(field, target collection)`.
+    pub refs: Vec<(String, String)>,
+}
+
+/// The sync contract version this daemon speaks.
+pub const SYNC_CONTRACT_VERSION: u32 = 1;
+const MAX_SYNC_COLLECTIONS: usize = 16;
+
+fn sync_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 40 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+impl SyncDecl {
+    /// `Ok(None)` when the manifest has no `sync` block.
+    pub fn parse(manifest: &Value) -> Result<Option<SyncDecl>, String> {
+        let Some(block) = manifest.get("sync") else { return Ok(None) };
+        let obj = block.as_object().ok_or("`sync` must be an object")?;
+        let version = obj.get("version").and_then(Value::as_u64).ok_or("`sync.version` is required")? as u32;
+        if version != SYNC_CONTRACT_VERSION {
+            return Err(format!("`sync.version` {version} is not supported (this SenClaw speaks {SYNC_CONTRACT_VERSION})"));
+        }
+        let endpoint = obj.get("endpoint").and_then(Value::as_str).ok_or("`sync.endpoint` is required")?;
+        if !endpoint.starts_with('/')
+            || endpoint.len() > 100
+            || endpoint.contains("..")
+            || endpoint.contains("//")
+            || endpoint.contains(['?', '#', '\\'])
+            || !endpoint.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'))
+        {
+            return Err(format!("`sync.endpoint` `{endpoint}` is not a plain path under the app"));
+        }
+        let list = |c: &Value, key: &str| -> Result<Vec<String>, String> {
+            let Some(v) = c.get(key) else { return Ok(Vec::new()) };
+            let arr = v.as_array().ok_or_else(|| format!("`sync` `{key}` must be a list"))?;
+            arr.iter()
+                .map(|x| match x.as_str() {
+                    Some(f) if sync_name(f) => Ok(f.to_string()),
+                    _ => Err(format!("`sync` `{key}` holds a value that is not a field name")),
+                })
+                .collect()
+        };
+        let raw = obj.get("collections").and_then(Value::as_array).ok_or("`sync.collections` is required")?;
+        if raw.is_empty() || raw.len() > MAX_SYNC_COLLECTIONS {
+            return Err(format!("`sync.collections` needs 1 to {MAX_SYNC_COLLECTIONS} collections"));
+        }
+        let mut collections = Vec::new();
+        for c in raw {
+            let id = c.get("id").and_then(Value::as_str).filter(|i| sync_name(i)).ok_or("a sync collection needs an `id` made of letters, digits and `_`")?;
+            if collections.iter().any(|x: &SyncCollection| x.id == id) {
+                return Err(format!("sync collection `{id}` is declared twice"));
+            }
+            let mut refs = Vec::new();
+            for r in c.get("refs").and_then(Value::as_array).into_iter().flatten() {
+                match (r.get("field").and_then(Value::as_str), r.get("target").and_then(Value::as_str)) {
+                    (Some(f), Some(t)) if sync_name(f) && sync_name(t) => refs.push((f.to_string(), t.to_string())),
+                    _ => return Err(format!("sync collection `{id}`: a ref needs a `field` and a `target`")),
+                }
+            }
+            collections.push(SyncCollection {
+                id: id.to_string(),
+                schema_version: c.get("schemaVersion").and_then(Value::as_u64).unwrap_or(1) as u32,
+                secret_fields: list(c, "secretFields")?,
+                local_fields: list(c, "localFields")?,
+                match_key: list(c, "matchKey")?,
+                guard_fields: list(c, "guardFields")?,
+                refs,
+            });
+        }
+        for c in &collections {
+            if let Some((_, t)) = c.refs.iter().find(|(_, t)| !collections.iter().any(|x| &x.id == t)) {
+                return Err(format!("sync collection `{}` points at `{t}`, which is not declared", c.id));
+            }
+        }
+        // `order` must name exactly the declared collections, each once, and put
+        // a target before whatever points at it.
+        let order: Vec<String> = match obj.get("order") {
+            Some(o) => o
+                .as_array()
+                .ok_or("`sync.order` must be a list")?
+                .iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or("`sync.order` holds a non-string"))
+                .collect::<Result<_, _>>()?,
+            None => collections.iter().map(|c| c.id.clone()).collect(),
+        };
+        let mut sorted_order = order.clone();
+        sorted_order.sort();
+        let mut ids: Vec<String> = collections.iter().map(|c| c.id.clone()).collect();
+        ids.sort();
+        if sorted_order != ids {
+            return Err("`sync.order` must list every sync collection exactly once".into());
+        }
+        for c in &collections {
+            let at = order.iter().position(|o| o == &c.id).unwrap_or(0);
+            for (_, t) in &c.refs {
+                if t != &c.id && order.iter().position(|o| o == t).unwrap_or(0) > at {
+                    return Err(format!("`sync.order` puts `{}` before `{t}`, which it points at", c.id));
+                }
+            }
+        }
+        collections.sort_by_key(|c| order.iter().position(|o| o == &c.id).unwrap_or(usize::MAX));
+        Ok(Some(SyncDecl { version, endpoint: endpoint.trim_end_matches('/').to_string(), collections }))
+    }
+
+    pub fn collection(&self, id: &str) -> Option<&SyncCollection> {
+        self.collections.iter().find(|c| c.id == id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn ssh_sync_block() -> Value {
+        json!({"sync": {
+            "version": 1, "endpoint": "/api/sync",
+            "order": ["keychain", "hosts"],
+            "collections": [
+                {"id": "hosts", "secretFields": ["password"], "localFields": [], "matchKey": ["host"], "guardFields": ["host"],
+                 "refs": [{"field": "keychain_id", "target": "keychain"}]},
+                {"id": "keychain", "secretFields": ["value"]}
+            ]
+        }})
+    }
+
+    #[test]
+    fn a_sync_block_parses_in_the_order_it_declares() {
+        let d = SyncDecl::parse(&ssh_sync_block()).unwrap().unwrap();
+        assert_eq!(d.endpoint, "/api/sync");
+        assert_eq!(d.collections.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["keychain", "hosts"]);
+        assert_eq!(d.collection("hosts").unwrap().secret_fields, ["password"]);
+        assert_eq!(d.collection("hosts").unwrap().refs, [("keychain_id".to_string(), "keychain".to_string())]);
+        assert_eq!(SyncDecl::parse(&json!({"runtime": {}})), Ok(None));
+    }
+
+    #[test]
+    fn a_broken_sync_block_is_an_error_not_a_default() {
+        let bad = |edit: &dyn Fn(&mut Value)| {
+            let mut m = ssh_sync_block();
+            edit(&mut m["sync"]);
+            SyncDecl::parse(&m).unwrap_err()
+        };
+        assert!(bad(&|s| s["version"] = json!(2)).contains("not supported"));
+        assert!(bad(&|s| s["endpoint"] = json!("/api/../x")).contains("plain path"));
+        assert!(bad(&|s| s["endpoint"] = json!("api/sync")).contains("plain path"));
+        assert!(bad(&|s| s["collections"][0]["secretFields"] = json!(["pass word"])).contains("field name"));
+        assert!(bad(&|s| s["collections"][0]["refs"][0]["target"] = json!("nowhere")).contains("not declared"));
+        assert!(bad(&|s| s["order"] = json!(["hosts", "keychain"])).contains("before `keychain`"));
+        assert!(bad(&|s| s["order"] = json!(["hosts"])).contains("exactly once"));
+        assert!(bad(&|s| s["collections"] = json!([])).contains("1 to"));
+        assert!(bad(&|s| s["collections"][1]["id"] = json!("hosts")).contains("twice"));
+    }
 
     #[test]
     fn an_app_that_says_nothing_is_a_session_app() {

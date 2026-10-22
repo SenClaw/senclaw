@@ -14,6 +14,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::app_sync::session::{policy_view, RunOptions};
+use super::app_sync::{AppSync, AppSyncError, AppSyncPolicy};
 use super::knowledge::{self, KnowledgePolicy};
 use super::lan::{self, Endpoint, DEFAULT_PORT};
 use super::pairing::Offer;
@@ -37,6 +39,10 @@ pub fn routes() -> Router<Arc<LinkState>> {
         .route("/api/sen-link/peers/:id/messages", post(send))
         .route("/api/sen-link/peers/:id/knowledge", get(knowledge_get))
         .route("/api/sen-link/peers/:id/recall", post(recall))
+        .route("/api/sen-link/peers/:id/app-sync", get(app_sync_list))
+        .route("/api/sen-link/peers/:id/app-sync/:app", get(app_sync_get).put(app_sync_put))
+        .route("/api/sen-link/peers/:id/app-sync/:app/preview", post(app_sync_preview))
+        .route("/api/sen-link/peers/:id/app-sync/:app/run", post(app_sync_run))
         .route("/api/sen-link/peers/:id/tasks", get(tasks_list))
         .route("/api/sen-link/peers/:id/tasks/:task_id", get(task_get))
         .route("/api/sen-link/peers/:id/tasks/:task_id/cancel", post(task_cancel))
@@ -219,6 +225,7 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
     let known = daemon_id.as_deref().and_then(|d| st.store.by_daemon_id(d));
     let name: String = paired.name.chars().take(80).collect();
     let knowledge = known.as_ref().map(|k| k.knowledge.clone()).unwrap_or_default();
+    let app_sync = known.as_ref().map(|k| k.app_sync.clone()).unwrap_or_default();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.trim().is_empty() { "peer".into() } else { name },
@@ -231,6 +238,7 @@ async fn pair(State(st): State<Arc<LinkState>>, Json(b): Json<PairBody>) -> Resp
         daemon_id,
         key: Some(seal::encode_key(&paired.key)),
         knowledge,
+        app_sync,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let out = view(&st, &peer);
@@ -350,7 +358,12 @@ async fn peer_patch(State(st): State<Arc<LinkState>>, Path(id): Path<String>, Js
 
 async fn peer_delete(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
     match st.store.remove(&id) {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            if let Some(a) = &st.app_sync {
+                a.forget_peer(&id);
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => err(StatusCode::NOT_FOUND, "no such peer"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
@@ -413,6 +426,144 @@ async fn task_cancel(State(st): State<Arc<LinkState>>, Path((id, task_id)): Path
         Ok(p) => relay(&st, &p, "CancelTask", json!({ "id": task_id })).await,
         Err(r) => r,
     }
+}
+
+// ---- syncing apps' data ---------------------------------------------------
+
+fn sync_err(e: AppSyncError) -> Response {
+    let (status, code) = match &e {
+        AppSyncError::NotShared => (StatusCode::CONFLICT, "not_open"),
+        AppSyncError::Busy => (StatusCode::TOO_MANY_REQUESTS, "busy"),
+        AppSyncError::AppUnavailable(_) => (StatusCode::CONFLICT, "app_unavailable"),
+        AppSyncError::SchemaMismatch(_) => (StatusCode::CONFLICT, "schema_mismatch"),
+        AppSyncError::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid"),
+        AppSyncError::Internal(_) => (StatusCode::BAD_GATEWAY, "internal"),
+    };
+    (status, Json(json!({ "error": e.to_string(), "code": code }))).into_response()
+}
+
+fn need_app_sync(st: &LinkState) -> Result<&Arc<AppSync>, Response> {
+    st.app_sync.as_ref().ok_or_else(|| err(StatusCode::NOT_IMPLEMENTED, "this daemon cannot sync apps"))
+}
+
+/// The apps on this machine that can sync, each with what this peer is allowed
+/// to do with it, and (best effort) what the peer has opened to this machine.
+async fn app_sync_list(State(st): State<Arc<LinkState>>, Path(id): Path<String>) -> Response {
+    let Some(peer) = st.store.get(&id) else { return err(StatusCode::NOT_FOUND, "no such peer") };
+    let sync = match need_app_sync(&st) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let apps: Vec<Value> = sync
+        .apps()
+        .syncable()
+        .iter()
+        .map(|a| {
+            let mut v = policy_view(a, peer.app_sync.get(&a.id));
+            v["status"] = sync.status(&peer.id, &a.id);
+            v
+        })
+        .collect();
+    let remote = if st.settings().enabled && peer.addr.is_some() {
+        // A peer that is off must not hold the list up.
+        match tokio::time::timeout(Duration::from_secs(4), sync.remote_apps(&st, &peer)).await {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => json!({ "error": e.to_string() }),
+            Err(_) => json!({ "error": "the peer did not answer" }),
+        }
+    } else {
+        Value::Null
+    };
+    Json(json!({ "apps": apps, "remote": remote })).into_response()
+}
+
+async fn app_sync_get(State(st): State<Arc<LinkState>>, Path((id, app)): Path<(String, String)>) -> Response {
+    let Some(peer) = st.store.get(&id) else { return err(StatusCode::NOT_FOUND, "no such peer") };
+    let sync = match need_app_sync(&st) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let local = match sync.apps().lookup(&app) {
+        Ok(a) => a,
+        Err(e) => return sync_err(e),
+    };
+    let mut v = policy_view(&local, peer.app_sync.get(&app));
+    v["status"] = sync.status(&peer.id, &app);
+    Json(v).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBody {
+    policy: AppSyncPolicy,
+    /// Sending passwords and keys is switched on by saying so: the dialog that
+    /// lists what would cross sets this.
+    #[serde(default)]
+    confirm_secrets: bool,
+}
+
+/// Set what this peer may do with one app's data on this machine.
+async fn app_sync_put(State(st): State<Arc<LinkState>>, Path((id, app)): Path<(String, String)>, Json(b): Json<PolicyBody>) -> Response {
+    let Some(peer) = st.store.get(&id) else { return err(StatusCode::NOT_FOUND, "no such peer") };
+    let sync = match need_app_sync(&st) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let local = match sync.apps().lookup(&app) {
+        Ok(a) => a,
+        Err(e) => return sync_err(e),
+    };
+    let policy = match b.policy.validated(&local.decl) {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let was_secret = peer.app_sync.get(&app).is_some_and(|p| p.secrets);
+    if policy.secrets && !was_secret && !b.confirm_secrets {
+        return err(StatusCode::BAD_REQUEST, "sending passwords and keys to a peer must be confirmed: set confirmSecrets");
+    }
+    let closing = !policy.open();
+    let saved = st.store.update(&peer.id, |p| {
+        if closing {
+            p.app_sync.remove(&app);
+        } else {
+            p.app_sync.insert(app.clone(), policy.clone());
+        }
+    });
+    match saved {
+        Ok(Some(_)) => {
+            let mut v = policy_view(&local, if closing { None } else { Some(&policy) });
+            v["status"] = sync.status(&peer.id, &app);
+            Json(v).into_response()
+        }
+        Ok(None) => err(StatusCode::NOT_FOUND, "no such peer"),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+async fn run_sync(st: &LinkState, id: &str, app: &str, mut opts: RunOptions, dry_run: bool) -> Response {
+    let peer = match with_peer(st, id).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let sync = match need_app_sync(st) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    opts.dry_run = dry_run;
+    match sync.run(st, &peer, app, &opts).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => sync_err(e),
+    }
+}
+
+/// What a sync would do, on both machines, without changing anything.
+async fn app_sync_preview(State(st): State<Arc<LinkState>>, Path((id, app)): Path<(String, String)>, body: Option<Json<RunOptions>>) -> Response {
+    run_sync(&st, &id, &app, body.map(|Json(b)| b).unwrap_or_default(), true).await
+}
+
+/// Sync one app with a peer now.
+async fn app_sync_run(State(st): State<Arc<LinkState>>, Path((id, app)): Path<(String, String)>, body: Option<Json<RunOptions>>) -> Response {
+    run_sync(&st, &id, &app, body.map(|Json(b)| b).unwrap_or_default(), false).await
 }
 
 /// What this peer may read of our knowledge, what that would expose right now,

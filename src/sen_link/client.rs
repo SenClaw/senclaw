@@ -223,6 +223,7 @@ mod tests {
             daemon_id: None,
             key: None,
             knowledge: Default::default(),
+            app_sync: Default::default(),
             created_at: String::new(),
         }
     }

@@ -1497,6 +1497,12 @@ Rules for Claude:
   sees before switching a peer on is what that peer gets; a new thing that can leave goes through them. `user` is not in `SHAREABLE_TYPES` and `validated` rejects it. Search is by
   words (no model, no embedding), answers are cut (10 hits, 600 characters, 30 questions a minute per peer), text is run through `defense::scrub`, and the REST/MCP answer is marked
   `untrusted` — the words came from another machine. Do not let this path write to the fact store or the notes: a mirror, if built, is a separate read-only bank.
+- **A Space App's data is synced by the daemons, never by the app, and both ends must open it** (`app_sync/`, methods `appsync/*`, policy `Peer.app_sync`). The app declares `sync` in its manifest
+  (`apps::manifest::SyncDecl`) and serves `/schema /state /read /apply`; the daemon reaches it through its own app proxy (`LocalApps`: starts a stopped app, stamps the token). A collection moves A→B only if A
+  `send`s and B `receive`s, each by its own policy. Rules: **`wire::strip` cuts `secretFields` and `localFields` from the manifest on every record that leaves or arrives** — never trust the app to; **never read
+  `allowRisky` / `adoptMatches` from a peer's call** (they come from this machine's policy and the person using the management API; a peer approving its own risky change defeats the held state); **refuse an app whose
+  sync routes answer without its token** (`answers_without_token`) **or whose live schema differs from its manifest** (`check_schema`); enabling `secrets` needs `confirmSecrets`. Held changes are in memory by design —
+  `approve` re-fetches the record from the peer, so the daemon never stores another machine's data or a secret. Contract and reasoning: [docs/sen-link.md](docs/sen-link.md), `plans/reports/research-261022-1156-slink-app-data-sync.md`.
 - The board and card label were `sen-link` before the rename: `tasks::find_board` finds the old board for the default title and `ensure_board` renames it in
   place. The card **tenant** stays `sen-link:<peer-id>` — it is data old cards carry.
 - Hub leftovers in `peers.json` (v0.2.0) are cleaned at startup with a `peers.json.bak-<time>` copy (`PeerStore::migrate_hub_leftovers`); peers paired directly

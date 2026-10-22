@@ -53,6 +53,10 @@ pub struct Peer {
     /// What this peer may read of our knowledge. Closed until a person opens it.
     #[serde(default)]
     pub knowledge: super::knowledge::KnowledgePolicy,
+    /// What this peer may do with each of our apps' data, per app id. Closed
+    /// until a person opens it.
+    #[serde(default)]
+    pub app_sync: std::collections::BTreeMap<String, super::app_sync::AppSyncPolicy>,
     pub created_at: String,
 }
 
@@ -73,6 +77,8 @@ pub struct PeerView {
     pub online: bool,
     /// What it may read of our knowledge.
     pub knowledge: super::knowledge::KnowledgePolicy,
+    /// What it may do with each app's data.
+    pub app_sync: std::collections::BTreeMap<String, super::app_sync::AppSyncPolicy>,
     pub created_at: String,
 }
 
@@ -95,6 +101,7 @@ impl From<&Peer> for PeerView {
             legacy: p.daemon_id.is_none() || p.key.is_none(),
             online: false,
             knowledge: p.knowledge.clone(),
+            app_sync: p.app_sync.clone(),
             created_at: p.created_at.clone(),
         }
     }
@@ -388,6 +395,7 @@ mod tests {
             daemon_id: None,
             key: None,
             knowledge: Default::default(),
+            app_sync: Default::default(),
             created_at: "now".into(),
         }
     }

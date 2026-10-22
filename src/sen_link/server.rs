@@ -139,6 +139,7 @@ pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Res
     let name: String = offer.name.trim().chars().take(80).collect();
     // Pairing again keeps what the operator allowed this peer to read, as it keeps auto-run.
     let knowledge = known.as_ref().map(|k| k.knowledge.clone()).unwrap_or_default();
+    let app_sync = known.as_ref().map(|k| k.app_sync.clone()).unwrap_or_default();
     let peer = Peer {
         id: known.as_ref().map_or_else(|| uuid::Uuid::new_v4().to_string(), |k| k.id.clone()),
         name: if name.is_empty() { "peer".into() } else { name },
@@ -150,6 +151,7 @@ pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Res
         daemon_id,
         key: Some(seal::encode_key(&pending.keys.pair)),
         knowledge,
+        app_sync,
         created_at: chrono::Utc::now().to_rfc3339(),
     };
     let accept = pairing::Accept { peer_id: peer.id.clone(), name: s.name, daemon_id: st.store.daemon_id().to_string(), token: theirs };
@@ -159,12 +161,23 @@ pub fn finish_pairing(st: &LinkState, f: pairing::Finish, source: IpAddr) -> Res
 }
 
 /// Answer one JSON-RPC request body for `peer`.
-pub fn rpc_reply(st: &LinkState, peer: &Peer, req: &Value) -> Value {
+pub async fn rpc_reply(st: &LinkState, peer: &Peer, req: &Value) -> Value {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let Some(method) = req["method"].as_str() else {
         return a2a::rpc_error(&id, a2a::INVALID_REQUEST, "missing method");
     };
-    match handle(st, peer, a2a::canonical_method(method), &req["params"]) {
+    let method = a2a::canonical_method(method);
+    // App sync talks to local apps over HTTP, so it is the one family of calls
+    // that has to wait on something.
+    let result = if method.starts_with("appsync/") {
+        match &st.app_sync {
+            Some(a) => a.handle(peer, method, &req["params"]).await,
+            None => Err((a2a::METHOD_NOT_FOUND, format!("method `{method}` is not supported"))),
+        }
+    } else {
+        handle(st, peer, method, &req["params"])
+    };
+    match result {
         Ok(result) => a2a::rpc_result(&id, result),
         Err((code, msg)) => a2a::rpc_error(&id, code, &msg),
     }
@@ -177,13 +190,13 @@ pub async fn rpc(State(st): State<Arc<LinkState>>, headers: HeaderMap, body: axu
     if !st.settings().enabled {
         return not_found();
     }
-    match serve_sealed(&st, &headers, &body) {
+    match serve_sealed(&st, &headers, &body).await {
         Some(sealed) => Json(sealed).into_response(),
         None => unauthorized(),
     }
 }
 
-fn serve_sealed(st: &LinkState, headers: &HeaderMap, body: &[u8]) -> Option<seal::Sealed> {
+async fn serve_sealed(st: &LinkState, headers: &HeaderMap, body: &[u8]) -> Option<seal::Sealed> {
     let from = headers.get(FROM_HEADER).and_then(|v| v.to_str().ok()).and_then(clean_daemon_id)?;
     let peer = st.store.by_daemon_id(&from)?;
     let key = seal::decode_key(peer.key.as_deref()?).ok()?;
@@ -198,7 +211,7 @@ fn serve_sealed(st: &LinkState, headers: &HeaderMap, body: &[u8]) -> Option<seal
     if !crate::gateway::ui_server::auth::ct_eq(&peer.inbound_token_hash, &sha256_hex(&req.token)) {
         return None;
     }
-    let mut rpc = rpc_reply(st, &peer, &req.rpc);
+    let mut rpc = rpc_reply(st, &peer, &req.rpc).await;
     if serde_json::to_vec(&rpc).map_or(0, |b| b.len()) > seal::MAX_REPLY_BYTES {
         rpc = a2a::rpc_error(req.rpc.get("id").unwrap_or(&Value::Null), a2a::INTERNAL_ERROR, "the answer is too large to send");
     }
@@ -341,6 +354,7 @@ mod tests {
             daemon_id: None,
             key: None,
             knowledge: Default::default(),
+            app_sync: Default::default(),
             created_at: String::new(),
         }
     }

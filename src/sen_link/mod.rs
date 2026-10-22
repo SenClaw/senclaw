@@ -13,6 +13,7 @@
 
 pub mod a2a;
 pub mod api;
+pub mod app_sync;
 pub mod client;
 pub mod discovery;
 pub mod knowledge;
@@ -60,6 +61,9 @@ pub struct LinkState {
     /// What a peer may ask this daemon about what it knows; absent where the daemon has no
     /// memory to answer from (tests, tools).
     pub knowledge: Option<Arc<knowledge::Knowledge>>,
+    /// Syncing installed Space Apps' data with a peer; absent where the daemon has
+    /// no app registry (tests, tools).
+    pub app_sync: Option<Arc<app_sync::AppSync>>,
     listen: Mutex<listener::ListenStatus>,
 }
 
@@ -90,6 +94,7 @@ impl LinkState {
             sessions: pairing::Sessions::default(),
             replay: seal::ReplayGuard::default(),
             knowledge: None,
+            app_sync: None,
             listen: Mutex::new(listener::ListenStatus::default()),
         }
     }
@@ -97,6 +102,12 @@ impl LinkState {
     /// Let paired peers ask this daemon what it knows (within each peer's policy).
     pub fn with_knowledge(mut self, db: Arc<crate::db::Db>, profiles_dir: PathBuf) -> Self {
         self.knowledge = Some(Arc::new(knowledge::Knowledge::new(db, profiles_dir)));
+        self
+    }
+
+    /// Let paired peers sync the data of installed Space Apps (within each peer's policy).
+    pub fn with_app_sync(mut self, apps: Arc<dyn app_sync::LocalApps>) -> Self {
+        self.app_sync = Some(Arc::new(app_sync::AppSync::new(apps)));
         self
     }
 

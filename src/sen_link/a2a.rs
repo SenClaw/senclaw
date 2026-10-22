@@ -18,6 +18,10 @@ pub const TASK_NOT_CANCELABLE: i64 = -32002;
 pub const KNOWLEDGE_NOT_SHARED: i64 = -32010;
 /// Too many requests of one kind in a minute.
 pub const TOO_MANY_REQUESTS: i64 = -32011;
+/// The app is not installed here, does not sync, is not running, or is not safe to sync.
+pub const APP_UNAVAILABLE: i64 = -32012;
+/// The app's live schema is not the one its manifest declares, or the two sides' schemas differ.
+pub const APP_SCHEMA_MISMATCH: i64 = -32013;
 
 /// v1.0 method name for `method` (pre-1.0 aliases mapped).
 pub fn canonical_method(method: &str) -> &str {
@@ -119,6 +123,8 @@ pub struct CardIdentity {
     pub pairable: bool,
     /// Version of the knowledge methods it answers; 0 when it has none.
     pub knowledge: u32,
+    /// Version of the app-sync methods it answers; 0 when it has none.
+    pub app_sync: u32,
 }
 
 pub fn card_identity(card: &Value) -> Option<CardIdentity> {
@@ -132,6 +138,7 @@ pub fn card_identity(card: &Value) -> Option<CardIdentity> {
         daemon_id: super::store::clean_daemon_id(ext["params"]["daemonId"].as_str()?)?,
         pairable: ext["params"]["pairable"].as_bool().unwrap_or(false),
         knowledge: ext["params"]["knowledge"].as_u64().unwrap_or(0).min(1000) as u32,
+        app_sync: ext["params"]["appSync"].as_u64().unwrap_or(0).min(1000) as u32,
     })
 }
 
@@ -160,7 +167,7 @@ pub fn agent_card(i: &AgentCardInfo<'_>) -> Value {
                 "uri": SLINK_EXTENSION_URI,
                 "description": "SLink: a SenClaw reachable on the local network",
                 "required": false,
-                "params": { "daemonId": i.daemon_id, "pairable": i.pairable, "knowledge": super::knowledge::KNOWLEDGE_VERSION },
+                "params": { "daemonId": i.daemon_id, "pairable": i.pairable, "knowledge": super::knowledge::KNOWLEDGE_VERSION, "appSync": super::app_sync::APP_SYNC_VERSION },
             }],
         },
         "defaultInputModes": ["text/plain"],

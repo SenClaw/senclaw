@@ -498,6 +498,18 @@ Quản trị & giới hạn:
 
 Muốn xem ví dụ sống cho pattern nào, mở đúng app trong cột phải.
 
+### 3.7 Đồng bộ dữ liệu giữa hai SenClaw (khối `sync`)
+
+App muốn hai máy SenClaw đã ghép cặp qua SLink giữ dữ liệu giống nhau thì khai khối `sync` trong `senclaw-manifest.json` và phục vụ 4 route
+cục bộ dưới `endpoint` đã khai (`GET /schema`, `POST /state`, `POST /read`, `POST /apply`). **App không nói chuyện với máy kia**: daemon gọi
+các route này (qua proxy của app, đóng dấu token) và chở chúng qua kênh SLink đã mã hoá. Mẫu hoàn chỉnh: `app-ssh-manager` (`src/sync/`).
+
+Khai báo mỗi collection: `id`, `schemaVersion`, `secretFields` (không rời máy trừ khi người dùng bật), `localFields` (không bao giờ rời máy,
+không bao giờ bị peer ghi đè), `matchKey` (hai bản ghi nào là một), `guardFields` (đổi chúng trên bản ghi giữ credential thì phải chờ người
+duyệt), `refs`. Daemon **tự cắt** `secretFields`/`localFields` theo manifest, và từ chối đồng bộ app nếu route sync trả lời khi không có token
+của app (bật `require_app_token` cho `/api/sync/*`) hoặc `/schema` sống lệch với manifest. Mỗi bản ghi mang `id` giống nhau trên mọi máy và
+một stamp (đồng hồ lai); bản mới hơn thắng ở cả hai phía, xoá là bia mộ có stamp. Chi tiết luồng, chính sách và API: [docs/sen-link.md](sen-link.md#syncing-a-space-apps-data).
+
 ## 4. Đóng gói: `scripts/pack.sh`
 
 Zip cài được có **layout phẳng**: binary + manifest + skills + personas + web_dist ở gốc zip. Bản cho repo độc lập (khác monorepo ở chỗ build tại chỗ, không `-p <crate>` từ ROOT):

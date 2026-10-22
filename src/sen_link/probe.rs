@@ -126,7 +126,7 @@ pub async fn probe(http: &reqwest::Client, input: &str, default_port: u16) -> Va
                 "ok",
                 true,
                 false,
-                Some(json!({ "name": id.name, "version": id.version, "daemonId": id.daemon_id, "pairable": id.pairable, "knowledge": id.knowledge })),
+                Some(json!({ "name": id.name, "version": id.version, "daemonId": id.daemon_id, "pairable": id.pairable, "knowledge": id.knowledge, "appSync": id.app_sync })),
                 None,
             ),
             None => a.not_slink("answers".into()),

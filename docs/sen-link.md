@@ -184,6 +184,48 @@ At most 10 hits, each text cut at 600 characters, 30 questions a minute per peer
 `from`: they are text another machine wrote, to weigh and not to obey. A peer that predates this (or has it off) answers
 "update SenClaw on that machine"; one that has not shared says so.
 
+## Syncing a Space App's data
+
+Two SenClaws that both have the same Space App can keep its data the same — for ssh-manager: hosts, keychain, port
+forwarding rules and snippets. The app does not talk to the other machine; the daemons do. The app says what it holds
+(`sync` block in `senclaw-manifest.json`) and answers four local calls (`/schema`, `/state`, `/read`, `/apply` under the
+declared `endpoint`); the daemon carries them across the sealed channel as `appsync/*`. The app's side of the contract is in
+its repo (ssh-manager's README); the research and the reasoning behind this are in `plans/reports/research-261022-1156-slink-app-data-sync.md`.
+
+**Closed by default, and it takes both ends.** What a peer may do with an app is a policy per peer and app, stored with the peer:
+
+`PUT /api/sen-link/peers/:id/app-sync/:app {"policy": {"collections": {"hosts": "both", "keychain": "send"}, "secrets": false, "adoptMatches": false}}`
+
+| Field | Meaning |
+|---|---|
+| `collections` | collection → `send` (this machine hands it over), `receive` (takes it), `both`; absent or `off` = nothing. Only collections the app declares |
+| `secrets` | Let the fields the app calls secret (passwords, keys) cross, both ways. Off: they are cut from what leaves **and** from what arrives, and a secret already here is never replaced. Turning it on needs `"confirmSecrets": true` in the body |
+| `adoptMatches` | Fold a record that arrives under another id into the one already here when they mean the same (same host, port and user; same name). Off: it is reported as a `duplicate` and nothing is added |
+
+A collection moves from A to B only if A **sends** it and B **receives** it, each judged by that machine's own policy when the
+call arrives — a bug or a lie on the calling side does not widen what the other allows. Fields the app declares secret
+(`secretFields`) or machine-local (`localFields`, e.g. whether a tunnel is open) are cut by the daemon from the manifest, whether or
+not the app did it. An app is not synced at all when it answers its sync routes without its access token (the daemon asks its own
+port, with no token, and expects 401), when its live `/schema` differs from the manifest's declaration, or when it is not installed.
+
+| Route (on the sending daemon) | |
+|---|---|
+| `GET /api/sen-link/peers/:id/app-sync` | Syncable apps on this machine with this peer's policy, pending changes and last sync; `remote` lists what the peer has opened to this machine |
+| `GET` / `PUT …/app-sync/:app` | One app's policy |
+| `POST …/app-sync/:app/preview` | What a sync would do on both machines (`dryRun`); changes nothing |
+| `POST …/app-sync/:app/run` `{"approve": [{"collection", "id"}], "collections": [...]}` | Sync now: fetch what the peer has newer (collections this machine receives and the peer sends), send what this machine has newer (sends / peer receives). Both apps pick the newer stamp, so repeating or interrupting a run is harmless |
+
+**Risky changes wait for a person.** An app can hold a change back (`held`) — ssh-manager does for a change that would send a stored
+credential somewhere new. Nothing a peer sends can release one: `allowRisky` and `adoptMatches` in a peer's call are not read. The
+held changes are in `status.pending` (kept in memory; the next preview finds them again) and are released by running
+`approve` from the machine that holds them, which fetches the record again from the peer and applies it with the flag.
+
+The wire methods: `appsync/apps` (what this machine has opened to the caller), `appsync/describe`, `appsync/state`, `appsync/read`,
+`appsync/apply`; errors `-32010` (not open to you), `-32011` (over 240 calls a minute), `-32012` (app not installed, not syncing, not
+running or not safe), `-32013` (schemas differ). Batches stay under about 300 KB and 500 records, so records that point at each other
+settle together; a peer that only receives shows no digest, so everything is sent to it each run and its app keeps what it has newer.
+Not done yet: syncing on a timer or when the app changes, an inbox that survives a restart, and the clients' UI.
+
 ## Delegating
 
 | Route (on the sending daemon) | A2A call |
@@ -225,14 +267,14 @@ The tools are loopback calls to `/api/sen-link/*` (registered as a daemon-wide b
 | Path | Auth | |
 |---|---|---|
 | `GET /.well-known/agent-card.json` | none | Agent Card; `supportedInterfaces` names the address the caller used. 404 while SLink is off or `discoverable` is false |
-| `POST /a2a` | a sealed envelope under the pair key, sender named in `X-SLink-From`, token inside | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted), `knowledge/recall` (error `-32010` when not shared, `-32011` over the limit); anything that does not open, is stale or replayed, or carries the wrong token is a bare 401 |
+| `POST /a2a` | a sealed envelope under the pair key, sender named in `X-SLink-From`, token inside | `SendMessage`, `GetTask`, `ListTasks`, `CancelTask` (pre-1.0 `message/send`, `tasks/*` accepted), `knowledge/recall` (error `-32010` when not shared, `-32011` over the limit), `appsync/*` (above); anything that does not open, is stale or replayed, or carries the wrong token is a bare 401 |
 | `POST /a2a/pair/begin` | the live invite's code (as the handshake's password) | `{msg}` → `{sid, msg}`; 403 with no live invite, 429 with too many handshakes open |
 | `POST /a2a/pair/finish` | the sealed offer | `{sid, sealed}` → the sealed answer; a wrong code is a 403 and counts against the invite |
 
 All of them answer 404 while `senLink.enabled` is false. No streaming or push notifications yet: poll `GetTask`.
 
 The Agent Card says who is behind it in an A2A extension, `capabilities.extensions[]` with uri
-`https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable, knowledge}` (`knowledge` is the version of the knowledge methods it answers; absent on older builds); that is how `probe` recognises a
+`https://github.com/SenClaw/senclaw/sen-link/v1` and `params {daemonId, pairable, knowledge, appSync}` (`knowledge` and `appSync` are the versions of the knowledge and app-sync methods it answers; absent on older builds); that is how `probe` recognises a
 SLink and tells it from any other web server.
 
 ### Task mapping
