@@ -502,7 +502,7 @@ Muốn xem ví dụ sống cho pattern nào, mở đúng app trong cột phải.
 
 App muốn hai máy SenClaw đã ghép cặp qua SLink giữ dữ liệu giống nhau thì khai khối `sync` trong `senclaw-manifest.json` và phục vụ 4 route
 cục bộ dưới `endpoint` đã khai (`GET /schema`, `POST /state`, `POST /read`, `POST /apply`). **App không nói chuyện với máy kia**: daemon gọi
-các route này (qua proxy của app, đóng dấu token) và chở chúng qua kênh SLink đã mã hoá. Mẫu hoàn chỉnh: `app-ssh-manager` (`src/sync/`).
+các route này (qua proxy của app, đóng dấu token) và chở chúng qua kênh SLink đã mã hoá. Mẫu hoàn chỉnh: `app-ssh` (`src/sync/`).
 
 Khai báo mỗi collection: `id`, `schemaVersion`, `secretFields` (không rời máy trừ khi người dùng bật), `localFields` (không bao giờ rời máy,
 không bao giờ bị peer ghi đè), `matchKey` (hai bản ghi nào là một), `guardFields` (đổi chúng trên bản ghi giữ credential thì phải chờ người

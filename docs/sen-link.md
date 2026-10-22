@@ -224,7 +224,8 @@ The wire methods: `appsync/apps` (what this machine has opened to the caller), `
 `appsync/apply`; errors `-32010` (not open to you), `-32011` (over 240 calls a minute), `-32012` (app not installed, not syncing, not
 running or not safe), `-32013` (schemas differ). Batches stay under about 300 KB and 500 records, so records that point at each other
 settle together; a peer that only receives shows no digest, so everything is sent to it each run and its app keeps what it has newer.
-Not done yet: syncing on a timer or when the app changes, an inbox that survives a restart, and the clients' UI.
+In the apps it is the **Apps** tab of a peer's row (Settings → SLink, web and desktop): per collection `Off / Send / Receive / Both`, a switch for passwords and keys (with a dialog that names the fields), preview, **Sync now**, and the held changes with an Approve button.
+Not done yet: syncing on a timer or when the app changes, and an inbox that survives a restart.
 
 ## Delegating
 
