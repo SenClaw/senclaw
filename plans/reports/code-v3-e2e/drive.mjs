@@ -105,8 +105,10 @@ await say(jid, steps('S4', [
 const nudgeText = 'You edited source files but have not run anything that checks them';
 const s4nudged = mockReqs().filter((r) => r.tag === 'S4').some((r) => (r.lastText ?? '').includes(nudgeText));
 check('S4 verified edit is not nudged', !s4nudged);
+const s3nudged = mockReqs().filter((r) => r.tag === 'S3').some((r) => (r.lastText ?? '').includes(nudgeText));
+check('S3 an edit that nothing ran was nudged once', s3nudged);
 const s1nudged = mockReqs().filter((r) => r.tag === 'S1').some((r) => (r.lastText ?? '').includes(nudgeText));
-check('S1 unverified edit was nudged once', s1nudged);
+check('S1 an edit followed by running the program is not nudged', !s1nudged);
 
 // ---- S5: what cannot be taken back asks, with the reason
 n0 = cards.length;
