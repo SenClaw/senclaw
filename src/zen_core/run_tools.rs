@@ -867,6 +867,19 @@ async fn run_single_tool(
                             }
                         }
 
+                        // Context compression: this text is re-sent with every
+                        // later call of the chat, so a long JSON list or log is
+                        // shrunk once, here, and the history keeps the shrunk
+                        // form — the request prefix never changes afterwards.
+                        // The card the user sees is `data`, not this string.
+                        // Settings → Agent behavior → Context compression.
+                        result_for_assistant = crate::context_compress::apply(
+                            &tool_name,
+                            &tool_id,
+                            ctx.agent_data_dir,
+                            std::mem::take(&mut result_for_assistant),
+                        );
+
                         // L1 offload (§8 "no silent edits"): behind
                         // `controlPlane.workspace.substituteToolOutput`
                         // (default off — docs/control-plane.md §4). The
@@ -1259,6 +1272,104 @@ mod tests {
         assert!(content.contains("full output saved at"));
         let saved = std::fs::read_to_string(ws_dir.path().join(crate::control_plane::safe_id("/tmp")).join("artifacts").join("c2")).unwrap();
         assert_eq!(saved.len(), crate::control_plane::workspace::OFFLOAD_THRESHOLD_BYTES + 1, "the full result is still on disk");
+
+        std::env::remove_var("SENCLAW_CONFIG_PATH");
+        std::env::remove_var("SENCLAW_CONTROL_PLANE_WORKSPACE_DIR");
+    }
+
+    /// An MCP tool: what the bridge hands the model is the JSON-RPC result
+    /// pretty-printed around a text block that is itself pretty JSON.
+    struct McpListTool;
+
+    #[async_trait::async_trait]
+    impl Tool for McpListTool {
+        fn name(&self) -> &str {
+            "mcp__test__email_list"
+        }
+        fn description(&self) -> &str {
+            "returns a long list"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+        fn is_read_only(&self) -> bool {
+            true
+        }
+        async fn call(&self, _input: serde_json::Value, _ctx: &ToolContext<'_>) -> Result<Vec<ToolOutput>> {
+            let rows: Vec<_> = (0..150)
+                .map(|i| serde_json::json!({"id": format!("msg-{i:05}"), "subject": format!("Weekly report {i}"), "snippet": "Hi team, attached is the summary of last week and the plan for the next sprint.", "unread": i % 3 == 0}))
+                .collect();
+            let inner = serde_json::to_string_pretty(&serde_json::json!({"total": 150, "emails": rows})).unwrap();
+            let envelope = serde_json::to_string_pretty(&serde_json::json!({
+                "content": [{"type": "text", "text": inner}],
+                "isError": false
+            }))
+            .unwrap();
+            Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({"total": 150}),
+                result_for_assistant: envelope,
+            }])
+        }
+        fn gen_tool_result_message(&self, _data: &serde_json::Value, _input: &serde_json::Value) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "email_list".into(),
+                summary: String::new(),
+                content: serde_json::json!({}),
+            }
+        }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "email_list".into()
+        }
+    }
+
+    /// Context compression, tested at the seam it lives at: on by default,
+    /// shrinks what the model is shown, leaves the full text on disk, and the
+    /// setting turns it off.
+    #[tokio::test]
+    async fn a_long_mcp_list_is_shrunk_by_default_and_left_alone_when_the_setting_is_off() {
+        let _guard = crate::control_plane::env_test_guard();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let config_path = cfg_dir.path().join("config.json");
+        let ws_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SENCLAW_CONFIG_PATH", &config_path);
+        std::env::set_var("SENCLAW_CONTROL_PLANE_WORKSPACE_DIR", ws_dir.path());
+
+        let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(McpListTool)];
+        let checker = AllowAllPermissions;
+        let ctx = test_ctx(&tools, &checker);
+        let cancel = CancellationToken::new();
+        let call = |id: &str| {
+            vec![ContentBlock::ToolUse {
+                id: id.into(),
+                name: "mcp__test__email_list".into(),
+                input: serde_json::json!({}),
+            }]
+        };
+
+        // Default (no config.json): on.
+        let results = run_tools(&call("c1"), &cancel, &ctx).await;
+        let ContentBlock::ToolResult { content, is_error, .. } = &results[0] else {
+            panic!("expected a ToolResult block");
+        };
+        assert!(!is_error);
+        assert!(content.contains("kept 15 of 150 items"), "{content}");
+        assert!(content.contains("msg-00000") && content.contains("msg-00149"));
+        let saved = std::fs::read_to_string(
+            ws_dir.path().join(crate::control_plane::safe_id("/tmp")).join("artifacts").join("c1-full"),
+        )
+        .unwrap();
+        assert!(saved.contains("msg-00075"), "the full list is on disk");
+        let shrunk_len = content.len();
+
+        // Off: the model is shown what the tool returned.
+        crate::gateway::group_manager::save_context_compression_enabled(&config_path, false).unwrap();
+        let results = run_tools(&call("c2"), &cancel, &ctx).await;
+        let ContentBlock::ToolResult { content, .. } = &results[0] else {
+            panic!("expected a ToolResult block");
+        };
+        assert!(!content.contains("context-compress"));
+        assert!(content.contains("msg-00075"));
+        assert!(content.len() > shrunk_len * 8, "{} vs {}", content.len(), shrunk_len);
 
         std::env::remove_var("SENCLAW_CONFIG_PATH");
         std::env::remove_var("SENCLAW_CONTROL_PLANE_WORKSPACE_DIR");

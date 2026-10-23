@@ -149,6 +149,15 @@ impl Workspace {
     /// [`super::safe_id`]) — a model-influenced id cannot escape the
     /// artifacts directory.
     pub fn write_artifact(&self, call_id: &str, full_content: &str) -> std::io::Result<ArtifactPreview> {
+        let path = self.save_artifact(call_id, full_content)?;
+        Ok(build_preview(full_content, &path))
+    }
+
+    /// Save `content` under `artifacts/<call_id>` and return where. The file is
+    /// the whole point of every caller — a preview or a footer that tells the
+    /// model where the rest is — so a failure to write it is the caller's cue to
+    /// keep the original text rather than cut it.
+    pub fn save_artifact(&self, call_id: &str, content: &str) -> std::io::Result<PathBuf> {
         self.ensure_dir()?;
         let dir = self.artifacts_dir();
         std::fs::create_dir_all(&dir)?;
@@ -157,11 +166,11 @@ impl Workspace {
         let path = dir.join(&safe_call_id);
         {
             let mut f = std::fs::File::create(&path)?;
-            f.write_all(full_content.as_bytes())?;
+            f.write_all(content.as_bytes())?;
         }
         restrict_file(&path);
         self.enforce_quota(&dir)?;
-        Ok(build_preview(full_content, &path))
+        Ok(path)
     }
 
     /// Delete the oldest artifacts (by mtime) until the directory is back

@@ -1556,6 +1556,19 @@ Rules for Claude:
   table existing** — `apply_space_tables` runs *after* `run_migrations`, and
   an unguarded ALTER took 177 tests down with "no such table".
 
+## Context compression (`src/context_compress/`)
+
+Long tool results are shrunk **once, where they are created** (`run_tools`, right before the result becomes a `ContentBlock::ToolResult`), because the history re-sends them with every later call. Tier 1 prints an MCP result's envelope and JSON compactly (same data); tier 2 leaves rows of a long JSON array or lines of a long log out, saves the full text under the chat's workspace and says where in a footer. On by default; `contextCompression` in `config.json`, served by `/api/agent-behavior`, switch in Settings → Agent behavior (web + desktop). Guide, thresholds and measured sizes: [docs/context-compression.md](docs/context-compression.md); the Headroom research behind it: `plans/reports/research-261023-1209-headroom-context-compression.md`.
+
+Rules for Claude:
+
+- **Compress at creation, never per call.** The shrunk text is what the history keeps, so the request prefix stays byte-identical (hosted prompt cache, sen-mlx KV reuse). Rewriting history on the way out would break both. The output is a pure function of the tool output; a test pins it.
+- **Only an allow-list is processed** (`eligible`: `mcp__*`, `WebFetch`, `Bash`, `PeekBgJob`). `Read`/`Edit`/`Write`/`Grep`/`Glob` and every unknown tool are left alone: something is edited against their output. Bash is never reformatted as JSON (`cat package.json` then an `Edit`), only log-shrunk when it reads like a log.
+- **Rows are copied by byte range, never printed from a `serde_json::Value`** — an id above 2^53 would become a float. `json::minify` and `json::scan_arrays` work on the text.
+- **A cut always has a way back.** The full text is saved first (`Workspace::save_artifact`, `<call id>-full`; the L1 offload names its file by the bare call id); if that fails, a JSON result falls back to tier 1 and a log is returned whole.
+- **An `isError` MCP result, or one with an image or extra fields, is returned untouched.**
+- **Unusual rows are chosen from the rows (`array::select`), with no model.** A trouble-named key counts only with a real value behind it: `"error": null` on every healthy row must not flag the array.
+
 ## Failure ledger: recording what breaks, learning nothing (yet)
 
 Every tool failure in a chat lands in `failure_episodes` — one row per run of

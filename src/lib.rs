@@ -26,6 +26,7 @@ pub mod checkpoints;
 pub mod clawhub;
 pub mod cli;
 pub mod config;
+pub mod context_compress;
 pub mod control_plane;
 pub mod datagen;
 pub mod db;

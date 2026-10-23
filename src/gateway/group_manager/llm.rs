@@ -127,6 +127,24 @@ pub fn get_memory_read_switches(config_path: &Path) -> MemoryReadSwitches {
     }
 }
 
+// ===== Context compression toggle (global, user-set) =====
+
+/// Context compression of tool results. Default ON — a long JSON list or build
+/// log is re-sent with every later call of the chat, so shrinking it once, where
+/// it is created, is the cheapest token saving there is. The full text stays on
+/// disk for the model to read back. Settings → Agent behavior turns it off.
+pub fn get_context_compression_enabled(config_path: &Path) -> bool {
+    load_global_config(config_path)
+        .context_compression
+        .unwrap_or(true)
+}
+
+pub fn save_context_compression_enabled(config_path: &Path, enabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.context_compression = Some(enabled);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== Default flows + widget disable list (global, user-set) =====
 
 /// The `defaults` section (open-link / media / search / note handlers + the
@@ -377,6 +395,36 @@ pub fn save_decision_settings(config_path: &Path, s: &crate::decision::settings:
     s.merge_into_raw(&mut raw);
     cfg.decision_config = Some(raw);
     save_global_config(config_path, &cfg)
+}
+
+#[cfg(test)]
+mod context_compression_switch_tests {
+    use super::*;
+
+    #[test]
+    fn it_is_on_until_someone_turns_it_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        assert!(get_context_compression_enabled(&path), "no file: on");
+        std::fs::write(&path, "{}").unwrap();
+        assert!(get_context_compression_enabled(&path), "no key: on");
+        save_context_compression_enabled(&path, false).unwrap();
+        assert!(!get_context_compression_enabled(&path));
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"contextCompression\": false"), "{raw}");
+        save_context_compression_enabled(&path, true).unwrap();
+        assert!(get_context_compression_enabled(&path));
+    }
+
+    #[test]
+    fn saving_it_leaves_the_other_switches_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        save_memory_recall_enabled(&path, false).unwrap();
+        save_context_compression_enabled(&path, false).unwrap();
+        assert!(!get_memory_recall_enabled(&path));
+        assert!(!get_context_compression_enabled(&path));
+    }
 }
 
 #[cfg(test)]

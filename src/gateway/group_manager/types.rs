@@ -383,6 +383,14 @@ pub(super) struct GlobalConfig {
         rename = "memoryRecall"
     )]
     pub(super) memory_recall: Option<bool>,
+    /// Context compression of tool results (`crate::context_compress`): fewer
+    /// tokens re-sent on every later call of a chat. Absent means ON.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "contextCompression"
+    )]
+    pub(super) context_compression: Option<bool>,
     /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
     /// (e.g. the Kanban board) are auto-run by persona worker agents.
     #[serde(
