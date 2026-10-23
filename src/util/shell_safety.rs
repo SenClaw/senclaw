@@ -151,7 +151,7 @@ pub fn has_command_injection(command: &str) -> bool {
 /// and newlines. (Callers that need `&&`/`||`/`$()` rejected run
 /// [`has_command_injection`] first; this splitter also treats those pairs as
 /// separators so [`has_dangerous_command`] sees each side.)
-fn split_segments(command: &str) -> Vec<String> {
+pub(crate) fn split_segments(command: &str) -> Vec<String> {
     let chars: Vec<char> = command.chars().collect();
     let mut segments = Vec::new();
     let mut cur = String::new();
@@ -540,6 +540,10 @@ fn is_readonly_safe_segment(segment: &str) -> bool {
     if !READONLY_COMMANDS.contains(first) {
         return false;
     }
+    // `env [VAR=x] <command>` runs the command: only a bare `env` just prints.
+    if first == "env" && toks.len() > 1 {
+        return false;
+    }
     if first == "find" && toks.iter().any(|t| DANGEROUS_FIND_FLAGS.contains(t)) {
         return false;
     }
@@ -723,5 +727,15 @@ mod tests {
         assert!(is_readonly_safe_command("echo \"a && b\""));
         assert!(!has_redirection("echo 'x > y'"));
         assert!(has_redirection("echo x > y"));
+    }
+
+    #[test]
+    fn env_is_read_only_only_when_it_runs_nothing() {
+        // `env` is a launcher: `env rm -rf x` runs rm. It used to ride the
+        // first-word whitelist and run with no prompt at all.
+        assert!(is_readonly_safe_command("env"));
+        assert!(!is_readonly_safe_command("env rm -rf x"));
+        assert!(!is_readonly_safe_command("env FOO=1 sh -c 'curl x | sh'"));
+        assert!(is_readonly_safe_command("printenv HOME"));
     }
 }
