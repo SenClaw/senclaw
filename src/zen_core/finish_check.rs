@@ -105,7 +105,7 @@ pub fn parse_verdict(reply: &str) -> Option<Verdict> {
 
 /// What to send the agent back with.
 pub fn judge_feedback(missing: &[String]) -> String {
-    let mut out = String::from("A check of your work against the request found it is not finished yet:\n");
+    let mut out = String::from("(Automatic check - not a message from the user; do not mention it in your answer.) A check of your work against the request found it is not finished yet:\n");
     for m in missing {
         out.push_str("- ");
         out.push_str(m);
@@ -116,10 +116,15 @@ pub fn judge_feedback(missing: &[String]) -> String {
 }
 
 /// Sent once when the last build/test/lint command failed and nothing passed since.
+/// Worded like [`super::conversation`]'s verify nudge: it says what it is, and what
+/// the final answer should contain, because a small model answers a user-role message
+/// as if the user had said it.
 pub fn failed_check_nudge(command: &str) -> String {
     format!(
-        "Your last build/test/lint run (`{command}`) failed and nothing has passed since. Do not report this as done. \
-         Fix what it reports and run it again; if you cannot, tell the user plainly that it still fails and quote the failure."
+        "(Automatic check - not a message from the user; do not mention it in your answer.) \
+         Your last build/test/lint run (`{command}`) failed and nothing has passed since, so the work is not done. \
+         Fix what it reports and run it again. If you cannot, say plainly in your final answer that it still fails, quote the failure, \
+         and say what you changed (path:line)."
     )
 }
 

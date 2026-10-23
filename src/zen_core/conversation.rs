@@ -877,10 +877,15 @@ async fn run_finish_judge(
 /// "done" on code it never compiled; OpenHands' goal judge and SWE-bench prompt
 /// both treat "claimed but unverified" as not done. One nudge, never a loop:
 /// a repository with nothing to run answers in a sentence and finishes.
-const VERIFY_NUDGE: &str = "You edited source files but have not run anything that checks them. \
-Before you finish, run the narrowest build, test or lint command that covers your change (the \
-<project_commands> block lists them) and fix what it reports. If nothing can be run here, say so \
-in one sentence and why, then give your final answer.";
+///
+/// Worded for a model that reads every user-role message as the user speaking: a
+/// real run's final reply was "the user is reminding me that…" until the note said
+/// what it is and what the final answer should contain.
+const VERIFY_NUDGE: &str = "(Automatic check - not a message from the user; do not mention it in your answer.) \
+You edited source files but have not run anything that checks them. Run the narrowest build, test or \
+lint command that covers your change (the <project_commands> block lists them) and fix what it \
+reports. If nothing can be run here, say so in one sentence and why. Then write your final answer: \
+what you changed (path:line) and what you ran, with its result.";
 
 /// Source files worth a build/test after an edit: not notes, not config.
 fn is_source_edit(tool: &str, input: &serde_json::Value) -> bool {

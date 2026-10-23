@@ -65,6 +65,10 @@ pub enum Stuck {
     SameFailure { label: String, times: usize },
 }
 
+/// Opens every note the loop sends as a user-role message: a small model answers
+/// those as if the user had said them, and quotes them in its final reply.
+pub const AUTOMATIC: &str = "(Automatic check - not a message from the user; do not mention it in your answer.) ";
+
 impl Stuck {
     /// One line for the nudge and the log.
     pub fn describe(&self) -> String {
@@ -77,7 +81,7 @@ impl Stuck {
 
     /// What to tell the model when it first looks stuck.
     pub fn nudge(&self) -> String {
-        match self {
+        let body = match self {
             Stuck::SameResult { label, times } => format!(
                 "You have called `{label}` {times} times in a row and got exactly the same result each time. Calling it again changes nothing. \
                  Stop and change the approach: read the result again for what it actually says, look somewhere else, or tell the user plainly what blocks you."
@@ -90,12 +94,13 @@ impl Stuck {
                 "`{label}` has failed with the same output {times} times although you changed things in between, so your changes are not reaching the cause. \
                  Read the failing output again, find the cause before you edit anything else, or tell the user plainly that it still fails and why."
             ),
-        }
+        };
+        format!("{AUTOMATIC}{body}")
     }
 }
 
 /// What the model is told when the nudge did not help and tools are taken away.
-pub const FINAL_NUDGE: &str = "You are stuck in a loop and tool access is now disabled. Do not claim the task is done. \
+pub const FINAL_NUDGE: &str = "(Automatic check - not a message from the user; do not mention it in your answer.) You are stuck in a loop and tool access is now disabled. Do not claim the task is done. \
 Tell the user, in their language, what you were trying to do, what keeps happening (quote the output), and what you would try next.";
 
 #[derive(Debug, Default)]
@@ -278,5 +283,6 @@ mod tests {
     fn the_nudge_names_the_call() {
         let s = Stuck::SameResult { label: "Bash: cargo test".into(), times: 4 };
         assert!(s.nudge().contains("`Bash: cargo test`") && s.describe().contains("4 times"));
+        assert!(s.nudge().starts_with("(Automatic check"), "a small model must not read it as the user");
     }
 }
