@@ -2196,7 +2196,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                             break;
                         }
                     }
-                    if !delivered {
+                    // A code session has no messaging channel by design: its replies
+                    // reach the person over the WebSocket gateway, which is not an
+                    // adapter. It used to log an ERROR per reply telling people to
+                    // check a bot token that does not exist.
+                    if !delivered && jid.starts_with("code:") {
+                        tracing::debug!("[SenClaw] reply for code session {jid} goes to WebSocket clients only");
+                    } else if !delivered {
                         // No adapter claimed it — a bot that was removed, or one
                         // that never connected. Worth saying out loud: the agent
                         // has already produced the answer at this point.
