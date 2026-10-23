@@ -1523,6 +1523,7 @@ removed in 83e9720). The layers added on 2026-09-12
 | Git worktrees for `isolation: "worktree"` DAG tasks, `Task` subagents, kanban cards labelled `worktree` | `src/worktree/`, `/api/worktrees*` | [docs/worktree-isolation.md](docs/worktree-isolation.md) |
 | Per-model `EditFormat` (exact/fuzzy/udiff/whole) | `zen_core::EditFormat`, `src/tools/edit_apply.rs` | [docs/edit-formats.md](docs/edit-formats.md) |
 | `senclaw acp` — ACP agent on stdio for Zed/JetBrains | `src/acp/` | [docs/acp.md](docs/acp.md) |
+| Graded unattended runs, repo instructions + detected commands, edit-miss hints, syntax check, verify-before-finish | `src/util/command_risk.rs`, `src/zen_core/permissions.rs`, `src/repo_map/{commands,syntax}.rs` | [docs/code-autonomy.md](docs/code-autonomy.md) |
 | Trajectory JSONL per turn + replay + `scripts/evals/run.py` | `src/trajectory/` | [docs/evals.md](docs/evals.md) |
 
 Rules for Claude:
@@ -1555,6 +1556,33 @@ Rules for Claude:
 - **Migrations that add a column to a Space table must be guarded by the
   table existing** — `apply_space_tables` runs *after* `run_migrations`, and
   an unguarded ALTER took 177 tests down with "no such table".
+
+## Code autonomy: run the dev loop, ask only for what cannot be taken back
+
+`codeAutonomy` (`ask` | `auto` | `full`, default `auto`, served by `/api/agent-behavior`, read every turn) decides how far a coding chat runs before it
+stops for an approval card. `auto` runs edits inside the project and build / test / lint / local-git commands; the card appears for what leaves the
+project or cannot be undone, and **its title says why**. Grading: [`src/util/command_risk.rs`](src/util/command_risk.rs); wiring:
+`PermissionManager::auto_decision`; guide and tables: [docs/code-autonomy.md](docs/code-autonomy.md); `GET /api/code/autonomy` counts ran vs asked.
+
+Rules for Claude:
+
+- **`auto`/`full` apply only where a checkpoint can undo the change** (`PermissionManager::autonomy()` returns `Ask` otherwise): a code session, or a
+  working folder that is a git repository, never `/` or `$HOME` — the same `checkpoints::checkpointable_dir` the shadow repo uses. A plain chat in a
+  non-repo folder keeps asking whatever the setting says. Do not widen this to "any chat" to make a test pass.
+- **Unknown is High.** The grader falls to `High` for a program it does not list, a variable-dependent path, a nested substitution, `eval`. A wrong guess
+  must cost one prompt, never a file; adding a program to the Medium lists needs both its paths and its effect to be checkable from the command line.
+- **A saved "never ask again" grant is checked before the grading**, and `browser_approve` is never answered by any level (`full` included).
+- **Never take two guards of one `std::sync::Mutex` in one statement.** `ensure_engine` read `autonomies.lock()` twice inside a struct literal; both
+  temporaries live to the end of the `let`, so every chat hung at "Preparing MCP servers" with nothing logged. Only a daemon run found it — read the map
+  once into a local.
+- **`env <cmd>` is not read-only.** It was on the first-word whitelist, so `env rm -rf x` ran without a prompt; `shell_safety` now accepts a bare `env` only.
+- **Scratch folders that contain the project are not scratch** (`Scope::assemble`): with the project under `/tmp`, everything beside it would be free to write.
+- **The first-turn project context is `session_works_on_a_project`** (code session, git repo, or project chat): `SENCLAW.md` → `AGENTS.md` → `CLAUDE.md`
+  walking up, plus `<project_commands>` read from the manifests (`repo_map::commands`). It used to be `fn instance_uses_workspace(_) -> bool { false }`.
+- **The syntax check reports only errors the edit introduced** (`repo_map::syntax::introduced_by_edit`, before vs after) and never reverts. A file that
+  was already broken, or code newer than the bundled grammar, must stay silent.
+- **Verify-before-finish nudges once** (`QueryConfig::verify_edits`, `VERIFY_NUDGE`): never for subagents, never in a loop. Source edits only.
+- The Bash tool requires a `description`; a scripted driver that omits it never reaches the permission layer (`Missing required field: description`).
 
 ## Context compression (`src/context_compress/`)
 

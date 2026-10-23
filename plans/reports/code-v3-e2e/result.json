@@ -1,0 +1,41 @@
+{
+ "pass": 22,
+ "fail": 0,
+ "cards": [
+  {
+   "tool": "Bash",
+   "title": "git push origin main — publishes commits to a remote",
+   "content": "{\n  \"command\": \"git push origin main\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:77076ee6-cea7-4d5f-96c5-db8f38877745"
+  },
+  {
+   "tool": "Bash",
+   "title": "rm -rf ~/e2e-nope-dir — deletes /private/tmp/claude-501/-Users-benji-Projects-SenClaw/956c5052-adda-46ed-a594-89e16844edbe/scratchpad/e2e/run/home/e2e-nope-dir outside the project folder",
+   "content": "{\n  \"command\": \"rm -rf ~/e2e-nope-dir\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:77076ee6-cea7-4d5f-96c5-db8f38877745"
+  },
+  {
+   "tool": "Write",
+   "title": "Write x.txt — edits /private/tmp/claude-501/-Users-benji-Projects-SenClaw/956c5052-adda-46ed-a594-89e16844edbe/scratchpad/e2e/run/outside/x.txt outside the project folder",
+   "content": "{\n  \"path\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/956c5052-adda-46ed-a594-89e16844edbe/scratchpad/e2e/run/outside/x.txt\"\n}",
+   "jid": "code:77076ee6-cea7-4d5f-96c5-db8f38877745"
+  },
+  {
+   "tool": "Bash",
+   "title": "python3 hello.py",
+   "content": "{\n  \"command\": \"python3 hello.py\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:77076ee6-cea7-4d5f-96c5-db8f38877745"
+  },
+  {
+   "tool": "Bash",
+   "title": "python3 -c \"print(1)\"",
+   "content": "{\n  \"command\": \"python3 -c \\\"print(1)\\\"\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "web:plain"
+  }
+ ],
+ "stats": {
+  "askedAnyway": 3,
+  "level": "auto",
+  "ranUnattended": 11
+ }
+}
