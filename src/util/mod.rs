@@ -1,5 +1,6 @@
 //! Utility helpers. Port targets: src-old/util/*.ts
 
+pub mod command_risk;
 pub mod crypto;
 pub mod fetch_safety;
 pub mod file_perms;

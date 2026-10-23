@@ -391,6 +391,14 @@ pub(super) struct GlobalConfig {
         rename = "contextCompression"
     )]
     pub(super) context_compression: Option<bool>,
+    /// How far a coding chat runs before it asks (`ask` | `auto` | `full`, see
+    /// `crate::zen_core::Autonomy`). Absent means `auto`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "codeAutonomy"
+    )]
+    pub(super) code_autonomy: Option<String>,
     /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
     /// (e.g. the Kanban board) are auto-run by persona worker agents.
     #[serde(

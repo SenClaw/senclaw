@@ -116,6 +116,12 @@ pub trait CoreApi: Send + Sync {
         let _ = skip;
     }
 
+    /// How far this chat runs before it asks (see [`crate::zen_core::Autonomy`]).
+    /// Remembered for an engine not created yet and applied live to one that is.
+    fn set_autonomy(&self, jid: &str, level: crate::zen_core::Autonomy, code_session: bool) {
+        let _ = (jid, level, code_session);
+    }
+
     /// Hot-update Thinking-mode flag for an existing core.
     fn update_thinking(&self, jid: &str, enabled: bool) {}
 

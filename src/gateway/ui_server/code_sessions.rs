@@ -569,6 +569,18 @@ pub(crate) async fn edit_stats() -> Json<serde_json::Value> {
     Json(crate::tools::edit::edit_stats_json())
 }
 
+/// GET /api/code/autonomy — the level coding chats run at, and since the daemon
+/// started how many edits and commands `auto` let through without a prompt
+/// (`ranUnattended`) against how many it still asked about (`askedAnyway`).
+/// The two numbers say whether the setting keeps its promise: few prompts, and
+/// those few are the ones that matter.
+pub(crate) async fn autonomy_stats(State(s): State<Arc<UiState>>) -> Json<serde_json::Value> {
+    let level = crate::gateway::group_manager::get_code_autonomy(&s.config.paths.global_config_path);
+    let mut v = crate::zen_core::permissions::autonomy_stats_json();
+    v["level"] = serde_json::Value::String(level.as_str().to_string());
+    Json(v)
+}
+
 // ===== Folder picker =====
 
 #[derive(Deserialize, Default)]

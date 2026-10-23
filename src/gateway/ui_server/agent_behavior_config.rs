@@ -21,7 +21,11 @@
 //!   later call of the chat; the full text stays on disk (`crate::context_compress`).
 //!   Default **ON**.
 //!
-//! All five are persisted in the global config (`~/.senclaw/config.json`) and
+//! - **codeAutonomy** — how far a coding chat runs before it asks: `ask` (every
+//!   command and edit prompts), `auto` (the dev loop runs, what cannot be taken
+//!   back asks — the default) or `full` (nothing asks). `crate::util::command_risk`.
+//!
+//! All six are persisted in the global config (`~/.senclaw/config.json`) and
 //! read per-turn by `AgentPool`.
 
 use std::sync::Arc;
@@ -30,8 +34,8 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
 
 use crate::gateway::group_manager::{
-    get_after_process_enabled, get_context_compression_enabled, get_memory_recall_enabled,
-    get_pre_cognitive_enabled, get_pre_trigger_skill_enabled, save_after_process_enabled,
+    get_after_process_enabled, get_code_autonomy, get_context_compression_enabled, get_memory_recall_enabled,
+    get_pre_cognitive_enabled, get_pre_trigger_skill_enabled, save_after_process_enabled, save_code_autonomy,
     save_context_compression_enabled, save_memory_recall_enabled, save_pre_cognitive_enabled,
     save_pre_trigger_skill_enabled,
 };
@@ -46,6 +50,7 @@ fn current(s: &UiState) -> serde_json::Value {
         "afterProcess": get_after_process_enabled(path),
         "memoryRecall": get_memory_recall_enabled(path),
         "contextCompression": get_context_compression_enabled(path),
+        "codeAutonomy": get_code_autonomy(path).as_str(),
     })
 }
 
@@ -67,6 +72,9 @@ pub(crate) struct AgentBehaviorBody {
     memory_recall: Option<bool>,
     #[serde(rename = "contextCompression")]
     context_compression: Option<bool>,
+    /// `ask` | `auto` | `full`; anything else is a 400, not a silent `auto`.
+    #[serde(rename = "codeAutonomy")]
+    code_autonomy: Option<String>,
 }
 
 pub(crate) async fn agent_behavior_set(
@@ -92,6 +100,13 @@ pub(crate) async fn agent_behavior_set(
     }
     if let Some(v) = body.context_compression {
         save_context_compression_enabled(path, v)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(v) = body.code_autonomy {
+        let level = crate::zen_core::Autonomy::parse(&v).ok_or_else(|| {
+            AppError(StatusCode::BAD_REQUEST, format!("codeAutonomy must be ask, auto or full, not {v:?}"))
+        })?;
+        save_code_autonomy(path, level)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     Ok(Json(current(&s)))

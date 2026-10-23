@@ -1072,6 +1072,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route("/api/fs/ls", get(super::code_sessions::fs_ls))
         .route("/api/code/edit-stats", get(super::code_sessions::edit_stats))
+        .route("/api/code/autonomy", get(super::code_sessions::autonomy_stats))
         // Failure ledger: tool failures and what happened next (read-only).
         .route("/api/failures", get(super::failures::failures_list))
         .route(

@@ -11,7 +11,9 @@
 //! [`ResponseRegistry`].
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering as AtomicOrdering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -21,6 +23,20 @@ use tracing::{debug, info};
 use super::events::ResponseRegistry;
 use super::run_tools::PermissionChecker;
 use super::*;
+use crate::util::command_risk::{self, Risk, Scope};
+
+/// How many calls `auto` mode let through, and how many it still asked about,
+/// since the daemon started. Read at `GET /api/code/autonomy`: the numbers
+/// that say whether the setting does what it promises.
+static AUTO_RAN: AtomicU64 = AtomicU64::new(0);
+static AUTO_ASKED: AtomicU64 = AtomicU64::new(0);
+
+pub fn autonomy_stats_json() -> serde_json::Value {
+    serde_json::json!({
+        "ranUnattended": AUTO_RAN.load(AtomicOrdering::Relaxed),
+        "askedAnyway": AUTO_ASKED.load(AtomicOrdering::Relaxed),
+    })
+}
 
 // ============================================================================
 // Constants (mirrors TS)
@@ -46,6 +62,16 @@ const PER_CALL_MCP_TOOLS: &[&str] = &["browser_approve"];
 // Permission manager
 // ============================================================================
 
+/// What `auto` mode decided about one call.
+enum AutoDecision {
+    /// Not in `auto`, or not a call it grades: the ordinary rules decide.
+    NotApplicable,
+    /// Safe to run without asking.
+    Run,
+    /// Ask, and say why.
+    Ask(String),
+}
+
 pub struct PermissionManager {
     /// Skip flags from engine options. Atomic so both the engine constructor
     /// and the runtime settings toggle can update them through the shared
@@ -64,6 +90,21 @@ pub struct PermissionManager {
     response_registry: Arc<ResponseRegistry>,
     /// Event emitter.
     event_bus: EventBus,
+    /// [`Autonomy`] as a byte (0 ask, 1 auto, 2 full); atomic so the pool can
+    /// change it under a live engine.
+    autonomy: AtomicU8,
+    /// The chat is a code session; see [`Self::reversible`].
+    code_session: AtomicBool,
+    /// Every change in the working folder can be undone from a checkpoint
+    /// (a code session, or a git repository). `auto` and `full` apply only
+    /// while this holds: running unattended is justified by being able to take
+    /// it back, not by the setting alone.
+    reversible: AtomicBool,
+    /// The project folder `auto` mode confines itself to. `None` = no folder
+    /// known, so `auto` has nothing to judge against and every call asks.
+    workspace: RwLock<Option<Arc<Scope>>>,
+    /// Where a Bash command starts (the chat's working folder).
+    workdir: RwLock<PathBuf>,
 }
 
 impl PermissionManager {
@@ -77,6 +118,100 @@ impl PermissionManager {
             global_edit_granted: Mutex::new(false),
             response_registry,
             event_bus,
+            autonomy: AtomicU8::new(0),
+            code_session: AtomicBool::new(false),
+            reversible: AtomicBool::new(false),
+            workspace: RwLock::new(None),
+            workdir: RwLock::new(PathBuf::new()),
+        }
+    }
+
+    pub fn set_autonomy(&self, level: Autonomy, code_session: bool) {
+        let byte = match level {
+            Autonomy::Ask => 0,
+            Autonomy::Auto => 1,
+            Autonomy::Full => 2,
+        };
+        self.autonomy.store(byte, AtomicOrdering::Relaxed);
+        self.code_session.store(code_session, AtomicOrdering::Relaxed);
+        let dir = self.workdir.read().unwrap().to_string_lossy().into_owned();
+        self.reversible.store(
+            crate::checkpoints::checkpointable_dir(&dir, code_session).is_some(),
+            AtomicOrdering::Relaxed,
+        );
+    }
+
+    /// The level in force: what was asked for, but never above `Ask` in a
+    /// folder whose changes cannot be undone.
+    pub fn autonomy(&self) -> Autonomy {
+        if !self.reversible.load(AtomicOrdering::Relaxed) {
+            return Autonomy::Ask;
+        }
+        match self.autonomy.load(AtomicOrdering::Relaxed) {
+            1 => Autonomy::Auto,
+            2 => Autonomy::Full,
+            _ => Autonomy::Ask,
+        }
+    }
+
+    /// Tell `auto` mode which folder is the project. Called with the engine's
+    /// working directory at construction and whenever it changes.
+    pub fn set_workspace(&self, dir: &str) {
+        let dir = dir.trim();
+        if dir.is_empty() {
+            *self.workspace.write().unwrap() = None;
+            *self.workdir.write().unwrap() = PathBuf::new();
+            self.reversible.store(false, AtomicOrdering::Relaxed);
+            return;
+        }
+        let path = crate::util::paths::expand_tilde(dir);
+        *self.workspace.write().unwrap() = Some(Arc::new(Scope::new(&[path.clone()])));
+        *self.workdir.write().unwrap() = path;
+        self.reversible.store(
+            crate::checkpoints::checkpointable_dir(dir, self.code_session.load(AtomicOrdering::Relaxed)).is_some(),
+            AtomicOrdering::Relaxed,
+        );
+    }
+
+    /// What `auto` mode makes of this call: `None` when the session is not in
+    /// `auto` or the tool is not one it grades (so the ordinary rules decide),
+    /// else the graded verdict.
+    fn auto_assess(&self, name: &str, input: &serde_json::Value) -> Option<command_risk::Assessment> {
+        if self.autonomy() != Autonomy::Auto {
+            return None;
+        }
+        let scope = self.workspace.read().unwrap().clone()?;
+        if FILE_EDIT_TOOLS.contains(&name) {
+            let path = input
+                .get("file_path")
+                .or_else(|| input.get("notebook_path"))
+                .and_then(|v| v.as_str())?;
+            return Some(command_risk::assess_edit_path(path, &scope));
+        }
+        if name == "Bash" {
+            let command = input.get("command").and_then(|v| v.as_str())?;
+            let cwd = self.workdir.read().unwrap().clone();
+            return Some(command_risk::assess_bash(command, &scope, &cwd));
+        }
+        None
+    }
+
+    /// `Some(reason)` when `auto` mode still wants a person for this call;
+    /// `None` when it either let the call through (`ran`) or is not in play.
+    /// Counts both outcomes.
+    fn auto_decision(&self, name: &str, input: &serde_json::Value) -> AutoDecision {
+        match self.auto_assess(name, input) {
+            None => AutoDecision::NotApplicable,
+            Some(a) if a.risk != Risk::High => {
+                AUTO_RAN.fetch_add(1, AtomicOrdering::Relaxed);
+                debug!("[PermissionManager] auto-run {name}: {} ({})", a.reason, a.risk.as_str());
+                AutoDecision::Run
+            }
+            Some(a) => {
+                AUTO_ASKED.fetch_add(1, AtomicOrdering::Relaxed);
+                info!("[PermissionManager] auto asks about {name}: {}", a.reason);
+                AutoDecision::Ask(a.reason)
+            }
         }
     }
 
@@ -324,6 +459,20 @@ impl PermissionManager {
         cancel: &CancellationToken,
         agent_id: &str,
     ) -> Result<bool> {
+        self.request_permission_noted(tool, input, prefix, None, cancel, agent_id).await
+    }
+
+    /// [`Self::request_permission`] with the reason `auto` mode is asking,
+    /// appended to the card's title so the person sees why this one stopped.
+    async fn request_permission_noted(
+        &self,
+        tool: &dyn Tool,
+        input: &serde_json::Value,
+        prefix: Option<&str>,
+        note: Option<&str>,
+        cancel: &CancellationToken,
+        agent_id: &str,
+    ) -> Result<bool> {
         let name = tool.name().to_string();
         let permission_info = tool.gen_tool_permission(input);
         let options = Self::build_options(tool, input, prefix);
@@ -335,9 +484,13 @@ impl PermissionManager {
             agent_id: agent_id.to_string(),
             tool_name: name.clone(),
             permission_key: permission_key.clone(),
-            title: permission_info
-                .as_ref()
-                .map_or(name.clone(), |p| p.title.clone()),
+            title: {
+                let base = permission_info.as_ref().map_or(name.clone(), |p| p.title.clone());
+                match note.filter(|n| !n.is_empty()) {
+                    Some(n) => format!("{base} — {n}"),
+                    None => base,
+                }
+            },
             content: Self::browser_approval_content(tool.permission_name(), input)
                 .unwrap_or_else(|| Self::resolve_permission_content(permission_info, input)),
             options,
@@ -429,6 +582,12 @@ impl PermissionChecker for PermissionManager {
         // way, through the resolver dispatch uses.
         let name = tool.permission_name();
 
+        // `full` asks nobody — except for the calls that are the person's own
+        // decision (see `PER_CALL_MCP_TOOLS`), which no mode may answer.
+        if self.autonomy() == Autonomy::Full && !Self::is_per_call_mcp_tool(name) {
+            return Ok(true);
+        }
+
         // 1. File edit tools
         if Self::is_file_edit_tool(name) {
             if self.skip_file_edit.load(Ordering::Relaxed) {
@@ -450,8 +609,14 @@ impl PermissionChecker for PermissionManager {
                 self.grant_global_edit();
                 return Ok(true);
             }
+            let mut note = None;
+            match self.auto_decision(name, input) {
+                AutoDecision::Run => return Ok(true),
+                AutoDecision::Ask(why) => note = Some(why),
+                AutoDecision::NotApplicable => {}
+            }
             return self
-                .request_permission(tool, input, None, cancel, agent_id)
+                .request_permission_noted(tool, input, None, note.as_deref(), cancel, agent_id)
                 .await;
         }
 
@@ -468,9 +633,15 @@ impl PermissionChecker for PermissionManager {
             {
                 return Ok(true);
             }
+            let mut note = None;
+            match self.auto_decision(name, input) {
+                AutoDecision::Run => return Ok(true),
+                AutoDecision::Ask(why) => note = Some(why),
+                AutoDecision::NotApplicable => {}
+            }
             let prefix = Self::derive_prefix(command);
             return self
-                .request_permission(tool, input, prefix.as_deref(), cancel, agent_id)
+                .request_permission_noted(tool, input, prefix.as_deref(), note.as_deref(), cancel, agent_id)
                 .await;
         }
 
@@ -481,6 +652,11 @@ impl PermissionChecker for PermissionManager {
             }
             let key = Self::get_permission_key(tool, input, None);
             if self.is_allowed(&key) {
+                return Ok(true);
+            }
+            // A skill is instructions the person installed; loading one runs
+            // nothing by itself, and every command it then suggests is graded.
+            if self.autonomy() == Autonomy::Auto {
                 return Ok(true);
             }
             return self
@@ -1028,5 +1204,124 @@ mod tests {
             ),
             "Bash(git status:*)"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Autonomy: `auto` / `full` run what a checkpoint can undo, ask about the rest
+    // ------------------------------------------------------------------
+
+    use std::time::Duration;
+
+    /// A permission manager rooted in a fresh folder. `git` makes it a repository
+    /// (checkpointed); `code` makes it a code session; neither is neither.
+    fn pm_in(level: Autonomy, git: bool, code: bool) -> (PermissionManager, tempfile::TempDir, tokio::sync::broadcast::Receiver<EngineEvent>) {
+        let dir = tempfile::tempdir().unwrap();
+        if git {
+            std::fs::create_dir(dir.path().join(".git")).unwrap();
+        }
+        let bus = EventBus::new();
+        let rx = bus.subscribe();
+        let pm = PermissionManager::new(bus, Arc::new(ResponseRegistry::new()));
+        pm.set_autonomy(level, code);
+        pm.set_workspace(&dir.path().to_string_lossy());
+        (pm, dir, rx)
+    }
+
+    /// `Some(allowed)` when the call was decided without a person, `None` when it
+    /// is waiting for one (the future never finishes on its own).
+    async fn decided(pm: &PermissionManager, tool: &dyn Tool, input: serde_json::Value) -> Option<bool> {
+        let cancel = CancellationToken::new();
+        tokio::time::timeout(Duration::from_millis(250), pm.check(tool, &input, &cancel, "main"))
+            .await
+            .ok()
+            .map(|r| r.unwrap())
+    }
+
+    fn bash(cmd: &str) -> serde_json::Value {
+        serde_json::json!({ "command": cmd })
+    }
+
+    #[tokio::test]
+    async fn auto_runs_the_dev_loop_and_asks_before_publishing() {
+        let (pm, _dir, mut rx) = pm_in(Autonomy::Auto, true, false);
+        let ran_before = AUTO_RAN.load(AtomicOrdering::Relaxed);
+        for cmd in ["cargo test --lib foo", "npm run build", "git commit -m x", "mkdir -p src/new", "rm -rf target"] {
+            assert_eq!(decided(&pm, &TestBashTool, bash(cmd)).await, Some(true), "{cmd} should run unattended");
+        }
+        assert!(AUTO_RAN.load(AtomicOrdering::Relaxed) >= ran_before + 5);
+        assert!(rx.try_recv().is_err(), "nothing was asked");
+
+        assert_eq!(decided(&pm, &TestBashTool, bash("git push origin main")).await, None, "a push waits for a person");
+        match rx.try_recv() {
+            Ok(EngineEvent::ToolPermissionRequest(r)) => {
+                assert!(r.title.contains("publishes commits"), "the card says why: {}", r.title);
+            }
+            other => panic!("expected a permission request, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_edits_the_project_and_asks_about_anything_outside_it() {
+        let (pm, dir, _rx) = pm_in(Autonomy::Auto, true, false);
+        let inside = dir.path().join("src/main.rs");
+        assert_eq!(decided(&pm, &TestEditTool, serde_json::json!({"file_path": inside})).await, Some(true));
+        let env = dir.path().join(".env");
+        assert_eq!(decided(&pm, &TestEditTool, serde_json::json!({"file_path": env})).await, None);
+        assert_eq!(decided(&pm, &TestEditTool, serde_json::json!({"file_path": "/etc/hosts"})).await, None);
+    }
+
+    #[tokio::test]
+    async fn auto_does_not_apply_where_nothing_can_be_undone() {
+        // Not a repository, not a code session: no checkpoint, so every call asks as before.
+        let (pm, _dir, _rx) = pm_in(Autonomy::Auto, false, false);
+        assert_eq!(pm.autonomy(), Autonomy::Ask);
+        assert_eq!(decided(&pm, &TestBashTool, bash("cargo test")).await, None);
+
+        // A code session is checkpointed even without .git.
+        let (pm, _dir, _rx) = pm_in(Autonomy::Auto, false, true);
+        assert_eq!(pm.autonomy(), Autonomy::Auto);
+        assert_eq!(decided(&pm, &TestBashTool, bash("cargo test")).await, Some(true));
+
+        // No folder at all: nothing to confine to.
+        let pm = PermissionManager::new(EventBus::new(), Arc::new(ResponseRegistry::new()));
+        pm.set_autonomy(Autonomy::Auto, true);
+        assert_eq!(decided(&pm, &TestBashTool, bash("cargo test")).await, None);
+    }
+
+    #[tokio::test]
+    async fn ask_is_the_old_behaviour_and_a_saved_grant_still_wins() {
+        let (pm, _dir, _rx) = pm_in(Autonomy::Ask, true, false);
+        assert_eq!(decided(&pm, &TestBashTool, bash("cargo test")).await, None);
+        assert_eq!(decided(&pm, &TestBashTool, bash("ls")).await, Some(true), "read-only never asked");
+
+        let (pm, _dir, _rx) = pm_in(Autonomy::Auto, true, false);
+        pm.add_allowed_tool("Bash(git push origin main)");
+        assert_eq!(decided(&pm, &TestBashTool, bash("git push origin main")).await, Some(true), "the person already said yes to exactly this");
+    }
+
+    #[tokio::test]
+    async fn full_asks_nothing_except_what_is_the_persons_own_decision() {
+        let (pm, _dir, _rx) = pm_in(Autonomy::Full, true, false);
+        assert_eq!(decided(&pm, &TestBashTool, bash("git push")).await, Some(true));
+        assert_eq!(decided(&pm, &TestEditTool, serde_json::json!({"file_path": "/etc/hosts"})).await, Some(true));
+        let approve = NamedMcpTool("mcp__core__browser_approve");
+        assert_eq!(decided(&pm, &approve, serde_json::json!({"approval_id": "x"})).await, None, "no mode answers for the person");
+    }
+
+    #[tokio::test]
+    async fn auto_loads_a_skill_without_asking() {
+        let (pm, _dir, _rx) = pm_in(Autonomy::Auto, true, false);
+        assert_eq!(decided(&pm, &TestSkillTool, serde_json::json!({"skill": "code"})).await, Some(true));
+        let (pm, _dir, _rx) = pm_in(Autonomy::Ask, true, false);
+        assert_eq!(decided(&pm, &TestSkillTool, serde_json::json!({"skill": "code"})).await, None);
+    }
+
+    #[test]
+    fn autonomy_parses_the_words_a_person_would_type() {
+        assert_eq!(Autonomy::parse("Auto"), Some(Autonomy::Auto));
+        assert_eq!(Autonomy::parse(" ask "), Some(Autonomy::Ask));
+        assert_eq!(Autonomy::parse("yolo"), Some(Autonomy::Full));
+        assert_eq!(Autonomy::parse("sometimes"), None);
+        assert_eq!(Autonomy::default(), Autonomy::Ask);
     }
 }

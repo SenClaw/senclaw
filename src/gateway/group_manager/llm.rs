@@ -145,6 +145,24 @@ pub fn save_context_compression_enabled(config_path: &Path, enabled: bool) -> Re
     save_global_config(config_path, &cfg)
 }
 
+/// How far a coding chat — a code session, or a chat in a git repository — runs
+/// before it asks. Absent or unreadable means [`Autonomy::Auto`]: the dev loop
+/// runs unattended and only what cannot be taken back asks. `ask` restores a
+/// prompt for every command; `full` asks nothing.
+pub fn get_code_autonomy(config_path: &Path) -> crate::zen_core::Autonomy {
+    load_global_config(config_path)
+        .code_autonomy
+        .as_deref()
+        .and_then(crate::zen_core::Autonomy::parse)
+        .unwrap_or(crate::zen_core::Autonomy::Auto)
+}
+
+pub fn save_code_autonomy(config_path: &Path, level: crate::zen_core::Autonomy) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.code_autonomy = Some(level.as_str().to_string());
+    save_global_config(config_path, &cfg)
+}
+
 // ===== Default flows + widget disable list (global, user-set) =====
 
 /// The `defaults` section (open-link / media / search / note handlers + the

@@ -1951,6 +1951,14 @@ impl AgentPool {
             self.core_api.set_pre_trigger_skill(jid, enabled);
             let after = crate::gateway::group_manager::get_after_process_enabled(path);
             self.core_api.set_after_process(jid, after);
+            // How far this chat may run before it asks. The engine applies it
+            // only where a checkpoint can undo what it does; read per turn so a
+            // flip in Settings → Agent behavior takes effect on the next message.
+            self.core_api.set_autonomy(
+                jid,
+                crate::gateway::group_manager::get_code_autonomy(path),
+                group.group_type == "code",
+            );
             // Default-flow handlers (open link / media / search / note): render
             // the `## User defaults` block and push it into the engine so the
             // system prompt reflects the user's Plugins → Widget settings.

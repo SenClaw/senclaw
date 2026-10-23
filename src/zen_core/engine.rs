@@ -200,6 +200,8 @@ impl ZenEngine {
             options.skip_skill_permission,
             options.skip_mcp_tool_permission,
         );
+        permission_manager.set_autonomy(options.autonomy, options.code_session);
+        permission_manager.set_workspace(&options.working_dir);
 
         // A **read** timeout, not a total one: this client only ever carries LLM
         // requests, and a total deadline is a ceiling on how long a generation
@@ -1312,6 +1314,16 @@ impl ZenCore for ZenEngine {
     fn set_working_dir(&self, dir: &str) {
         info!("[{}] set_working_dir: {dir}", self.instance_id);
         self.options.write().unwrap().working_dir = dir.to_owned();
+        self.permission_manager.set_workspace(dir);
+    }
+
+    fn set_autonomy(&self, level: Autonomy, code_session: bool) {
+        {
+            let mut opts = self.options.write().unwrap();
+            opts.autonomy = level;
+            opts.code_session = code_session;
+        }
+        self.permission_manager.set_autonomy(level, code_session);
     }
 
     fn clear_working_dir(&self) {
