@@ -24,7 +24,8 @@ use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::hooks::{ErrorInput, HookEvent, HookInput, HookInputBase, HookManager, PreCompactInput};
+use super::hooks::{ErrorInput, HookEvent, HookInput, HookInputBase, HookManager, PreCompactInput, StopInput};
+use super::{finish_check, stuck};
 use super::*;
 use crate::control_plane::context_assembler::{self, AgentStatusInput};
 use crate::zen_core::events::ResponseRegistry;
@@ -701,10 +702,18 @@ pub struct QueryConfig {
     /// text only. Agent mode keeps legacy "text = done" behavior so ordinary
     /// chat is unaffected.
     pub agent_mode: AgentMode,
-    /// A coding session: when the model stops after editing source files
-    /// without having built, tested or linted anything, ask once for a check
-    /// (see [`VERIFY_NUDGE`]). Never set for subagents or compaction.
-    pub verify_edits: bool,
+    /// A coding session (a code session, a git repository, a project chat).
+    /// Turns on what a coding run needs and a chat does not: a check before
+    /// finishing ([`VERIFY_NUDGE`], a failed check, the optional judge), the
+    /// observation-aware stuck detector instead of the name-based stall guard.
+    /// Never set for subagents or compaction.
+    pub coding_session: bool,
+    /// Stop the run once it has processed this many tokens (input + output, every
+    /// call of this user input). `None` = no cap.
+    pub max_run_tokens: Option<u64>,
+    /// Before a coding session ends, ask the model whether the work is finished
+    /// ([`finish_check`]). One extra call per finish, off by default.
+    pub finish_judge: bool,
     /// Source of user inputs that queued up while this turn runs (main agent
     /// only; `None` for subagents). Drained after each tool round and appended
     /// to the last tool result so the model sees mid-turn user messages
@@ -769,6 +778,98 @@ fn stall_tool_turns() -> usize {
         .and_then(|v| v.trim().parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(4)
+}
+
+/// A compaction that just ran is not repeated for this many turns: the next
+/// one has to be earned by the context growing back, not by a stale gauge.
+const COMPACT_REARM_TURNS: usize = 8;
+
+/// A stuck nudge is forgiven after this many turns; a second one sooner stops the run.
+const STUCK_FORGIVE_TURNS: usize = 25;
+
+/// Whether running this call may change what an identical later call returns:
+/// an edit, a write, a subagent, or a command that is not read-only.
+fn may_change_workspace(block: &ContentBlock) -> bool {
+    let ContentBlock::ToolUse { name, input, .. } = block else { return false };
+    match name.as_str() {
+        "Edit" | "Write" | "NotebookEdit" | "Task" => true,
+        "Bash" => !input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .is_some_and(crate::util::shell_safety::is_readonly_safe_command),
+        _ => false,
+    }
+}
+
+/// `Bash: cargo test`, `Edit: /p/src/a.rs`: a call as a person would name it.
+fn call_label(name: &str, input: &serde_json::Value) -> String {
+    let key = ["command", "file_path", "notebook_path", "path", "pattern", "query", "url", "symbol", "name"]
+        .iter()
+        .find_map(|k| input.get(*k).and_then(|v| v.as_str()));
+    match key {
+        Some(v) => {
+            let v: String = v.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            format!("{name}: {v}")
+        }
+        None => name.to_string(),
+    }
+}
+
+/// The text of the user's request: the last text block of the last real user message.
+fn last_user_prompt(messages: &[Message]) -> String {
+    let Some(i) = last_real_user_index(messages) else { return String::new() };
+    messages[i]
+        .message
+        .content
+        .iter()
+        .rev()
+        .find_map(|b| match b {
+            ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Ask the model whether the request is finished. `None` on any failure.
+async fn run_finish_judge(
+    config: &QueryConfig,
+    request: &str,
+    evidence: &[String],
+    answer: &str,
+    cancel: &CancellationToken,
+) -> Option<finish_check::Verdict> {
+    let msgs = vec![create_user_message(vec![ContentBlock::Text {
+        text: finish_check::judge_prompt(request, evidence, answer),
+    }])];
+    let started = Instant::now();
+    let reply = query_llm::query_llm(
+        &config.http_client,
+        &msgs,
+        finish_check::JUDGE_SYSTEM,
+        &[],
+        cancel,
+        &config.profile,
+        false,
+        false,
+        None,
+    )
+    .await
+    .ok()?;
+    if let Some(u) = reply.usage.as_ref().filter(|u| !u.is_empty()) {
+        config.event_bus.emit(EngineEvent::LlmUsage(LlmUsageData {
+            source: "finish_judge".to_string(),
+            agent_id: config.agent_id.clone(),
+            session_id: config.session_id.clone(),
+            profile: config.profile.name.clone(),
+            provider: config.profile.provider.clone(),
+            model: config.profile.model_name.clone(),
+            usage: u.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            ok: true,
+        }));
+    }
+    let (text, _reasoning, _tools) = extract_content(&reply);
+    finish_check::parse_verdict(&text)
 }
 
 /// Sent once when a coding session stops after editing source files without
@@ -1041,10 +1142,9 @@ fn tool_call_sig(block: &ContentBlock) -> Option<String> {
 }
 
 /// Synthetic tool result returned in place of re-executing an identical call.
-const DUPLICATE_CALL_NOTE: &str = "Duplicate call: you already called this tool with these exact \
-arguments earlier in this conversation and received a result above. Re-running it returns nothing \
-new. Use the information you already have to write your final answer to the user now. If you truly \
-need different information, change the arguments — do not repeat the identical call.";
+const DUPLICATE_CALL_NOTE: &str = "Duplicate call: you already made this exact call and nothing has been edited or run \
+that could change its result since, so it would return the same thing - the result is above. Use it. If you need \
+something different, change the arguments, or change the files first.";
 
 /// Tools whose re-invocation with identical args is legitimate — blocking
 /// waits / status polls whose result changes as daemon-side state advances
@@ -1105,7 +1205,7 @@ pub async fn query(
     cancel: &CancellationToken,
 ) -> Result<Vec<Message>> {
     let mut compacted = false;
-    let mut proactively_compacted = false;
+    let mut last_compact_turn: Option<usize> = None;
     // `<agent_status>` inputs that do not change turn to turn: captured once
     // so a mid-loop compaction (which may summarize everything before the
     // current turn) cannot alter what "original goal" or "elapsed" mean.
@@ -1135,8 +1235,26 @@ pub async fn query(
     // nothing.
     let mut forcing_final = false;
     // Exact (name+args) tool-call signatures already executed this user input,
-    // so identical re-issues can be short-circuited instead of re-run.
-    let mut seen_tool_sigs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // with the epoch they ran in, so an identical re-issue can be short-circuited
+    // *when nothing has changed since*. An epoch ends whenever a call that may
+    // change the workspace ran (an edit, a command that is not read-only): the
+    // test–fix–retest cycle repeats an identical `cargo test` and must be run.
+    let mut seen_tool_sigs: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut epoch: u64 = 0;
+    // Stuck detection by what calls returned (coding sessions): nudge once, then stop.
+    let mut detector = stuck::Detector::default();
+    let mut stuck_nudge_turn: Option<usize> = None;
+    // Tokens processed by this user input so far, for the run budget.
+    let mut run_tokens: u64 = 0;
+    // Finish checks (coding sessions): the last build/test/lint that failed and
+    // nothing has passed since, what the run did (for the judge), and how many
+    // times each check has sent the agent back.
+    let mut last_check_failed: Option<String> = None;
+    let mut failed_check_nudged = false;
+    let mut judge_rounds: u8 = 0;
+    let mut stop_gate_rounds: u8 = 0;
+    let mut evidence = finish_check::Evidence::default();
+    let original_prompt = last_user_prompt(&messages);
     // Resilience: retry transient EMPTY_COMPLETION before failing the session.
     let max_empty_retries_cap = max_empty_retries();
     let mut empty_retries: u8 = 0;
@@ -1199,12 +1317,26 @@ pub async fn query(
             return Ok(messages);
         }
 
+        // Token budget: a second backstop beside the turn cap, for the case that
+        // matters more on a hosted model - a long run that keeps going while the
+        // bill grows. Like the turn cap it forces one final answer instead of
+        // throwing the work away.
+        if let Some(cap) = config.max_run_tokens {
+            if run_tokens >= cap && !forcing_final {
+                // No SessionError here: the pool treats one as the end of the request, and the
+                // point is the final answer that follows. The answer says why it stopped.
+                warn!("[{}] run token budget reached ({run_tokens} >= {cap}) - forcing a final answer (tools disabled)", config.agent_id);
+                forcing_final = true;
+                messages.push(create_user_message(vec![ContentBlock::Text { text: FINAL_ANSWER_NUDGE.to_string() }]));
+            }
+        }
+
         // 0. Proactive compaction: if the context is approaching the model
         //    limit, summarize the history *before* the next call so we don't
         //    hit a hard context_length error. Runs at most once per user input
         //    (the reactive path below remains as a safety net). Subagents skip.
         if !config.is_subagent
-            && !proactively_compacted
+            && last_compact_turn.map_or(true, |t| turn.saturating_sub(t) >= COMPACT_REARM_TURNS)
             && needs_auto_compact(&messages, config.profile.context_length)
         {
             info!(
@@ -1221,7 +1353,7 @@ pub async fn query(
 
             let outcome = auto_compact(std::mem::take(&mut messages), config, cancel).await;
             messages = outcome.messages;
-            proactively_compacted = true;
+            last_compact_turn = Some(turn);
 
             config
                 .event_bus
@@ -1405,6 +1537,7 @@ pub async fn query(
                 // Subagent turns included (the UI-facing events are filtered
                 // by agent_id downstream; this one must not be).
                 if let Some(u) = msg.usage.as_ref().filter(|u| !u.is_empty()) {
+                    run_tokens += u.input() + u.output();
                     config.event_bus.emit(EngineEvent::LlmUsage(LlmUsageData {
                         source: if config.is_subagent { "subagent" } else { "agent" }
                             .to_string(),
@@ -1720,12 +1853,75 @@ pub async fn query(
                     continue;
                 }
             }
-            if config.verify_edits && !config.is_subagent && !forcing_final && unverified_edit && !verify_nudged {
-                verify_nudged = true;
-                info!("[{}] edited source files, ran no check — nudging once before finishing", config.agent_id);
-                messages.push(assistant_msg);
-                messages.push(create_user_message(vec![ContentBlock::Text { text: VERIFY_NUDGE.to_string() }]));
-                continue;
+            if !config.is_subagent && !forcing_final {
+                // Edited source, ran nothing that checks it.
+                if config.coding_session && unverified_edit && !verify_nudged {
+                    verify_nudged = true;
+                    info!("[{}] edited source files, ran no check - nudging once before finishing", config.agent_id);
+                    messages.push(assistant_msg);
+                    messages.push(create_user_message(vec![ContentBlock::Text { text: VERIFY_NUDGE.to_string() }]));
+                    continue;
+                }
+                // The last build/test/lint failed and nothing passed since: do not let "done" through.
+                if config.coding_session && !failed_check_nudged {
+                    if let Some(cmd) = last_check_failed.clone() {
+                        failed_check_nudged = true;
+                        info!("[{}] last check failed ({cmd}) and nothing passed since - nudging once", config.agent_id);
+                        messages.push(assistant_msg);
+                        messages.push(create_user_message(vec![ContentBlock::Text { text: finish_check::failed_check_nudge(&cmd) }]));
+                        continue;
+                    }
+                }
+                // Optional: ask a model whether the request is finished. Advisory - an
+                // unreadable verdict, or a failed call, lets the agent finish.
+                if config.coding_session && config.finish_judge && judge_rounds < 2 && !evidence.is_empty() {
+                    judge_rounds += 1;
+                    if let Some(v) = run_finish_judge(config, &original_prompt, evidence.lines(), &text_content, cancel).await {
+                        if !v.complete && !v.missing.is_empty() {
+                            info!("[{}] finish judge: not complete ({} missing) - sending the agent back", config.agent_id, v.missing.len());
+                            messages.push(assistant_msg);
+                            messages.push(create_user_message(vec![ContentBlock::Text { text: finish_check::judge_feedback(&v.missing) }]));
+                            continue;
+                        }
+                    }
+                }
+                // A `PreStop` hook (the user's own hooks.json only) may refuse to let the
+                // agent stop, up to 3 times a request; its reason goes back as the next
+                // user message.
+                if stop_gate_rounds < 3 {
+                    if let Some(hm) = config.hook_manager.as_ref().filter(|hm| hm.has_hooks_for_event(&HookEvent::PreStop)) {
+                        let base = HookInputBase {
+                            hook_event_name: HookEvent::PreStop,
+                            session_id: config.session_id.clone(),
+                            agent_id: config.agent_id.clone(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            cwd: config.working_dir.clone(),
+                        };
+                        let res = super::hooks::execute_hooks(
+                            hm,
+                            &HookEvent::PreStop,
+                            &HookInput::Stop(StopInput { base, stop_reason: None }),
+                            &super::hooks::ExecuteHooksOptions {
+                                client: config.hook_client.as_ref(),
+                                profile: config.hook_profile.as_ref(),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                        if res.blocked {
+                            stop_gate_rounds += 1;
+                            let mut text = res.reason.clone().unwrap_or_else(|| "A Stop hook asked you to keep going.".to_string());
+                            for extra in &res.additional_context {
+                                text.push('\n');
+                                text.push_str(extra);
+                            }
+                            info!("[{}] PreStop hook refused to let the agent stop ({stop_gate_rounds}/3)", config.agent_id);
+                            messages.push(assistant_msg);
+                            messages.push(create_user_message(vec![ContentBlock::Text { text }]));
+                            continue;
+                        }
+                    }
+                }
             }
             messages.push(assistant_msg);
             info!(
@@ -1766,16 +1962,7 @@ pub async fn query(
         // model called this turn so the "no tools" branch above can tell
         // whether a future text-only reply is the natural end of the mode.
         for tu in &tool_uses {
-            if let ContentBlock::ToolUse { name, input, .. } = tu {
-                if config.verify_edits {
-                    if is_source_edit(name, input) {
-                        unverified_edit = true;
-                    } else if name == "Bash"
-                        && input.get("command").and_then(|v| v.as_str()).is_some_and(is_verification_command)
-                    {
-                        unverified_edit = false;
-                    }
-                }
+            if let ContentBlock::ToolUse { name, .. } = tu {
                 if name == EXIT_PLAN_MODE_TOOL {
                     exit_plan_mode_called = true;
                 } else if name == ENTER_PLAN_MODE_TOOL {
@@ -1821,9 +2008,10 @@ pub async fn query(
                 continue;
             }
             match tool_call_sig(tu) {
-                Some(sig) if seen_tool_sigs.contains(&sig) => dup_ids.push(id),
+                // Only when nothing that could change the answer ran since.
+                Some(sig) if seen_tool_sigs.get(&sig) == Some(&epoch) => dup_ids.push(id),
                 Some(sig) => {
-                    seen_tool_sigs.insert(sig);
+                    seen_tool_sigs.insert(sig, epoch);
                     fresh.push(tu.clone());
                 }
                 None => fresh.push(tu.clone()),
@@ -1835,6 +2023,10 @@ pub async fn query(
         } else {
             run_tools::run_tools(&fresh, cancel, &ctx).await
         };
+        // A new epoch: whatever ran may have changed what an identical call returns.
+        if fresh.iter().any(may_change_workspace) {
+            epoch += 1;
+        }
 
         // Check for control signals (e.g. clearContextAndStart)
         let mut clear_context_payload = None;
@@ -2027,12 +2219,47 @@ pub async fn query(
             return Ok(messages);
         }
 
+        // 5c. What the fresh calls did: feeds the stuck detector, the
+        //     verify-before-finish tracking and the judge's evidence.
+        if !config.is_subagent {
+            for tu in &fresh {
+                let ContentBlock::ToolUse { id, name, input, .. } = tu else { continue };
+                let (content, is_error) = tool_results
+                    .iter()
+                    .find_map(|r| match r {
+                        ContentBlock::ToolResult { tool_use_id, content, is_error } if tool_use_id == id => Some((content.as_str(), *is_error)),
+                        _ => None,
+                    })
+                    .unwrap_or(("", false));
+                let failed = finish_check::result_failed(name, content, is_error);
+                let label = call_label(name, input);
+                if let Some(sig) = tool_call_sig(tu) {
+                    detector.record(stuck::Call { sig, result: stuck::fingerprint(content), failed, label: label.clone() });
+                }
+                evidence.add(&label, failed);
+                if config.coding_session {
+                    if is_source_edit(name, input) {
+                        if !failed {
+                            unverified_edit = true;
+                        }
+                    } else if name == "Bash" {
+                        if let Some(cmd) = input.get("command").and_then(|v| v.as_str()).filter(|c| is_verification_command(c)) {
+                            unverified_edit = false;
+                            last_check_failed = failed.then(|| cmd.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         // 6. Stall detection: count consecutive turns that call the same
         //    tool(s) and emit no user-facing text. A weak model can spin on
         //    e.g. browser_search forever (observed: 6+ identical search turns,
         //    context ballooning 7k→72k tokens). Nudge once, then hard-stop.
         let sig = tool_names_sig(&tool_uses);
-        if text_content.trim().is_empty() && Some(&sig) == last_sig.as_ref() {
+        // A coding session reads eight files in a row without commenting; the
+        // calls differ, and the stuck detector judges them by their results.
+        if !config.coding_session && text_content.trim().is_empty() && Some(&sig) == last_sig.as_ref() {
             stall_streak += 1;
         } else {
             stall_streak = 0;
@@ -2059,11 +2286,16 @@ pub async fn query(
             None
         };
 
+        let stuck_now = if config.coding_session && !config.is_subagent { detector.check() } else { None };
+        let recently_nudged = stuck_nudge_turn.map_or(false, |t| turn.saturating_sub(t) < STUCK_FORGIVE_TURNS);
+        let stuck_hard_stop = stuck_now.is_some() && recently_nudged;
+        let stuck_nudge_text = stuck_now.as_ref().filter(|_| !recently_nudged).map(|s| s.nudge());
+
         let stall_hard_stop = stall_streak >= stall_limit * 2;
         let should_nudge = !nudged && stall_streak >= stall_limit;
         let error_hard_stop = error_streak >= stall_limit * 2;
         let error_should_nudge = !error_nudged && error_streak >= stall_limit;
-        let hard_stop = stall_hard_stop || error_hard_stop;
+        let hard_stop = stall_hard_stop || error_hard_stop || stuck_hard_stop;
 
         // 7. Recurse: append the assistant turn and the tool results. A stall
         //    hard-stop doesn't abort the session — it disables tools and forces
@@ -2105,11 +2337,18 @@ pub async fn query(
                 "[{}] tool-call stall not resolved after nudge ({} consecutive turns) — forcing a final answer (tools disabled)",
                 config.agent_id, stall_streak
             );
+        } else if stuck_hard_stop {
+            let what = stuck_now.as_ref().map(|s| s.describe()).unwrap_or_default();
+            // Like the token budget, no SessionError: it would end the request before the
+            // honest final answer this stop exists to get.
+            warn!("[{}] stuck again after the nudge ({what}) - forcing an honest final answer (tools disabled)", config.agent_id);
         }
         // Prefer the error-specific final nudge (which forbids fabricating
         // results) when we stopped because of a tool-error loop.
         let final_nudge = if error_hard_stop {
             TOOL_ERROR_FINAL_NUDGE
+        } else if stuck_hard_stop {
+            stuck::FINAL_NUDGE
         } else {
             FINAL_ANSWER_NUDGE
         };
@@ -2130,6 +2369,11 @@ pub async fn query(
                 blocks.push(ContentBlock::Text {
                     text: TOOL_ERROR_NUDGE.to_string(),
                 });
+            } else if let Some(text) = stuck_nudge_text.filter(|_| !should_nudge) {
+                stuck_nudge_turn = Some(turn);
+                detector.clear();
+                info!("[{}] stuck by results ({}) - nudging to change approach", config.agent_id, stuck_now.as_ref().map(|s| s.describe()).unwrap_or_default());
+                blocks.push(ContentBlock::Text { text });
             } else if should_nudge {
                 nudged = true;
                 info!(
@@ -2948,5 +3192,39 @@ mod tests {
         for c in ["ls -la", "git status", "cat src/main.rs", "mkdir -p x", "git commit -m x"] {
             assert!(!is_verification_command(c), "{c}");
         }
+    }
+
+    #[test]
+    fn only_workspace_changing_calls_start_a_new_epoch() {
+        let call = |name: &str, input: serde_json::Value| tool_use(name, input);
+        assert!(may_change_workspace(&call("Edit", serde_json::json!({"file_path": "a"}))));
+        assert!(may_change_workspace(&call("Write", serde_json::json!({}))));
+        assert!(may_change_workspace(&call("Bash", serde_json::json!({"command": "cargo test"}))));
+        assert!(may_change_workspace(&call("Bash", serde_json::json!({}))), "no command shown: assume it changes things");
+        assert!(!may_change_workspace(&call("Bash", serde_json::json!({"command": "git status"}))));
+        assert!(!may_change_workspace(&call("Read", serde_json::json!({"file_path": "a"}))));
+        assert!(!may_change_workspace(&call("Grep", serde_json::json!({"pattern": "x"}))));
+        assert!(!may_change_workspace(&ContentBlock::Text { text: "x".into() }));
+    }
+
+    #[test]
+    fn a_call_is_labelled_the_way_a_person_names_it() {
+        assert_eq!(call_label("Bash", &serde_json::json!({"command": "cargo   test  --lib"})), "Bash: cargo test --lib");
+        assert_eq!(call_label("Edit", &serde_json::json!({"file_path": "/p/src/a.rs"})), "Edit: /p/src/a.rs");
+        assert_eq!(call_label("TodoWrite", &serde_json::json!({"todos": []})), "TodoWrite");
+        assert!(call_label("Bash", &serde_json::json!({"command": "x".repeat(500)})).len() < 100);
+    }
+
+    #[test]
+    fn the_request_is_the_last_text_of_the_last_real_user_message() {
+        let messages = history_ending_in_tool_result();
+        assert_eq!(last_user_prompt(&messages), "please read app.py");
+        assert_eq!(last_user_prompt(&[]), "");
+    }
+
+    #[test]
+    fn the_duplicate_note_no_longer_tells_a_coding_run_to_stop() {
+        assert!(DUPLICATE_CALL_NOTE.contains("nothing has been edited"));
+        assert!(!DUPLICATE_CALL_NOTE.contains("final answer"), "a retest after an edit is not a reason to finish");
     }
 }

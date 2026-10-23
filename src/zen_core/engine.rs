@@ -1960,6 +1960,9 @@ impl ZenEngine {
         let hook_manager_spawn = self.hook_manager.clone();
         let session_id_spawn = self.session_id.read().unwrap().clone().unwrap_or_default();
         let cwd_spawn = opts.working_dir.clone();
+        // Read per turn, like the control-plane settings, so a change in Settings applies to the next message.
+        let coding_session = Self::session_works_on_a_project(&opts);
+        let limits = crate::gateway::group_manager::get_agent_limits(&crate::control_plane::default_config_path());
         tokio::spawn(async move {
             let eb = event_bus_spawn.clone();
             // Mid-turn inject source: drains queued (non-command) inputs so
@@ -2006,9 +2009,13 @@ impl ZenEngine {
                 // Pass through the current agent_mode so the conversation loop
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
-                verify_edits: Self::session_works_on_a_project(&opts),
-                max_turns_override: opts.max_agent_turns,
-                pending_inject: Some(pending_inject),
+                coding_session,
+                // A coding task is dozens of read-edit-run turns, not the thirty a chat
+                // gets; the stuck detector and the token cap are what stop a runaway.
+                max_turns_override: opts.max_agent_turns.or(coding_session.then_some(limits.code_max_turns)),
+                max_run_tokens: coding_session.then_some(limits.max_run_tokens).filter(|n| *n > 0),
+                finish_judge: coding_session && limits.finish_judge,
+                    pending_inject: Some(pending_inject),
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
@@ -2059,7 +2066,8 @@ impl ZenEngine {
                 }
             };
 
-            // Fire Stop hook (non-blockable)
+            // Fire Stop hook (non-blockable; a hook that must be able to refuse
+            // uses PreStop, which the loop runs before the turn ends)
             if hook_manager_spawn.has_hooks_for_event(&HookEvent::Stop) {
                 let base = HookInputBase {
                     hook_event_name: HookEvent::Stop,
@@ -2708,7 +2716,9 @@ until you have carried out the skill's steps.\n\
             // Compaction summarises what was said, not what was recalled.
             turn_context: None,
             agent_mode: opts.agent_mode,
-            verify_edits: false,
+            coding_session: false,
+            max_run_tokens: None,
+            finish_judge: false,
             max_turns_override: None,
             pending_inject: None,
         };

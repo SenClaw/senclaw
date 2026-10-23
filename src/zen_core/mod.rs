@@ -23,6 +23,7 @@ pub mod context;
 pub mod conversation;
 pub mod engine;
 pub mod events;
+pub mod finish_check;
 pub mod hooks;
 pub mod model_manager;
 pub mod permissions;
@@ -31,6 +32,7 @@ pub mod query_llm;
 pub mod run_tools;
 pub mod session_store;
 pub mod state;
+pub mod stuck;
 pub mod vision;
 pub mod workbench;
 

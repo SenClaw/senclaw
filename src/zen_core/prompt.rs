@@ -1020,7 +1020,12 @@ cannot be taken back.\n\
 `Edit`. Never guess a path or a command the project's files already name.\n\
 - After editing source, run the narrowest build, test or lint that covers the change, fix what it \
 reports, and only then answer. Say what you ran and what you did not.\n\
-- A command that failed or was refused: change the approach. Do not send the same call again.\n",
+- A command that failed or was refused: change the approach. Do not send the same call again.\n\
+- For anything bigger than a one-line change, work in order: understand the request and the files it names; \
+get a baseline (run the project's tests or build once, if it has them); locate with `Grep` / `find_symbol`; \
+for a bug, reproduce it first (a failing test or a short script); make the smallest change that fixes the \
+cause; verify (the reproduction, then the narrowest tests, then wider ones if shared code changed); read your \
+own diff against the request; answer with what changed (`path:line`) and what you ran and did not.\n",
     );
     if unattended {
         out.push_str(
@@ -1040,12 +1045,13 @@ mod code_session_reminder_tests {
     fn the_reminder_tells_a_model_to_decide_and_to_verify() {
         let r = code_session_reminder(false);
         assert!(r.contains("Decide and go") && r.contains("narrowest build, test or lint"));
+        assert!(r.contains("reproduce it first") && r.contains("read your own diff"), "the phases are there");
         assert!(!r.contains("run on their own"), "no promise of unattended runs when cards will appear");
     }
 
     #[test]
     fn the_unattended_line_appears_only_when_it_is_true() {
         assert!(code_session_reminder(true).contains("run on their own"));
-        assert!(code_session_reminder(true).len() < 1800, "it rides every request of a small model");
+        assert!(code_session_reminder(true).len() < 2600, "it rides every request of a small model");
     }
 }
