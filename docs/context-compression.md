@@ -25,7 +25,7 @@ Two tiers. Only the first is applied without leaving a way back.
 | **2 — rows left out, original saved** | A JSON array of ≥ 20 rows in an MCP / `WebFetch` result, or a long build / test / service log from `Bash` / `PeekBgJob`. | Array: the first 5 rows, the last 3, up to 7 unusual rows, and an even spread to 15; a `"[… N items omitted …]"` element stands for each run left out. Log: first 8 and last 12 lines, failures (the first two of each kind — numbers blanked — and the last, at most 30) with 2 lines of context and the indented stack under them, the last summary lines, the first of each distinct warning; `[… N lines omitted …]` between. |
 
 Tier 2 saves the full text under the chat's workspace
-(`~/.senclaw/control-plane/workspace/<chat>/artifacts/<call id>-full`, one array
+(`~/.senclaw/control-plane/workspace/<chat>/artifacts/<call id>-<content hash>-full`, one array
 row per line so `Grep` finds one row) and ends the result with
 
 ```
@@ -77,7 +77,11 @@ of the tool output — no clock, no randomness — and a test pins that.
 - **Add a tool to `eligible` only if nothing is edited against its output.**
 - **A cut without a saved file is a bug.** `apply` falls back to tier 1 or the
   original when `save_artifact` fails; keep it that way.
-- The saved file is named `<call id>-full`, not the bare call id: L1 offload
+- The saved file is named `<call id>-<content hash>-full`: a provider that numbers
+  calls per response (Antigravity: `ag_call_0` on every turn) reuses an id inside one
+  chat, and a bare id would let a later result overwrite the file an earlier footer
+  still points at. The hash is of the saved text, so the output stays deterministic.
+  Not the bare call id either: L1 offload
   (`controlPlane.workspace.substituteToolOutput`, off by default) names its file
   by the call id and would overwrite it. Both can be on; compression runs first.
 - Thresholds are constants in `context_compress` (`MIN_BYTES`, `array::MIN_ITEMS`,

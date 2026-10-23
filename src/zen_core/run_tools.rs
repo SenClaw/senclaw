@@ -1354,10 +1354,10 @@ mod tests {
         assert!(!is_error);
         assert!(content.contains("kept 15 of 150 items"), "{content}");
         assert!(content.contains("msg-00000") && content.contains("msg-00149"));
-        let saved = std::fs::read_to_string(
-            ws_dir.path().join(crate::control_plane::safe_id("/tmp")).join("artifacts").join("c1-full"),
-        )
-        .unwrap();
+        // The footer names the file; it holds the whole list.
+        let at = content.lines().last().unwrap().split("Read or Grep ").nth(1).unwrap().split(" (the full ").next().unwrap();
+        assert!(at.contains("/c1-") && at.ends_with("-full"), "{at}");
+        let saved = std::fs::read_to_string(at).unwrap();
         assert!(saved.contains("msg-00075"), "the full list is on disk");
         let shrunk_len = content.len();
 

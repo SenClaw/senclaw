@@ -381,6 +381,48 @@ mod apply_tests {
         assert!(at.starts_with(s.workspace.path().to_str().unwrap()));
     }
 
+    /// `ag_call_0` is every Antigravity response's first call: the id repeats
+    /// across turns of one chat, and each footer must keep pointing at its own data.
+    #[test]
+    fn two_results_that_share_a_call_id_keep_their_own_files() {
+        let _s = scratch();
+        let first = mcp_envelope(&emails(150));
+        let mut other = emails(150);
+        other["emails"][3]["subject"] = json!("A different list entirely");
+        let second = mcp_envelope(&other);
+
+        let a = apply(
+            "mcp__core__email_list",
+            "ag_call_0",
+            "chat-a",
+            first.clone(),
+        );
+        let b = apply("mcp__core__email_list", "ag_call_0", "chat-a", second);
+        let path_of = |shown: &str| {
+            let line = shown.lines().last().unwrap().to_string();
+            line.split("Read or Grep ")
+                .nth(1)
+                .unwrap()
+                .split(" (the full ")
+                .next()
+                .unwrap()
+                .to_string()
+        };
+        let (pa, pb) = (path_of(&a), path_of(&b));
+        assert_ne!(pa, pb, "same call id, different data, different file");
+        assert!(std::fs::read_to_string(&pa)
+            .unwrap()
+            .contains("Weekly report number 3\""));
+        assert!(std::fs::read_to_string(&pb)
+            .unwrap()
+            .contains("A different list entirely"));
+        // And the same result again lands on the same file and the same text.
+        assert_eq!(
+            apply("mcp__core__email_list", "ag_call_0", "chat-a", first),
+            a
+        );
+    }
+
     #[test]
     fn switched_off_it_changes_nothing() {
         let s = scratch();

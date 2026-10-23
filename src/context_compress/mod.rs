@@ -279,6 +279,12 @@ fn render_array(compact: &str, a: &json::ArrayInfo, keep: &[usize]) -> String {
     out
 }
 
+/// First 4 bytes of the SHA-256 of `text`, hex.
+fn content_tag(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(text.as_bytes())[..4])
+}
+
 /// The seam `zen_core::run_tools` calls with a finished tool result. Returns the
 /// text the model should be shown.
 ///
@@ -298,9 +304,14 @@ pub fn apply(tool_name: &str, tool_id: &str, agent_data_dir: &str, text: String)
         Outcome::Lossless(t) => t,
         Outcome::Lossy(l) => {
             let workspace = crate::control_plane::workspace::Workspace::for_chat(agent_data_dir);
-            // `-full`, not the bare call id: the L1 offload names its file by
-            // the call id and would overwrite this one.
-            match workspace.save_artifact(&format!("{tool_id}-full"), &l.full) {
+            // Named by what it holds, not only by the call id: a provider that
+            // numbers calls per response (`ag_call_0` every turn) reuses an id
+            // within a chat, and a second result would overwrite the file an
+            // earlier footer in the history still points at. The same content
+            // gives the same name, so the text stays a pure function of the
+            // output. `-full` keeps it apart from the L1 offload's file.
+            let name = format!("{tool_id}-{}-full", content_tag(&l.full));
+            match workspace.save_artifact(&name, &l.full) {
                 Ok(path) => l.with_footer(&path),
                 Err(e) => {
                     tracing::debug!(

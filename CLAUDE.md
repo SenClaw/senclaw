@@ -1565,7 +1565,7 @@ Rules for Claude:
 - **Compress at creation, never per call.** The shrunk text is what the history keeps, so the request prefix stays byte-identical (hosted prompt cache, sen-mlx KV reuse). Rewriting history on the way out would break both. The output is a pure function of the tool output; a test pins it.
 - **Only an allow-list is processed** (`eligible`: `mcp__*`, `WebFetch`, `Bash`, `PeekBgJob`). `Read`/`Edit`/`Write`/`Grep`/`Glob` and every unknown tool are left alone: something is edited against their output. Bash is never reformatted as JSON (`cat package.json` then an `Edit`), only log-shrunk when it reads like a log.
 - **Rows are copied by byte range, never printed from a `serde_json::Value`** — an id above 2^53 would become a float. `json::minify` and `json::scan_arrays` work on the text.
-- **A cut always has a way back.** The full text is saved first (`Workspace::save_artifact`, `<call id>-full`; the L1 offload names its file by the bare call id); if that fails, a JSON result falls back to tier 1 and a log is returned whole.
+- **A cut always has a way back.** The full text is saved first (`Workspace::save_artifact`, `<call id>-<content hash>-full` — a call id alone repeats within a chat on Antigravity, `ag_call_0` every turn; the L1 offload names its file by the bare call id and has that hazard); if that fails, a JSON result falls back to tier 1 and a log is returned whole.
 - **An `isError` MCP result, or one with an image or extra fields, is returned untouched.**
 - **Unusual rows are chosen from the rows (`array::select`), with no model.** A trouble-named key counts only with a real value behind it: `"error": null` on every healthy row must not flag the array.
 
