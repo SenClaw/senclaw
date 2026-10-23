@@ -909,7 +909,25 @@ fn is_verification_command(cmd: &str) -> bool {
         "gradlew test", "gradlew build", "dotnet test", "dotnet build", "bundle exec rspec", "rspec", "rake test", "phpunit", "composer test",
     ];
     let c = cmd.to_ascii_lowercase();
-    WORDS.iter().any(|w| c.contains(w))
+    WORDS.iter().any(|w| c.contains(w)) || runs_a_program(&c)
+}
+
+/// A command that runs a script or a program of the project - `python3 check.py`,
+/// `node test.js`, `./scripts/verify.sh`, `make`. The edit it follows was run, which
+/// is all the verify nudge asks; whether the run proved anything is for the model
+/// (and the failed-check nudge) to say.
+fn runs_a_program(cmd: &str) -> bool {
+    const RUNNERS: &[&str] = &["python", "python3", "node", "deno", "bun", "ruby", "php", "perl", "java", "bash", "sh", "zsh", "make", "just"];
+    cmd.split(|c| matches!(c, '&' | ';' | '|')).any(|seg| {
+        let mut words = seg.split_whitespace().skip_while(|w| w.contains('=') && !w.starts_with('-'));
+        match words.next() {
+            Some(first) if first.starts_with("./") => true,
+            Some(first) if RUNNERS.contains(&first.rsplit('/').next().unwrap_or(first)) => {
+                matches!(first, "make" | "just") || words.next().is_some()
+            }
+            _ => false,
+        }
+    })
 }
 
 /// Instruction injected when the agent is detected spinning on the same tool.
@@ -3186,10 +3204,13 @@ mod tests {
 
     #[test]
     fn any_build_test_or_lint_counts_as_a_check() {
-        for c in ["cargo test --lib x", "cd web && npm run build", "pnpm run typecheck", "python3 -m pytest -q", "go test ./...", "flutter analyze", "make test"] {
+        for c in [
+            "cargo test --lib x", "cd web && npm run build", "pnpm run typecheck", "python3 -m pytest -q", "go test ./...", "flutter analyze", "make test",
+            "python3 check.py", "node test.js", "./scripts/verify.sh", "bash scripts/check.sh", "make", "FOO=1 python3 x.py", "cd web && node build.js",
+        ] {
             assert!(is_verification_command(c), "{c}");
         }
-        for c in ["ls -la", "git status", "cat src/main.rs", "mkdir -p x", "git commit -m x"] {
+        for c in ["ls -la", "git status", "cat src/main.rs", "mkdir -p x", "git commit -m x", "python3", "echo hi && ls", "rm -rf build"] {
             assert!(!is_verification_command(c), "{c}");
         }
     }
