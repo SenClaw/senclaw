@@ -998,3 +998,54 @@ mod tests {
         assert!(vi.contains("Vietnamese"), "block was: {vi}");
     }
 }
+
+
+/// How to work in a project folder, appended to the system prompt of a coding
+/// session (a code session, a git repository, a project). Static text, so it
+/// never breaks a cached prefix. Small models follow a short list of rules far
+/// better than the general-purpose prompt above, which tells them to ask the
+/// user about any ambiguity — the opposite of what an unattended coding run
+/// needs.
+///
+/// `unattended` says whether edits and dev-loop commands run without a card
+/// (`Autonomy::Auto`/`Full`); the line about cards is only true then.
+pub fn code_session_reminder(unattended: bool) -> String {
+    let mut out = String::from(
+        "# Working in this project\n\
+- Decide and go. When a choice is reasonable and can be undone (a name, where a file goes, a library \
+the project already uses, whether to add a test), make it, say which in one line, and carry on. Use \
+`AskUserQuestion` only when the answer changes what you build and the code cannot tell you, or the step \
+cannot be taken back.\n\
+- Orient before you edit: the `<repo_map>` and `<project_commands>` blocks, then `Read` the region, then \
+`Edit`. Never guess a path or a command the project's files already name.\n\
+- After editing source, run the narrowest build, test or lint that covers the change, fix what it \
+reports, and only then answer. Say what you ran and what you did not.\n\
+- A command that failed or was refused: change the approach. Do not send the same call again.\n",
+    );
+    if unattended {
+        out.push_str(
+            "- Edits in this folder and build, test, lint and local git commands run on their own. An approval \
+card means the step leaves the project or cannot be undone (publishing, deleting outside the folder, \
+privileged commands): expect it, and do not work around it with a different command.\n",
+        );
+    }
+    out.trim_end().to_string()
+}
+
+#[cfg(test)]
+mod code_session_reminder_tests {
+    use super::code_session_reminder;
+
+    #[test]
+    fn the_reminder_tells_a_model_to_decide_and_to_verify() {
+        let r = code_session_reminder(false);
+        assert!(r.contains("Decide and go") && r.contains("narrowest build, test or lint"));
+        assert!(!r.contains("run on their own"), "no promise of unattended runs when cards will appear");
+    }
+
+    #[test]
+    fn the_unattended_line_appears_only_when_it_is_true() {
+        assert!(code_session_reminder(true).contains("run on their own"));
+        assert!(code_session_reminder(true).len() < 1800, "it rides every request of a small model");
+    }
+}

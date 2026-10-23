@@ -701,6 +701,10 @@ pub struct QueryConfig {
     /// text only. Agent mode keeps legacy "text = done" behavior so ordinary
     /// chat is unaffected.
     pub agent_mode: AgentMode,
+    /// A coding session: when the model stops after editing source files
+    /// without having built, tested or linted anything, ask once for a check
+    /// (see [`VERIFY_NUDGE`]). Never set for subagents or compaction.
+    pub verify_edits: bool,
     /// Source of user inputs that queued up while this turn runs (main agent
     /// only; `None` for subagents). Drained after each tool round and appended
     /// to the last tool result so the model sees mid-turn user messages
@@ -765,6 +769,46 @@ fn stall_tool_turns() -> usize {
         .and_then(|v| v.trim().parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(4)
+}
+
+/// Sent once when a coding session stops after editing source files without
+/// having run anything that checks them. A small model's commonest failure is
+/// "done" on code it never compiled; OpenHands' goal judge and SWE-bench prompt
+/// both treat "claimed but unverified" as not done. One nudge, never a loop:
+/// a repository with nothing to run answers in a sentence and finishes.
+const VERIFY_NUDGE: &str = "You edited source files but have not run anything that checks them. \
+Before you finish, run the narrowest build, test or lint command that covers your change (the \
+<project_commands> block lists them) and fix what it reports. If nothing can be run here, say so \
+in one sentence and why, then give your final answer.";
+
+/// Source files worth a build/test after an edit: not notes, not config.
+fn is_source_edit(tool: &str, input: &serde_json::Value) -> bool {
+    if !matches!(tool, "Edit" | "Write" | "NotebookEdit") {
+        return false;
+    }
+    let path = input
+        .get("file_path")
+        .or_else(|| input.get("notebook_path"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let ext = path.rsplit('.').next().unwrap_or("");
+    crate::repo_map::lang::spec_for_path(path).is_some()
+        || matches!(ext, "dart" | "swift" | "kt" | "kts" | "rb" | "php" | "vue" | "svelte" | "scala" | "sh" | "lua" | "zig")
+}
+
+/// A command that builds, tests, lints or type-checks. Loose on purpose: a
+/// model that ran *any* check has done what the nudge asks.
+fn is_verification_command(cmd: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "cargo test", "cargo check", "cargo build", "cargo clippy", "cargo nextest", "cargo fmt --check", "npm test", "npm run test",
+        "npm run build", "npm run lint", "npm run typecheck", "npm run check", "pnpm test", "pnpm run", "pnpm build", "yarn test", "yarn build",
+        "yarn lint", "bun test", "bun run", "npx tsc", "tsc", "eslint", "vitest", "jest", "pytest", "python -m pytest", "python3 -m pytest", "unittest",
+        "ruff", "mypy", "pyright", "go test", "go build", "go vet", "make test", "make check", "make build", "make lint", "flutter test",
+        "flutter analyze", "dart test", "dart analyze", "swift test", "swift build", "mvn test", "mvn package", "gradle test", "gradle build",
+        "gradlew test", "gradlew build", "dotnet test", "dotnet build", "bundle exec rspec", "rspec", "rake test", "phpunit", "composer test",
+    ];
+    let c = cmd.to_ascii_lowercase();
+    WORDS.iter().any(|w| c.contains(w))
 }
 
 /// Instruction injected when the agent is detected spinning on the same tool.
@@ -1101,6 +1145,10 @@ pub async fn query(
     // See `completion_nudge_for` for the per-mode semantics.
     let max_completion_nudges_cap = max_completion_nudges();
     let mut completion_nudges: u8 = 0;
+    // Verify-before-finish (coding sessions): set by a source-file edit,
+    // cleared by a build/test/lint command that runs after it.
+    let mut unverified_edit = false;
+    let mut verify_nudged = false;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
     // Set once the model calls `EnterPlanMode` mid-turn. Upgrades the effective
@@ -1672,6 +1720,13 @@ pub async fn query(
                     continue;
                 }
             }
+            if config.verify_edits && !config.is_subagent && !forcing_final && unverified_edit && !verify_nudged {
+                verify_nudged = true;
+                info!("[{}] edited source files, ran no check — nudging once before finishing", config.agent_id);
+                messages.push(assistant_msg);
+                messages.push(create_user_message(vec![ContentBlock::Text { text: VERIFY_NUDGE.to_string() }]));
+                continue;
+            }
             messages.push(assistant_msg);
             info!(
                 "[{}] query complete — no tool calls, {} messages",
@@ -1711,7 +1766,16 @@ pub async fn query(
         // model called this turn so the "no tools" branch above can tell
         // whether a future text-only reply is the natural end of the mode.
         for tu in &tool_uses {
-            if let ContentBlock::ToolUse { name, .. } = tu {
+            if let ContentBlock::ToolUse { name, input, .. } = tu {
+                if config.verify_edits {
+                    if is_source_edit(name, input) {
+                        unverified_edit = true;
+                    } else if name == "Bash"
+                        && input.get("command").and_then(|v| v.as_str()).is_some_and(is_verification_command)
+                    {
+                        unverified_edit = false;
+                    }
+                }
                 if name == EXIT_PLAN_MODE_TOOL {
                     exit_plan_mode_called = true;
                 } else if name == ENTER_PLAN_MODE_TOOL {
@@ -2863,5 +2927,26 @@ mod tests {
         };
         assert!(text.contains("<system-reminder>"));
         assert!(text.contains("Today's date"));
+    }
+
+    #[test]
+    fn only_source_edits_ask_for_a_check() {
+        let edit = |tool: &str, p: &str| is_source_edit(tool, &serde_json::json!({"file_path": p}));
+        assert!(edit("Edit", "/p/src/main.rs"));
+        assert!(edit("Write", "/p/app/page.tsx"));
+        assert!(edit("Edit", "/p/lib/main.dart"));
+        assert!(!edit("Edit", "/p/README.md"));
+        assert!(!edit("Write", "/p/notes.txt"));
+        assert!(!edit("Read", "/p/src/main.rs"), "reading is not editing");
+    }
+
+    #[test]
+    fn any_build_test_or_lint_counts_as_a_check() {
+        for c in ["cargo test --lib x", "cd web && npm run build", "pnpm run typecheck", "python3 -m pytest -q", "go test ./...", "flutter analyze", "make test"] {
+            assert!(is_verification_command(c), "{c}");
+        }
+        for c in ["ls -la", "git status", "cat src/main.rs", "mkdir -p x", "git commit -m x"] {
+            assert!(!is_verification_command(c), "{c}");
+        }
     }
 }

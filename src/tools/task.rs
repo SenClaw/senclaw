@@ -338,6 +338,7 @@ impl Tool for TaskTool {
             // they're best-effort one-shot helpers, not Plan/Dag-style
             // workflows that need task_done enforcement.
             agent_mode: crate::zen_core::AgentMode::Agent,
+            verify_edits: false,
             max_turns_override: None,
             // Subagents never receive mid-turn user injections.
             pending_inject: None,

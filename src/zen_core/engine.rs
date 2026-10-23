@@ -1789,6 +1789,18 @@ impl ZenEngine {
             .edit_format
             .and_then(|f| f.prompt_reminder())
             .map(str::to_string);
+        // How to work in a project, for sessions that have one. It shares the
+        // edit-format slot: both are short, static, and belong after the repo map.
+        let edit_format_reminder = if Self::session_works_on_a_project(&opts) {
+            let unattended = self.permission_manager.autonomy() != Autonomy::Ask;
+            let style = crate::zen_core::prompt::code_session_reminder(unattended);
+            Some(match edit_format_reminder {
+                Some(f) => format!("{f}\n\n{style}"),
+                None => style,
+            })
+        } else {
+            edit_format_reminder
+        };
 
         let soul_block = Self::load_soul_prompt_block(&opts.agent_data_dir);
 
@@ -1994,6 +2006,7 @@ impl ZenEngine {
                 // Pass through the current agent_mode so the conversation loop
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
+                verify_edits: Self::session_works_on_a_project(&opts),
                 max_turns_override: opts.max_agent_turns,
                 pending_inject: Some(pending_inject),
             };
@@ -2695,6 +2708,7 @@ until you have carried out the skill's steps.\n\
             // Compaction summarises what was said, not what was recalled.
             turn_context: None,
             agent_mode: opts.agent_mode,
+            verify_edits: false,
             max_turns_override: None,
             pending_inject: None,
         };
@@ -2895,6 +2909,10 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
                     parts.push(format!("Project instructions ({fname}):\n{body}"));
                 }
             }
+            // How this repository is built and tested, read from its manifests.
+            if let Some(block) = crate::repo_map::commands::render(std::path::Path::new(working_dir)) {
+                parts.push(block);
+            }
         }
 
         if parts.len() == 1 && parts[0].contains("date") {
@@ -2909,10 +2927,6 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
             "<system-reminder>\n{}\n</system-reminder>\n\n",
             parts.join("\n\n")
         ))
-            // How this repository is built and tested, read from its manifests.
-            if let Some(block) = crate::repo_map::commands::render(std::path::Path::new(working_dir)) {
-                parts.push(block);
-            }
     }
 
     pub fn initialize_plugins(&self) {
@@ -4578,7 +4592,6 @@ mod tests {
             .expect("the loaded tool is declared on the next turn");
         assert_eq!(lake["function"]["parameters"], schema);
     }
-}
 
     // ------------------------------------------------------------------
     // First-turn context of a coding session
@@ -4631,3 +4644,4 @@ mod tests {
         assert!(ZenEngine::session_works_on_a_project(&project), "a chat created in a project");
         assert!(!ZenEngine::session_works_on_a_project(&ZenCoreOptions::default()), "no folder");
     }
+}
