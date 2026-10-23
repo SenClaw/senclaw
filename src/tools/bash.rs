@@ -147,17 +147,27 @@ impl Tool for BashTool {
                             "Command timed out after {timeout_ms}ms (killed)"
                         ));
                     }
+                    let code = run.exit_code.unwrap_or(-1);
+                    let result_for_assistant = if run.timed_out {
+                        output_text
+                    } else if code != 0 {
+                        format!("{output_text}\n[exit code {code}]")
+                    } else if output_text.trim().is_empty() {
+                        "(no output; exit code 0)".to_string()
+                    } else {
+                        output_text
+                    };
                     ToolOutput::Result {
                         data: serde_json::json!({
                             "stdout": run.stdout,
                             "stderr": run.stderr,
-                            "exitCode": run.exit_code.unwrap_or(-1),
+                            "exitCode": code,
                             "truncated": run.truncated,
                             "timeout": run.timed_out,
                             "title": get_title(&command),
                             "sandbox": { "isolation": run.isolation, "network": run.network },
                         }),
-                        result_for_assistant: output_text,
+                        result_for_assistant,
                     }
                 }
                 Err(e) => ToolOutput::Result {
@@ -206,6 +216,18 @@ impl Tool for BashTool {
                 };
 
                 let title = get_title(&command);
+                // Say how the command ended. Without it a model reads a failing
+                // test run's tail as success, and an empty result as "nothing
+                // happened" - the two commonest ways a small model misreports a
+                // build. The marker is also what the agent loop reads to know
+                // that the last check failed.
+                let result_for_assistant = if exit_code != 0 {
+                    format!("{output_text}\n[exit code {exit_code}]")
+                } else if output_text.trim().is_empty() {
+                    "(no output; exit code 0)".to_string()
+                } else {
+                    output_text
+                };
                 Ok(vec![ToolOutput::Result {
                     data: serde_json::json!({
                         "stdout": stdout,
@@ -214,7 +236,7 @@ impl Tool for BashTool {
                         "truncated": truncated,
                         "title": title,
                     }),
-                    result_for_assistant: output_text,
+                    result_for_assistant,
                 }])
             }
             Ok(Ok(Err(e))) => Ok(vec![ToolOutput::Result {

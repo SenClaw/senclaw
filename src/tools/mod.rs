@@ -12,6 +12,7 @@ pub mod edit;
 pub mod emit_widget;
 pub mod enter_plan_mode;
 pub mod edit_apply;
+pub mod file_io;
 mod lsp_tools;
 mod repo_map_tools;
 pub mod exit_plan_mode;

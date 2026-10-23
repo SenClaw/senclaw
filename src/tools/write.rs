@@ -80,8 +80,14 @@ impl Tool for WriteTool {
             std::fs::create_dir_all(parent).context("Failed to create parent directory")?;
         }
 
+        // Same discipline as Edit: one writer per file, and the file is replaced
+        // whole or not at all.
+        let file_lock = super::file_io::lock_for(&p);
+        let _writing = file_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let existed = p.exists();
         let old_content = std::fs::read_to_string(&p).unwrap_or_default();
-        std::fs::write(&p, content).context("Failed to write file")?;
+        super::file_io::write_atomic(&p, content.as_bytes()).context("Failed to write file")?;
+        super::file_io::record(&p, existed.then_some(old_content.as_str()), content);
 
         let fname = p
             .file_name()
