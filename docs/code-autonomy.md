@@ -71,6 +71,61 @@ tường minh của họ không bị đoán lại.
 - **Kiểm tra trước khi kết thúc**: model dừng sau khi sửa file nguồn mà chưa chạy build/test/lint nào → nhắc **một
   lần**. Không lặp, không áp dụng cho subagent.
 
+## Vòng lặp không kẹt, sửa file an toàn, có trần, có kiểm chứng (round 2)
+
+Đối chiếu với OpenHands (xem báo cáo nghiên cứu) cho thấy bốn chỗ SenClaw còn kém; bốn chỗ đó, và hai lỗi tìm thấy khi đọc mã, đã sửa.
+
+### Phát hiện kẹt theo **kết quả** (`zen_core/stuck.rs`)
+
+| Mẫu | Điều kiện | Ghi chú |
+|---|---|---|
+| `SameResult` | cùng lệnh, **cùng kết quả**, 4 lần liên tiếp | `cargo test` lần 2 sau khi sửa file cho kết quả khác → không phải kẹt |
+| `Alternating` | hai lệnh A, B xen kẽ, cùng kết quả, 3 vòng | hai lần sửa hoàn tác nhau |
+| `SameFailure` | cùng lệnh thất bại với cùng output 4 lần, dù giữa chừng có sửa | sửa mà không chạm tới nguyên nhân |
+
+Lần đầu: nhắc một lần (nêu tên lệnh), xoá lịch sử để mẫu phải hình thành lại. Lần hai trong 25 lượt: dừng, tắt tool, ép trả lời trung thực
+("đừng nói đã xong"). Chỉ cho phiên code; chat thường giữ bộ đếm theo tên tool như cũ.
+
+Hai lỗi cũ đã sửa:
+
+- **Chặn lệnh trùng** chặn mọi lệnh giống hệt trong cả một lượt, nên `cargo test` → sửa → `cargo test` bị trả "viết câu trả lời cuối ngay". Giờ chỉ chặn khi
+  *không có gì đổi từ lần chạy trước* (epoch: tăng mỗi khi `Edit`/`Write`/`NotebookEdit`/`Task` hoặc `Bash` không-chỉ-đọc chạy). Đọc lại file khi chưa
+  sửa gì vẫn bị chặn.
+- **Bộ đếm "cùng tool, không có chữ"** dừng một phiên code đọc 8 file liên tiếp. Phiên code không dùng nó nữa.
+
+### Sửa file (`tools/file_io.rs`)
+
+- Ghi **nguyên tử**: file tạm cùng thư mục → `rename` (giữ quyền, đi theo symlink). Không bao giờ lộ nửa file.
+- **Khoá theo file** quanh cả đọc-sửa-ghi: subagent / DAG worker cùng sửa một file không mất lần sửa nào.
+- **`Edit {file_path, undo: true}`** hoàn tác lần sửa gần nhất (nhiều lần được; tối đa 8 bản, 64 file, bỏ file > 1 MB). Chỉ hoàn tác khi file còn đúng như
+  lần sửa để lại; ai đó đã sửa sau đó thì từ chối, không đè mất. Ghi tạo file mới thì undo xoá file.
+- Bash cho biết nó kết thúc ra sao: `[exit code N]` khi khác 0, `(no output; exit code 0)` khi rỗng. Trước đây model chỉ thấy phần đuôi của một lần test đỏ.
+
+### Giới hạn một yêu cầu code
+
+| | Mặc định | Đổi ở |
+|---|---|---|
+| Số lượt gọi tool | **500** (chat giữ 30; `SENCLAW_MAX_AGENT_TURNS` luôn thắng) | `POST /api/agent-behavior {"codeMaxTurns": 10..5000}` |
+| Tổng token (vào + ra, mọi lần gọi) | **10 triệu**, `0` = tắt | `{"maxRunTokens": n}` |
+| Hỏi model "xong chưa?" | tắt | `{"finishJudge": true}` |
+
+Chạm trần = ép một câu trả lời cuối với tool bị tắt (không vứt công việc). **Không** phát `SessionError` trước câu trả lời đó: pool coi nó là kết thúc yêu
+cầu và câu trả lời mất. Nén ngữ cảnh chủ động giờ lặp lại được (cách ≥ 8 lượt) thay vì một lần mỗi yêu cầu — cần khi một yêu cầu dài 500 lượt.
+
+### Kiểm chứng trước khi kết thúc (`zen_core/finish_check.rs`)
+
+Thứ tự khi model dừng ở phiên code (mỗi bước chỉ một lần, trừ phán quan và PreStop):
+
+1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc.
+2. Lần build/test/lint cuối **thất bại** (`[exit code N]`) và chưa có lần nào pass sau đó → nhắc, không cho báo "xong".
+3. (tuỳ chọn, `finishJudge`) một lần gọi model chấm "xong chưa?" → `{complete, missing}`; thiếu thì gửi lại danh sách, tối đa 2 vòng. Lỗi hoặc JSON
+   không đọc được = cho kết thúc (chỉ là tư vấn).
+4. Hook **`PreStop`** do người dùng tự viết trong `hooks.json`: `blocking: true` + `{"blocked": true, "reason": "…"}` gửi `reason` về làm tin nhắn kế
+   tiếp, tối đa 3 lần. Cố ý là sự kiện riêng, **không** nằm trong danh sách của marketplace plugin: `Stop` vốn không chặn được, vì một gói không đáng tin
+   không được giữ agent chạy hay đặt chữ vào ngữ cảnh của nó.
+
+Prompt của phiên code có thêm quy trình 8 bước gọn (hiểu → baseline → định vị → tái hiện lỗi → sửa nhỏ nhất → kiểm → đọc lại diff → báo cáo).
+
 ## Quan sát
 
 `GET /api/code/autonomy` → `{ level, ranUnattended, askedAnyway }` từ lúc daemon chạy. Hai con số trả lời câu hỏi
@@ -80,6 +135,8 @@ tường minh của họ không bị đoán lại.
 
 - **Không phải sandbox.** Chấm điểm dòng lệnh, không thấy bên trong một script model vừa viết rồi chạy
   (`python x.py` là Medium). Repo không phải của bạn → bật Plugins → Sandbox (`exec`) hoặc để `ask`.
+- Chưa có: sandbox làm ranh giới phê duyệt, phân tích shell bằng AST (`tree-sitter-bash` đã có trong `Cargo.toml`), luật "chỉ dẫn từ file repo mà dẫn tới
+  `curl | sh` thì nâng lên High", `AGENTS.md` lồng nhau theo đường dẫn, che bớt kết quả tool cũ, tool `think`, terminal bền.
 - Chấm điểm sai chiều "cho qua" là lỗi nghiêm trọng, sai chiều "hỏi" là chấp nhận được: thêm lệnh vào danh sách
   Medium chỉ khi cả đường dẫn lẫn tác dụng đều kiểm chứng được từ dòng lệnh.
 - `env <cmd>` từng nằm trong danh sách chỉ-đọc (`env rm -rf x` chạy không hỏi). Đã sửa ở `shell_safety`, có test.

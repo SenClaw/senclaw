@@ -142,6 +142,89 @@ n0 = cards.length;
 await say('web:plain', steps('S8', [{ t: 'Bash', a: { command: 'python3 -c "print(1)"', description: 'e2e step' } }]));
 check('S8 a plain chat still asks', since(n0).length === 1, JSON.stringify(since(n0)));
 
+
+// ============ run guards: stuck detection, file safety, limits, finish checks ============
+const lastResults = (tag) => {
+  const rs = mockReqs().filter((r) => r.tag === tag);
+  return rs.length ? rs[rs.length - 1].prevResults ?? [] : [];
+};
+const sawText = (tag, needle) => mockReqs().filter((r) => r.tag === tag).some((r) => (r.lastText ?? '').includes(needle));
+const bash = (command) => ({ t: 'Bash', a: { command, description: 'e2e step' } });
+const setLimits = (o) => api('/api/agent-behavior', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) });
+
+const lim = await api('/api/agent-behavior');
+check('G0 limits default to 500 turns / 10M tokens / no judge', lim.body.codeMaxTurns === 500 && lim.body.maxRunTokens === 10000000 && lim.body.finishJudge === false, JSON.stringify(lim.body));
+check('G0 a silly turn cap is a 400', (await setLimits({ codeMaxTurns: 3 })).status === 400);
+
+// ---- S10: test-fix-retest. An identical command after an edit must run; with nothing changed it is answered from memory.
+n0 = cards.length;
+await say(jid, steps('S10', [
+  { t: 'Write', a: { file_path: `${PROJ}/calc.py`, content: 'print(1)\n' } },
+  bash('python3 calc.py'),
+  { t: 'Edit', a: { file_path: `${PROJ}/calc.py`, old_string: 'print(1)', new_string: 'print(2)' } },
+  bash('python3 calc.py'),
+  { t: 'Read', a: { file_path: `${PROJ}/calc.py` } },
+  { t: 'Read', a: { file_path: `${PROJ}/calc.py` } },
+]));
+const r10 = lastResults('S10');
+check('S10 first run prints 1', (r10[1] ?? '').trim() === '1', JSON.stringify(r10[1]));
+check('S10 the identical retest after the edit RAN (prints 2)', (r10[3] ?? '').trim() === '2', JSON.stringify(r10[3]));
+check('S10 a read-only call repeated with nothing changed is intercepted', /Duplicate call/.test(r10[5] ?? '') && !/Duplicate call/.test(r10[4] ?? ''), JSON.stringify(r10.slice(4)));
+check('S10 and asked nothing', since(n0).length === 0);
+
+// ---- S11: the same result again and again is stuck: one nudge, then the run is stopped
+await say(jid, steps('S11', Array.from({ length: 10 }, () => bash('python3 calc.py'))), 120000);
+check('S11 nudged after 4 identical results', sawText('S11', 'exactly the same result'));
+check('S11 stopped for good after 4 more', sawText('S11', 'tool access is now disabled'));
+
+// ---- S12: exit codes are visible, and "done" after a red check is sent back once
+await say(jid, steps('S12', [
+  { t: 'Write', a: { file_path: `${PROJ}/t2.py`, content: 'print("t2")\n' } },
+  bash('python3 -m pytest -q nonexistent_file_xyz.py'),
+]));
+const r12 = lastResults('S12');
+check('S12 a failing command shows its exit code', /\[exit code [1-9]\d*\]/.test(r12[1] ?? ''), JSON.stringify(r12[1]));
+check('S12 finishing after a red check is sent back', sawText('S12', 'Your last build/test/lint run'));
+
+// ---- S13: undo takes back the last edit; the write is atomic (no temp files left)
+await say(jid, steps('S13', [
+  { t: 'Edit', a: { file_path: `${PROJ}/hello.py`, old_string: 'print("v2")', new_string: 'print("v3")' } },
+  { t: 'Edit', a: { file_path: `${PROJ}/hello.py`, undo: true } },
+]));
+const r13 = lastResults('S13');
+check('S13 undo reverts', /Reverted the last edit/.test(r13[1] ?? ''), JSON.stringify(r13[1]));
+const hello = fs.readFileSync(`${PROJ}/hello.py`, 'utf8');
+check('S13 file is back to v2', hello.includes('print("v2")') && !hello.includes('v3'), hello);
+check('S13 no temp file left behind', !fs.readdirSync(PROJ).some((f) => f.endsWith('.tmp')), fs.readdirSync(PROJ).join(','));
+
+// ---- S14: the turn cap of a coding request is configurable
+await setLimits({ codeMaxTurns: 10 });
+await say(jid, steps('S14', Array.from({ length: 14 }, (_, i) => bash(`python3 -c "print(${i + 100})"`))), 120000);
+check('S14 a 10-turn cap forces the final answer', sawText('S14', 'tool budget for this task is exhausted'));
+await setLimits({ codeMaxTurns: 500 });
+
+// ---- S15: the token budget stops a run
+await setLimits({ maxRunTokens: 40 });
+await say(jid, steps('S15', Array.from({ length: 8 }, (_, i) => bash(`python3 -c "print(${i + 200})"`))), 120000);
+check('S15 a 40-token budget forces the final answer', sawText('S15', 'tool budget for this task is exhausted'));
+const ran15 = mockReqs().filter((r) => r.tag === 'S15').length;
+check('S15 and after only a few calls', ran15 <= 6, String(ran15));
+await setLimits({ maxRunTokens: 10000000 });
+
+// ---- S16: a user PreStop hook can refuse to let the agent stop
+check('S16 the PreStop hook sent the agent back once', sawText('S1', 'PRESTOP-GATE'));
+
+
+// ---- S17: the optional finish judge sends an unfinished request back, then lets it end
+await setLimits({ finishJudge: true });
+await say(jid, steps('S17', [
+  { t: 'Write', a: { file_path: `${PROJ}/j.py`, content: 'print("j")\n' } },
+  bash('python3 -m pytest -q nonexistent_j.py'),
+]), 120000);
+check('S17 the judge found something missing and the agent was sent back', sawText('S17', 'JUDGE-MISSING-ITEM'));
+check('S17 and the judge was asked twice, no more', mockReqs().filter((r) => r.judge).length === 2, String(mockReqs().filter((r) => r.judge).length));
+await setLimits({ finishJudge: false });
+
 // ---- S9: the prompt the model saw
 const bodies = fs.readdirSync(`${S}/mock/bodies`).map((f) => fs.readFileSync(`${S}/mock/bodies/${f}`, 'utf8'));
 const s1body = bodies.find((b) => b.includes('S1') && b.includes('AGENTS-MARKER')) ?? '';

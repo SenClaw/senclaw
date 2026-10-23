@@ -1582,6 +1582,21 @@ Rules for Claude:
 - **The syntax check reports only errors the edit introduced** (`repo_map::syntax::introduced_by_edit`, before vs after) and never reverts. A file that
   was already broken, or code newer than the bundled grammar, must stay silent.
 - **Verify-before-finish nudges once** (`QueryConfig::verify_edits`, `VERIFY_NUDGE`): never for subagents, never in a loop. Source edits only.
+- **A forced final answer must not be preceded by a `SessionError`.** The pool's wait loop ends the request on one (`ProcessEvent::Error`), and the forced-final
+  call that was meant to explain the stop never reaches the user. The turn cap, the token budget (`maxRunTokens`) and the stuck stop log a warning and
+  push the final nudge; only a forced final that itself fails emits `AGENT_LOOP_LIMIT`. (`TOOL_ERROR_LOOP` still emits first - check it before copying it.)
+- **The duplicate-call guard compares epochs, not just signatures** (`seen_tool_sigs: sig → epoch`). An epoch ends when `may_change_workspace` is true for a
+  fresh call. Without it the second `cargo test` of a session was answered "write your final answer now". Never key the guard on the signature alone.
+- **A coding session is judged by what calls returned** (`zen_core/stuck.rs`): same call + same result ×4, A/B ×3 rounds, same failure ×4. One nudge, history
+  cleared, a second hit within 25 turns stops the run. The name-based stall counter is off for coding sessions (eight `Read`s in a row are normal).
+- **Bash results end with `[exit code N]` when N ≠ 0** (also in the sandboxed branch); `finish_check::result_failed` reads it. Do not move it to a field the
+  model does not see - the model and the loop both need it.
+- **`Edit`/`Write` go through `tools::file_io`**: per-file lock around the whole read-modify-write, `write_atomic` (symlink followed, mode kept), `record` for
+  `Edit {undo: true}`, which refuses when the file no longer holds what the last edit left.
+- **`PreStop` is the hook that can refuse to stop; `Stop` is not.** `Stop` is non-blockable on purpose and marketplace plugins may register it; `PreStop` is
+  withheld from plugins (`VALID_HOOK_EVENTS`), pinned by `marketplace_plugins_get_observing_events_but_never_deciding_ones`.
+- **Never take a std `Mutex` guard across the options literal twice** - see the autonomy-map deadlock above; the same holds for `file_io::lock_for` (hold the
+  guard only across synchronous code, never an `.await`).
 - The Bash tool requires a `description`; a scripted driver that omits it never reaches the permission layer (`Missing required field: description`).
 
 ## Context compression (`src/context_compress/`)

@@ -15,6 +15,7 @@ fs.mkdirSync(path.join(OUT, 'sys'), { recursive: true });
 fs.mkdirSync(path.join(OUT, 'bodies'), { recursive: true });
 const LOG = path.join(OUT, 'requests.jsonl');
 let seq = 0;
+let judged = 0;
 
 const textOf = (c) =>
   typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (typeof p === 'string' ? p : p.text ?? '')).join('\n') : '';
@@ -103,7 +104,12 @@ http
       let out;
       let stepName = null;
       const isExtraction = sys.startsWith('You extract durable memories');
-      if (isExtraction) {
+      const isJudge = sys.startsWith('You check whether an AI coding assistant');
+      if (isJudge) {
+        // finish judge: not complete the first time, complete after
+        judged += 1;
+        out = { text: judged === 1 ? JSON.stringify({ complete: false, missing: ['JUDGE-MISSING-ITEM: show the passing run'] }) : JSON.stringify({ complete: true, missing: [] }) };
+      } else if (isExtraction) {
         // Memory-engine fact extraction: answer with three dated facts about "Orion", tagged by the chat's script tag.
         const all = messages.map((m) => textOf(m.content)).join('\n');
         const tg = (all.match(/"tag":"([A-Za-z0-9_-]+)"/) ?? [, 'untagged'])[1];
@@ -139,6 +145,7 @@ http
           nTools: tools.length,
           tools: n <= 3 || process.env.LOG_TOOLS ? tools : undefined,
           extraction: isExtraction || undefined,
+          judge: isJudge || undefined,
           roles: messages.map((m) => `${m.role}:${textOf(m.content).slice(0, 60).replace(/\n/g, ' ')}`),
           lastRole: last.role,
           lastText: textOf(last.content).slice(0, 400),

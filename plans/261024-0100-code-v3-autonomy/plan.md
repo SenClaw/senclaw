@@ -41,6 +41,9 @@ the model is small.
 | 3 | Verify-before-finish nudge; syntax check after edits; `Edit` miss shows the closest lines; coding working-style reminder | done |
 | 4 | Docs ([`docs/code-autonomy.md`](../../docs/code-autonomy.md)), OpenAPI refresh, e2e on an isolated daemon (22/22, `plans/reports/code-v3-e2e/`) | done |
 
+Round 2 (2026-10-24, uncommitted on top of the six commits): stuck detection by result, atomic/locked/undoable edits, run limits, finish checks - see
+`docs/code-autonomy.md` "round 2"; e2e now 41 checks; 3600 lib tests.
+
 Status: implemented on `feat/code-v3`, **uncommitted**, not installed on the real daemon. 3567 lib tests pass.
 
 ## Decisions

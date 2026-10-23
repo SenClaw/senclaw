@@ -20,6 +20,19 @@ printf 'AGENTS-MARKER: use tabs, never edit generated/.\n' > AGENTS.md
 printf '[package]\nname = "e2e"\nversion = "0.1.0"\n' > Cargo.toml
 printf 'def hello():\n    return "hi"\n\nprint(hello())\n' > hello.py
 git add -A && git commit -q -m init
+# a user-authored PreStop hook: refuses to let the agent stop once, then allows it
+cat > $S/prestop.sh <<'HOOK'
+#!/bin/sh
+M="$(dirname "$0")/proj/.prestop-seen"
+if [ ! -f "$M" ]; then
+  touch "$M"
+  echo '{"blocked":true,"reason":"PRESTOP-GATE: the release checklist is not done yet, finish it before you stop"}'
+fi
+HOOK
+chmod +x $S/prestop.sh
+cat > $S/home/.senclaw/hooks.json <<JSON
+{"hooks":{"PreStop":[{"hooks":[{"type":"command","command":"$S/prestop.sh","blocking":true,"timeout":10}]}]}}
+JSON
 cd $S/mock && nohup node $HERE/mock-llm.mjs --port $MOCK --out $S/mock > $S/log/mock.log 2>&1 &
 echo $! > $S/mock.pid
 PROFILE='(version 1)(allow default)(deny network-outbound (remote tcp "localhost:18788"))(deny network-outbound (remote tcp "localhost:18789"))(deny network-outbound (remote tcp "localhost:18790"))'

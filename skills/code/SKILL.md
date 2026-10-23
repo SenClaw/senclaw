@@ -1,7 +1,7 @@
 ---
 name: code
 description: Read, search, edit, and verify source code in the chat's working directory with the built-in tools (Read/Grep/Glob/Edit/Write/Bash/Task), and hand multi-file refactors to a Cowork DAG. Use when the user asks to fix a bug, add a feature, refactor, write tests, or explain code in a repository.
-version: 2.1.0
+version: 2.2.0
 ---
 
 # Code — working on a repository from chat
@@ -38,6 +38,9 @@ commands run **without an approval card**. A card means the step leaves the proj
 (`git push`, deleting outside the folder, `sudo`, installs of global tools, secrets files, `.git` internals) and its
 title says why. Do not work around it with a different command that does the same thing — ask for it plainly.
 `Edit` that misses returns the closest lines of the file; copy them. An edit that leaves a syntax error says so.
+`Edit {file_path, undo: true}` takes back your last edit of that file (repeat to go further back). A failing `Bash` ends with `[exit code N]`: a red
+build or test run is not "done" - fix it or say plainly that it still fails. Running the very same command again is fine after you changed something;
+four identical results in a row mean change the approach.
 
 When the system prompt carries a `<repo_map>` block, start from it: it lists
 the files and signatures that matter most for this repository (and for the
