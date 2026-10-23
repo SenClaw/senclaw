@@ -107,6 +107,133 @@ pub fn find_fuzzy(content: &str, old: &str) -> Option<FuzzyHit> {
     Some(FuzzyHit { start: starts[i], end: line_end(&starts, content, i + n - 1), how: "similar" })
 }
 
+/// The text of the file that looks most like what the model sent, for the
+/// error that tells it its `old_string` did not match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NearMiss {
+    /// 1-based, inclusive.
+    pub first_line: usize,
+    pub last_line: usize,
+    pub ratio: f32,
+    /// The file's own lines, numbered, ready to show.
+    pub text: String,
+}
+
+/// Below this a window is a coincidence, not what the model meant.
+pub const NEAR_MISS_MIN_RATIO: f32 = 0.6;
+
+/// Most lines shown in a near miss.
+const NEAR_MISS_MAX_LINES: usize = 12;
+
+/// The window of `content` most similar to `old`, or `None` when nothing is
+/// close or the file is too large to scan quickly.
+///
+/// The model's `old_string` that "did not appear verbatim" is almost always
+/// *almost* right — one indentation, one renamed variable, a line that moved.
+/// Telling it only "not found" costs a re-read of the file and often a second
+/// miss; showing the lines it was probably after (as Aider does) lets it fix
+/// the next attempt without a tool call. SWE-agent measured edit success
+/// falling from 90.5 % to 57.2 % after one failed edit, so the first retry is
+/// the one worth helping.
+pub fn nearest_block(content: &str, old: &str) -> Option<NearMiss> {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let content_lines: Vec<&str> = content.lines().collect();
+    let n = old_lines.len();
+    if n == 0 || n > 60 || content_lines.len() < n || content_lines.len() > 20_000 {
+        return None;
+    }
+    let old_norm: Vec<String> = old_lines.iter().map(|l| norm_line(l)).collect();
+    let content_norm: Vec<String> = content_lines.iter().map(|l| norm_line(l)).collect();
+    let old_joined = old_norm.join("\n");
+
+    // Cheap filter first: a window that shares fewer than a third of `old`'s
+    // words cannot be close, and diffing every window of a 10,000-line file
+    // is not free. `covered[i]` = how many of `old`'s words window `i` holds.
+    let words = |l: &str| -> Vec<String> {
+        l.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|w| w.chars().count() >= 3)
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for l in &old_norm {
+        for w in words(l) {
+            let next = index.len();
+            index.entry(w).or_insert(next);
+        }
+    }
+    let per_line: Vec<Vec<usize>> = content_norm
+        .iter()
+        .map(|l| {
+            let mut v: Vec<usize> = words(l).iter().filter_map(|w| index.get(w).copied()).collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        })
+        .collect();
+    let mut counts = vec![0usize; index.len()];
+    let mut covered = 0usize;
+    let add = |line: &Vec<usize>, delta: isize, counts: &mut Vec<usize>, covered: &mut usize| {
+        for &w in line {
+            if delta > 0 {
+                counts[w] += 1;
+                if counts[w] == 1 {
+                    *covered += 1;
+                }
+            } else {
+                counts[w] -= 1;
+                if counts[w] == 0 {
+                    *covered -= 1;
+                }
+            }
+        }
+    };
+
+    let mut best: Option<(f32, usize)> = None;
+    for i in 0..=(content_norm.len() - n) {
+        if i == 0 {
+            for line in &per_line[..n] {
+                add(line, 1, &mut counts, &mut covered);
+            }
+        } else {
+            add(&per_line[i - 1], -1, &mut counts, &mut covered);
+            add(&per_line[i + n - 1], 1, &mut counts, &mut covered);
+        }
+        if !index.is_empty() && covered * 3 < index.len() {
+            continue;
+        }
+        let window = content_norm[i..i + n].join("\n");
+        let ratio = TextDiff::from_chars(old_joined.as_str(), window.as_str()).ratio();
+        if best.map_or(true, |(b, _)| ratio > b) {
+            best = Some((ratio, i));
+        }
+    }
+    let (ratio, i) = best?;
+    if ratio < NEAR_MISS_MIN_RATIO {
+        return None;
+    }
+    let last = (i + n).min(i + NEAR_MISS_MAX_LINES);
+    let text = content_lines[i..last]
+        .iter()
+        .enumerate()
+        .map(|(k, l)| {
+            let l: String = l.chars().take(200).collect();
+            format!("{:>5}\t{}", i + k + 1, l)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(NearMiss { first_line: i + 1, last_line: last, ratio, text })
+}
+
+/// 1-based line numbers where `needle` starts in `content`, at most `limit`.
+pub fn occurrence_lines(content: &str, needle: &str, limit: usize) -> Vec<usize> {
+    content
+        .match_indices(needle)
+        .take(limit)
+        .map(|(pos, _)| content[..pos].bytes().filter(|b| *b == b'\n').count() + 1)
+        .collect()
+}
+
 /// Byte offset just past line `idx` (its newline excluded).
 fn line_end(starts: &[usize], content: &str, idx: usize) -> usize {
     let next = starts.get(idx + 1).copied().unwrap_or(content.len());
@@ -277,5 +404,36 @@ mod tests {
         let err = apply_udiff(SRC, patch).unwrap_err();
         assert!(err.contains("hunk 2"), "{err}");
         assert!(parse_udiff("").is_err());
+    }
+
+    #[test]
+    fn a_near_miss_shows_the_files_own_lines_numbered() {
+        let content = "fn a() {}\n\nfn handle(req: Request) -> Response {\n    let body = req.body();\n    respond(body)\n}\n";
+        // The model remembered `request` and a different local name.
+        let old = "fn handle(request: Request) -> Response {\n    let data = request.body();\n    respond(data)\n}";
+        let miss = nearest_block(content, old).expect("close enough to show");
+        assert_eq!((miss.first_line, miss.last_line), (3, 6));
+        assert!(miss.text.contains("    3\tfn handle(req: Request)"), "{}", miss.text);
+        assert!(miss.ratio >= NEAR_MISS_MIN_RATIO);
+    }
+
+    #[test]
+    fn nothing_close_shows_nothing() {
+        assert_eq!(nearest_block("alpha\nbeta\ngamma\n", "completely unrelated text here\nand more"), None);
+        assert_eq!(nearest_block("", "x"), None);
+        assert_eq!(nearest_block("a\nb\n", ""), None);
+    }
+
+    #[test]
+    fn a_huge_file_is_not_scanned() {
+        let big = "line\n".repeat(25_000);
+        assert_eq!(nearest_block(&big, "line\nline"), None);
+    }
+
+    #[test]
+    fn occurrences_are_reported_by_line() {
+        assert_eq!(occurrence_lines("a\nx\nb\nx\nc x\n", "x", 2), vec![2, 4]);
+        assert_eq!(occurrence_lines("a\nx\nb\nx\nc x\n", "x", 10), vec![2, 4, 5]);
+        assert!(occurrence_lines("abc", "zzz", 3).is_empty());
     }
 }

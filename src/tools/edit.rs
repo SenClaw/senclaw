@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
-use super::edit_apply::{apply_udiff, find_fuzzy};
+use super::edit_apply::{apply_udiff, find_fuzzy, nearest_block, occurrence_lines};
 use crate::util::paths::resolve_in_workspace;
 use crate::zen_core::{EditFormat, Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
 
@@ -238,10 +238,24 @@ impl Tool for EditTool {
                 }
             }
             bump(&EDIT_STATS.failed);
+            let hint = if !new_string.is_empty() && content.contains(new_string) {
+                // The commonest "miss" after a model retries: it already landed.
+                "\nThe text you meant to write is already in the file — this edit may have been applied already. Read the region before editing again.".to_string()
+            } else if let Some(near) = nearest_block(&content, old_string) {
+                format!(
+                    "\nThe closest text in {fname} is lines {}-{} ({:.0}% similar) — copy it exactly:\n{}",
+                    near.first_line,
+                    near.last_line,
+                    near.ratio * 100.0,
+                    near.text
+                )
+            } else {
+                "\nNothing in the file resembles it — Read the region (or Grep for a distinctive line) before editing.".to_string()
+            };
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"error": true, "notFound": true}),
                 result_for_assistant: format!(
-                    "Error: old_string not found in {fname}. The file has not been modified.{}",
+                    "Error: old_string not found in {fname}. The file has not been modified.{}{hint}",
                     if tolerant { " Re-read the file and copy the exact lines, or send a `patch`." } else { "" }
                 ),
             }]);
@@ -249,12 +263,18 @@ impl Tool for EditTool {
 
         if !replace_all && occurrences > 1 {
             bump(&EDIT_STATS.failed);
+            let lines = occurrence_lines(&content, old_string, 6)
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"error": true, "multipleOccurrences": true, "count": occurrences}),
                 result_for_assistant: format!(
-                    "Error: old_string appears {occurrences} times in the file. \
+                    "Error: old_string appears {occurrences} times in the file (lines {lines}{}). \
                      Use replace_all=true to replace all, or provide a larger string \
-                     with more surrounding context to make it unique."
+                     with more surrounding context to make it unique.",
+                    if occurrences > 6 { ", …" } else { "" }
                 ),
             }]);
         }
@@ -425,6 +445,44 @@ mod tests {
         let t = text(&out);
         assert!(t.contains("matched by whitespace"), "{t}");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "fn main() {\n    let b = 3;\n}\n");
+    }
+
+    #[tokio::test]
+    async fn a_miss_shows_the_lines_the_model_was_after() {
+        let (_d, p) = file("fn a() {}\n\nfn handle(req: Request) -> Response {\n    let body = req.body();\n    respond(body)\n}\n");
+        let input = serde_json::json!({
+            "file_path": p,
+            "old_string": "fn handle(request: Request) -> Response {\n    let data = request.body();",
+            "new_string": "fn handle(request: Request) -> Response {\n    let data = request.body().await;"
+        });
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("not found"), "{t}");
+        assert!(t.contains("closest text") && t.contains("lines 3-4"), "{t}");
+        assert!(t.contains("    3\tfn handle(req: Request)"), "the file's own text is shown: {t}");
+    }
+
+    #[tokio::test]
+    async fn a_miss_on_an_edit_that_already_landed_says_so() {
+        let (_d, p) = file("let a = 2;\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "let a = 1;", "new_string": "let a = 2;"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("already in the file"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn a_miss_with_nothing_close_points_at_read_and_grep() {
+        let (_d, p) = file("alpha\nbeta\ngamma\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "completely different content", "new_string": "x"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("Nothing in the file resembles it"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_old_string_names_where_it_occurs() {
+        let (_d, p) = file("x = 1\ny = 2\nx = 1\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "x = 1", "new_string": "x = 3"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("appears 2 times") && t.contains("lines 1, 3"), "{t}");
     }
 
     #[tokio::test]

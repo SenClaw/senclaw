@@ -24,6 +24,7 @@ pub mod parse;
 pub mod rank;
 pub mod render;
 pub mod scan;
+pub mod syntax;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
