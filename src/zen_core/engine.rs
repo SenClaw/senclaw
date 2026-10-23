@@ -1885,7 +1885,7 @@ impl ZenEngine {
                     .identity_refresh_pending
                     .swap(false, Ordering::Relaxed);
             if refresh_identity {
-                let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
+                let include_project_doc = Self::session_works_on_a_project(&opts);
                 if let Some(ctx) = Self::collect_first_turn_context(
                     &opts.working_dir,
                     include_project_doc,
@@ -2807,14 +2807,22 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
         ))
     }
 
-    /// Whether the given instance id corresponds to an agent that operates
-    /// inside a real workspace (code edits, file ops, project bash). Only
-    /// these sessions get `SENCLAW.md` injected into their first user turn;
-    /// regular chat agents (`web:*`, `app:*`, `virtual:*`) skip it to save
-    /// ~2k tokens per turn and avoid polluting attention with project docs
-    /// irrelevant to the chat query.
-    fn instance_uses_workspace(_instance_id: &str) -> bool {
-        false
+    /// Whether this session works inside a project folder: a code session, a
+    /// chat whose folder is a git repository, or a chat created in a project.
+    /// Only these get the repository's own instructions (`AGENTS.md` /
+    /// `CLAUDE.md` / `SENCLAW.md`) and its build and test commands on the first
+    /// turn; a regular chat (`web:*`, `app:*`, `virtual:*`) skips them, which
+    /// saves ~2k tokens per turn and keeps a project's notes out of an
+    /// unrelated question.
+    ///
+    /// This used to be `fn instance_uses_workspace(_: &str) -> bool { false }`,
+    /// so no session — code sessions included — ever saw the repository's
+    /// instructions, and a model on a local engine started every task without
+    /// knowing how the project is built or tested.
+    fn session_works_on_a_project(opts: &ZenCoreOptions) -> bool {
+        opts.code_session
+            || opts.project_context.is_some()
+            || crate::checkpoints::checkpointable_dir(&opts.working_dir, false).is_some()
     }
 
     /// Read `SENCLAW.md` (walks up from `working_dir`), the user profile, and
@@ -2824,8 +2832,9 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
     /// When `include_project_doc` is `false`, only the date line is emitted —
     /// the project markdown is skipped entirely. Used for non-workspace agents.
     ///
-    /// Reads `SENCLAW.md` first, then falls back to `CLAUDE.md` for backward
-    /// compatibility with existing repos that haven't renamed yet.
+    /// Reads `SENCLAW.md` first, then `AGENTS.md` (the file most agents share),
+    /// then `CLAUDE.md` for repos that have not renamed theirs. The first one
+    /// found while walking up from the working folder is the one used.
     ///
     /// The user profile (Soul Core) rides here rather than in the per-turn
     /// memory blocks in `AgentPool` because it is stable for the whole
@@ -2856,7 +2865,7 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
             let mut dir = std::path::Path::new(working_dir).to_path_buf();
             let project_doc: Option<(&'static str, String)> = loop {
                 let mut hit: Option<(&'static str, String)> = None;
-                for fname in ["SENCLAW.md", "CLAUDE.md"] {
+                for fname in ["SENCLAW.md", "AGENTS.md", "CLAUDE.md"] {
                     let candidate = dir.join(fname);
                     if candidate.exists() {
                         if let Ok(content) = std::fs::read_to_string(&candidate) {
@@ -2900,6 +2909,10 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
             "<system-reminder>\n{}\n</system-reminder>\n\n",
             parts.join("\n\n")
         ))
+            // How this repository is built and tested, read from its manifests.
+            if let Some(block) = crate::repo_map::commands::render(std::path::Path::new(working_dir)) {
+                parts.push(block);
+            }
     }
 
     pub fn initialize_plugins(&self) {
@@ -4566,3 +4579,55 @@ mod tests {
         assert_eq!(lake["function"]["parameters"], schema);
     }
 }
+
+    // ------------------------------------------------------------------
+    // First-turn context of a coding session
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_coding_session_gets_the_repositorys_instructions_and_how_to_test_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("AGENTS.md"), "Use tabs. Never edit generated/.").unwrap();
+        std::fs::write(d.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let dir = d.path().to_string_lossy().to_string();
+
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:abc").unwrap();
+        assert!(ctx.contains("Project instructions (AGENTS.md)"), "{ctx}");
+        assert!(ctx.contains("Never edit generated/"), "{ctx}");
+        assert!(ctx.contains("<project_commands>") && ctx.contains("cargo test"), "{ctx}");
+
+        // A chat that is not working on a project carries neither.
+        let plain = ZenEngine::collect_first_turn_context(&dir, false, "web:abc").unwrap();
+        assert!(!plain.contains("Use tabs") && !plain.contains("<project_commands>"), "{plain}");
+    }
+
+    #[test]
+    fn the_projects_own_file_order_is_senclaw_then_agents_then_claude() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("CLAUDE.md"), "from-claude").unwrap();
+        std::fs::write(d.path().join("AGENTS.md"), "from-agents").unwrap();
+        let dir = d.path().to_string_lossy().to_string();
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:a").unwrap();
+        assert!(ctx.contains("from-agents") && !ctx.contains("from-claude"), "{ctx}");
+        std::fs::write(d.path().join("SENCLAW.md"), "from-senclaw").unwrap();
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:a").unwrap();
+        assert!(ctx.contains("from-senclaw") && !ctx.contains("from-agents"), "{ctx}");
+    }
+
+    #[test]
+    fn which_sessions_count_as_working_on_a_project() {
+        let git = tempfile::tempdir().unwrap();
+        std::fs::create_dir(git.path().join(".git")).unwrap();
+        let plain = tempfile::tempdir().unwrap();
+        let opts = |dir: &std::path::Path| ZenCoreOptions { working_dir: dir.to_string_lossy().to_string(), ..Default::default() };
+
+        assert!(ZenEngine::session_works_on_a_project(&opts(git.path())), "a git repository");
+        assert!(!ZenEngine::session_works_on_a_project(&opts(plain.path())), "an ordinary folder");
+        let mut code = opts(plain.path());
+        code.code_session = true;
+        assert!(ZenEngine::session_works_on_a_project(&code), "a code session");
+        let mut project = opts(plain.path());
+        project.project_context = Some("<project>x</project>".into());
+        assert!(ZenEngine::session_works_on_a_project(&project), "a chat created in a project");
+        assert!(!ZenEngine::session_works_on_a_project(&ZenCoreOptions::default()), "no folder");
+    }
