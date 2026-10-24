@@ -304,6 +304,25 @@ await say(jid, steps('S25', [
 const s25 = mockReqs().filter((r) => r.tag === 'S25');
 check('S25 sent back once after a Read, then finished', s25.filter((r) => (r.lastText ?? '').includes(asks)).length === 1 && /MOCK-DONE S25/.test(lastReply.get(jid) ?? ''), JSON.stringify(s25.map((r) => r.stepName)));
 
+// ---- S26: every Edit on a file refused: sent back twice with the file named and the refusal quoted, then the reply carries the warning
+const badEdit = (file) => ({ t: 'Edit', a: { file_path: file, old_string: 'THIS TEXT IS NOT IN THE FILE', new_string: 'x' } });
+await say(jid, steps('S26', [badEdit(`${PROJ}/hello.py`)]));
+const refused = 'tried on hello.py was refused, so that file is not changed';
+const s26 = mockReqs().filter((r) => r.tag === 'S26');
+check('S26 sent back exactly twice, naming the file', s26.filter((r) => (r.lastText ?? '').includes(refused)).length === 2 && s26.length === 4, `${s26.length} requests`);
+check('S26 the note quotes what the tool said', s26.some((r) => (r.lastText ?? '').includes('The last refusal said: "Error: old_string not found')));
+check('S26 and the reply ends with the warning naming the file', /MOCK-DONE S26/.test(lastReply.get(jid) ?? '') && /⚠️ No change was applied to: hello\.py\./.test(lastReply.get(jid) ?? ''), lastReply.get(jid));
+
+// ---- S27: a refused Edit followed by a Write of the same file leaves nothing unchanged
+await say(jid, steps('S27', [badEdit(`${PROJ}/hello.py`), { t: 'Write', a: { file_path: `${PROJ}/hello.py`, content: 'print("hi")\n' } }]));
+const s27 = mockReqs().filter((r) => r.tag === 'S27');
+check('S27 the file was rewritten, so no reminder and no warning', !s27.some((r) => (r.lastText ?? '').includes('was refused, so')) && !/⚠️ No change/.test(lastReply.get(jid) ?? ''), lastReply.get(jid));
+
+// ---- S28: a success on another file does not hide the file that was refused every time
+await say(jid, steps('S28', [badEdit(`${PROJ}/hello.py`), { t: 'Write', a: { file_path: `${PROJ}/notes2.txt`, content: 'ok\n' } }]));
+const s28 = mockReqs().filter((r) => r.tag === 'S28');
+check('S28 the unchanged file is named, the written one is not', s28.filter((r) => (r.lastText ?? '').includes(refused)).length === 2 && s28.filter((r) => (r.lastText ?? '').includes(refused)).every((r) => !(r.lastText ?? '').includes('notes2.txt')) && /No change was applied to: hello\.py\./.test(lastReply.get(jid) ?? ''), lastReply.get(jid));
+
 check('S9 repo instructions reach the model', s1body.includes('AGENTS-MARKER'));
 check('S9 detected commands reach the model', s1body.includes('<project_commands>') && s1body.includes('cargo test'));
 const sysDir = `${S}/mock/sys`;
