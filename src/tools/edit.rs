@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
-use super::edit_apply::{apply_udiff, find_fuzzy};
+use super::edit_apply::{apply_udiff, find_fuzzy, nearest_block, occurrence_lines};
+use super::file_io::{self, UndoError};
 use crate::util::paths::resolve_in_workspace;
 use crate::zen_core::{EditFormat, Tool, ToolContext, ToolOutput, ToolPermissionInfo, ToolResultMessage};
 
@@ -66,7 +67,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Perform exact string replacements in an existing file. Alternatively pass `patch` (unified-diff hunks; line numbers are ignored, hunks are located by content) instead of old_string/new_string."
+        "Perform exact string replacements in an existing file. Alternatively pass `patch` (unified-diff hunks; line numbers are ignored, hunks are located by content) instead of old_string/new_string, or `undo: true` to take back your last edit of the file."
     }
 
     fn input_schema(&self) -> Value {
@@ -92,6 +93,10 @@ impl Tool for EditTool {
                 "patch": {
                     "type": "string",
                     "description": "Unified diff to apply instead of old_string/new_string: hunks of lines prefixed ' ' (context), '-' (remove), '+' (add). @@ headers optional; each hunk is matched by its content."
+                },
+                "undo": {
+                    "type": "boolean",
+                    "description": "Revert your last Edit/Write of this file (repeat to go further back). Refused if the file changed since."
                 }
             },
             "required": ["file_path"]
@@ -114,6 +119,7 @@ impl Tool for EditTool {
         if path.is_empty() {
             return Err("file_path is required".to_string());
         }
+        let undo = input.get("undo").and_then(|v| v.as_bool()).unwrap_or(false);
         let patch = input.get("patch").and_then(|v| v.as_str()).unwrap_or("");
         let old = input
             .get("old_string")
@@ -123,9 +129,9 @@ impl Tool for EditTool {
             .get("new_string")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if patch.trim().is_empty() {
+        if patch.trim().is_empty() && !undo {
             if input.get("old_string").is_none() || input.get("new_string").is_none() {
-                return Err("either `patch` or both old_string and new_string are required".to_string());
+                return Err("either `patch`, `undo`, or both old_string and new_string are required".to_string());
             }
             if old == new {
                 return Err("old_string and new_string must be different".to_string());
@@ -151,11 +157,46 @@ impl Tool for EditTool {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let p = resolve_in_workspace(path, ctx.working_dir);
+        // One writer per file for the whole read-modify-write: a subagent or DAG
+        // worker editing the same file must not lose this edit, nor we its.
+        let file_lock = file_io::lock_for(&p);
+        let _writing = file_lock.lock().unwrap_or_else(|e| e.into_inner());
         let content = std::fs::read_to_string(&p).context("Failed to read file")?;
         let fname = p
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string());
+
+        // ----- undo form -----
+        if input.get("undo").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return match file_io::undo(&p, &content) {
+                Ok(Some(previous)) => {
+                    file_io::write_atomic(&p, previous.as_bytes()).context("Failed to write file")?;
+                    let diff = make_unified_diff(&content, &previous, path);
+                    Ok(vec![ToolOutput::Result {
+                        data: serde_json::json!({"path": path, "undone": true, "diff": diff}),
+                        result_for_assistant: format!("Reverted the last edit of {fname}\n{diff}"),
+                    }])
+                }
+                Ok(None) => {
+                    std::fs::remove_file(&p).context("Failed to remove file")?;
+                    Ok(vec![ToolOutput::Result {
+                        data: serde_json::json!({"path": path, "undone": true, "removed": true}),
+                        result_for_assistant: format!("Reverted: {fname} was created by your last write, so it is removed"),
+                    }])
+                }
+                Err(UndoError::NothingToUndo) => Ok(vec![ToolOutput::Result {
+                    data: serde_json::json!({"error": true, "nothingToUndo": true}),
+                    result_for_assistant: format!("Error: no earlier edit of {fname} to undo in this session. The file has not been modified."),
+                }]),
+                Err(UndoError::ChangedSince) => Ok(vec![ToolOutput::Result {
+                    data: serde_json::json!({"error": true, "changedSince": true}),
+                    result_for_assistant: format!(
+                        "Error: {fname} changed after your last edit (by you outside Edit/Write, or by someone else), so undo would discard that change. Read it and edit it back by hand. The file has not been modified."
+                    ),
+                }]),
+            };
+        }
 
         // ----- patch form -----
         if let Some(patch) = input.get("patch").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
@@ -172,7 +213,8 @@ impl Tool for EditTool {
             if outcome.content == content {
                 bail!("the patch changes nothing");
             }
-            std::fs::write(&p, &outcome.content).context("Failed to write file")?;
+            file_io::write_atomic(&p, outcome.content.as_bytes()).context("Failed to write file")?;
+            file_io::record(&p, Some(&content), &outcome.content);
             bump(&EDIT_STATS.udiff);
             let diff = make_unified_diff(&content, &outcome.content, path);
             let how = outcome.how.join(", ");
@@ -219,7 +261,8 @@ impl Tool for EditTool {
                     if new_content == content {
                         bail!("old_string and new_string are identical — no change made");
                     }
-                    std::fs::write(&p, &new_content).context("Failed to write file")?;
+                    file_io::write_atomic(&p, new_content.as_bytes()).context("Failed to write file")?;
+                    file_io::record(&p, Some(&content), &new_content);
                     bump(&EDIT_STATS.fuzzy);
                     let diff = make_unified_diff(&content, &new_content, path);
                     return Ok(vec![ToolOutput::Result {
@@ -238,10 +281,24 @@ impl Tool for EditTool {
                 }
             }
             bump(&EDIT_STATS.failed);
+            let hint = if !new_string.is_empty() && content.contains(new_string) {
+                // The commonest "miss" after a model retries: it already landed.
+                "\nThe text you meant to write is already in the file — this edit may have been applied already. Read the region before editing again.".to_string()
+            } else if let Some(near) = nearest_block(&content, old_string) {
+                format!(
+                    "\nThe closest text in {fname} is lines {}-{} ({:.0}% similar) — copy it exactly:\n{}",
+                    near.first_line,
+                    near.last_line,
+                    near.ratio * 100.0,
+                    near.text
+                )
+            } else {
+                "\nNothing in the file resembles it — Read the region (or Grep for a distinctive line) before editing.".to_string()
+            };
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"error": true, "notFound": true}),
                 result_for_assistant: format!(
-                    "Error: old_string not found in {fname}. The file has not been modified.{}",
+                    "Error: old_string not found in {fname}. The file has not been modified.{}{hint}",
                     if tolerant { " Re-read the file and copy the exact lines, or send a `patch`." } else { "" }
                 ),
             }]);
@@ -249,12 +306,18 @@ impl Tool for EditTool {
 
         if !replace_all && occurrences > 1 {
             bump(&EDIT_STATS.failed);
+            let lines = occurrence_lines(&content, old_string, 6)
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({"error": true, "multipleOccurrences": true, "count": occurrences}),
                 result_for_assistant: format!(
-                    "Error: old_string appears {occurrences} times in the file. \
+                    "Error: old_string appears {occurrences} times in the file (lines {lines}{}). \
                      Use replace_all=true to replace all, or provide a larger string \
-                     with more surrounding context to make it unique."
+                     with more surrounding context to make it unique.",
+                    if occurrences > 6 { ", …" } else { "" }
                 ),
             }]);
         }
@@ -275,7 +338,8 @@ impl Tool for EditTool {
             bail!("old_string and new_string are identical — no change made");
         }
 
-        std::fs::write(&p, &new_content).context("Failed to write file")?;
+        file_io::write_atomic(&p, new_content.as_bytes()).context("Failed to write file")?;
+        file_io::record(&p, Some(&content), &new_content);
         bump(&EDIT_STATS.exact);
 
         let diff = make_unified_diff(&content, &new_content, path);
@@ -425,6 +489,83 @@ mod tests {
         let t = text(&out);
         assert!(t.contains("matched by whitespace"), "{t}");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "fn main() {\n    let b = 3;\n}\n");
+    }
+
+    #[tokio::test]
+    async fn a_miss_shows_the_lines_the_model_was_after() {
+        let (_d, p) = file("fn a() {}\n\nfn handle(req: Request) -> Response {\n    let body = req.body();\n    respond(body)\n}\n");
+        let input = serde_json::json!({
+            "file_path": p,
+            "old_string": "fn handle(request: Request) -> Response {\n    let data = request.body();",
+            "new_string": "fn handle(request: Request) -> Response {\n    let data = request.body().await;"
+        });
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("not found"), "{t}");
+        assert!(t.contains("closest text") && t.contains("lines 3-4"), "{t}");
+        assert!(t.contains("    3\tfn handle(req: Request)"), "the file's own text is shown: {t}");
+    }
+
+    #[tokio::test]
+    async fn a_miss_on_an_edit_that_already_landed_says_so() {
+        let (_d, p) = file("let a = 2;\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "let a = 1;", "new_string": "let a = 2;"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("already in the file"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn a_miss_with_nothing_close_points_at_read_and_grep() {
+        let (_d, p) = file("alpha\nbeta\ngamma\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "completely different content", "new_string": "x"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("Nothing in the file resembles it"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_old_string_names_where_it_occurs() {
+        let (_d, p) = file("x = 1\ny = 2\nx = 1\n");
+        let input = serde_json::json!({"file_path": p, "old_string": "x = 1", "new_string": "x = 3"});
+        let t = text(&EditTool.call(input, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("appears 2 times") && t.contains("lines 1, 3"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn undo_takes_back_the_last_edit_and_only_that() {
+        let (_d, p) = file("one\ntwo\n");
+        let edit = |old: &str, new: &str| serde_json::json!({"file_path": p, "old_string": old, "new_string": new});
+        EditTool.call(edit("one", "ONE"), &ctx(EditFormat::Exact)).await.unwrap();
+        EditTool.call(edit("two", "TWO"), &ctx(EditFormat::Exact)).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "ONE\nTWO\n");
+
+        let undo = serde_json::json!({"file_path": p, "undo": true});
+        let t = text(&EditTool.call(undo.clone(), &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("Reverted the last edit"), "{t}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "ONE\ntwo\n");
+        EditTool.call(undo.clone(), &ctx(EditFormat::Exact)).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "one\ntwo\n");
+
+        let t = text(&EditTool.call(undo, &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("no earlier edit"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn undo_will_not_discard_a_change_made_behind_its_back() {
+        let (_d, p) = file("alpha\n");
+        let edit = serde_json::json!({"file_path": p, "old_string": "alpha", "new_string": "beta"});
+        EditTool.call(edit, &ctx(EditFormat::Exact)).await.unwrap();
+        std::fs::write(&p, "someone else wrote this\n").unwrap();
+        let t = text(&EditTool.call(serde_json::json!({"file_path": p, "undo": true}), &ctx(EditFormat::Exact)).await.unwrap());
+        assert!(t.contains("changed after your last edit"), "{t}");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "someone else wrote this\n");
+    }
+
+    #[tokio::test]
+    async fn undo_alone_is_a_valid_request() {
+        let (_d, p) = file("x\n");
+        let input = serde_json::json!({"file_path": p, "undo": true});
+        EditTool.validate_input(&input, &ctx(EditFormat::Exact)).await.unwrap();
+        let bare = serde_json::json!({"file_path": p});
+        assert!(EditTool.validate_input(&bare, &ctx(EditFormat::Exact)).await.is_err());
     }
 
     #[tokio::test]

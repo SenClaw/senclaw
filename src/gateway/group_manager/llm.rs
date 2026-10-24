@@ -145,6 +145,70 @@ pub fn save_context_compression_enabled(config_path: &Path, enabled: bool) -> Re
     save_global_config(config_path, &cfg)
 }
 
+/// How far a coding chat — a code session, or a chat in a git repository — runs
+/// before it asks. Absent or unreadable means [`Autonomy::Auto`]: the dev loop
+/// runs unattended and only what cannot be taken back asks. `ask` restores a
+/// prompt for every command; `full` asks nothing.
+pub fn get_code_autonomy(config_path: &Path) -> crate::zen_core::Autonomy {
+    load_global_config(config_path)
+        .code_autonomy
+        .as_deref()
+        .and_then(crate::zen_core::Autonomy::parse)
+        .unwrap_or(crate::zen_core::Autonomy::Auto)
+}
+
+pub fn save_code_autonomy(config_path: &Path, level: crate::zen_core::Autonomy) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.code_autonomy = Some(level.as_str().to_string());
+    save_global_config(config_path, &cfg)
+}
+
+/// What one coding request may use. Defaults: 500 tool-calling turns - the
+/// backstop OpenHands uses; the stuck detector is what normally stops a loop
+/// long before - and 10 million tokens, a ceiling a hosted-model bill notices
+/// well before a local run does. Both can be raised, lowered or (tokens) turned
+/// off with 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentLimits {
+    pub code_max_turns: usize,
+    pub max_run_tokens: u64,
+    pub finish_judge: bool,
+}
+
+pub const DEFAULT_CODE_MAX_TURNS: usize = 500;
+pub const DEFAULT_MAX_RUN_TOKENS: u64 = 10_000_000;
+
+pub fn get_agent_limits(config_path: &Path) -> AgentLimits {
+    let c = load_global_config(config_path).agent_limits.unwrap_or_default();
+    AgentLimits {
+        code_max_turns: c.code_max_turns.map(|n| n as usize).filter(|n| *n > 0).unwrap_or(DEFAULT_CODE_MAX_TURNS),
+        max_run_tokens: c.max_run_tokens.unwrap_or(DEFAULT_MAX_RUN_TOKENS),
+        finish_judge: c.finish_judge.unwrap_or(false),
+    }
+}
+
+/// Change some of the limits; `None` leaves a field as it is.
+pub fn save_agent_limits(
+    config_path: &Path,
+    code_max_turns: Option<u64>,
+    max_run_tokens: Option<u64>,
+    finish_judge: Option<bool>,
+) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    let mut limits = cfg.agent_limits.take().unwrap_or_default();
+    if code_max_turns.is_some() {
+        limits.code_max_turns = code_max_turns;
+    }
+    if max_run_tokens.is_some() {
+        limits.max_run_tokens = max_run_tokens;
+    }
+    if finish_judge.is_some() {
+        limits.finish_judge = finish_judge;
+    }
+    cfg.agent_limits = Some(limits);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== Default flows + widget disable list (global, user-set) =====
 
 /// The `defaults` section (open-link / media / search / note handlers + the

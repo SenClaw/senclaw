@@ -1523,6 +1523,7 @@ removed in 83e9720). The layers added on 2026-09-12
 | Git worktrees for `isolation: "worktree"` DAG tasks, `Task` subagents, kanban cards labelled `worktree` | `src/worktree/`, `/api/worktrees*` | [docs/worktree-isolation.md](docs/worktree-isolation.md) |
 | Per-model `EditFormat` (exact/fuzzy/udiff/whole) | `zen_core::EditFormat`, `src/tools/edit_apply.rs` | [docs/edit-formats.md](docs/edit-formats.md) |
 | `senclaw acp` — ACP agent on stdio for Zed/JetBrains | `src/acp/` | [docs/acp.md](docs/acp.md) |
+| Graded unattended runs, repo instructions + detected commands, edit-miss hints, syntax check, verify-before-finish | `src/util/command_risk.rs`, `src/zen_core/permissions.rs`, `src/repo_map/{commands,syntax}.rs` | [docs/code-autonomy.md](docs/code-autonomy.md) |
 | Trajectory JSONL per turn + replay + `scripts/evals/run.py` | `src/trajectory/` | [docs/evals.md](docs/evals.md) |
 
 Rules for Claude:
@@ -1555,6 +1556,64 @@ Rules for Claude:
 - **Migrations that add a column to a Space table must be guarded by the
   table existing** — `apply_space_tables` runs *after* `run_migrations`, and
   an unguarded ALTER took 177 tests down with "no such table".
+
+## Code autonomy: run the dev loop, ask only for what cannot be taken back
+
+`codeAutonomy` (`ask` | `auto` | `full`, default `auto`, served by `/api/agent-behavior`, read every turn) decides how far a coding chat runs before it
+stops for an approval card. `auto` runs edits inside the project and build / test / lint / local-git commands; the card appears for what leaves the
+project or cannot be undone, and **its title says why**. Grading: [`src/util/command_risk.rs`](src/util/command_risk.rs); wiring:
+`PermissionManager::auto_decision`; guide and tables: [docs/code-autonomy.md](docs/code-autonomy.md); `GET /api/code/autonomy` counts ran vs asked.
+
+Rules for Claude:
+
+- **`auto`/`full` apply only where a checkpoint can undo the change** (`PermissionManager::autonomy()` returns `Ask` otherwise): a code session, or a
+  working folder that is a git repository, never `/` or `$HOME` — the same `checkpoints::checkpointable_dir` the shadow repo uses. A plain chat in a
+  non-repo folder keeps asking whatever the setting says. Do not widen this to "any chat" to make a test pass.
+- **Unknown is High.** The grader falls to `High` for a program it does not list, a variable-dependent path, a nested substitution, `eval`. A wrong guess
+  must cost one prompt, never a file; adding a program to the Medium lists needs both its paths and its effect to be checkable from the command line.
+- **A saved "never ask again" grant is checked before the grading**, and `browser_approve` is never answered by any level (`full` included).
+- **Never take two guards of one `std::sync::Mutex` in one statement.** `ensure_engine` read `autonomies.lock()` twice inside a struct literal; both
+  temporaries live to the end of the `let`, so every chat hung at "Preparing MCP servers" with nothing logged. Only a daemon run found it — read the map
+  once into a local.
+- **`env <cmd>` is not read-only.** It was on the first-word whitelist, so `env rm -rf x` ran without a prompt; `shell_safety` now accepts a bare `env` only.
+- **Scratch folders that contain the project are not scratch** (`Scope::assemble`): with the project under `/tmp`, everything beside it would be free to write.
+- **The first-turn project context is `session_works_on_a_project`** (code session, git repo, or project chat): `SENCLAW.md` → `AGENTS.md` → `CLAUDE.md`
+  walking up, plus `<project_commands>` read from the manifests (`repo_map::commands`). It used to be `fn instance_uses_workspace(_) -> bool { false }`.
+- **The syntax check reports only errors the edit introduced** (`repo_map::syntax::introduced_by_edit`, before vs after) and never reverts. A file that
+  was already broken, or code newer than the bundled grammar, must stay silent.
+- **Verify-before-finish sends the agent back at most twice** (`MAX_VERIFY_NUDGES`, `verify_nudge`): round 1 names the command (`suggested_check`: the last check the
+  model ran in this conversation, else the folder's own test command) and says the edits came *after* the last run; round 2 says "call Bash now with `<cmd>`". An answer that
+  still skips it goes to the person with `unverified_warning` appended to the **reply** (`MessageComplete.content`), never to the message kept for the model. Never for
+  subagents or forced-final answers. Source edits only. A model that ran a check in an earlier request argues that run still counts - 2026-10-24, e4b, it then reported a
+  pass for tests that had never run; keep the "after your last check" sentence.
+- **A reply that ends on a colon with no tool call is sent back, twice at most** (`announces_without_acting`, `MAX_ANNOUNCE_NUDGES`): "Đây là nội dung cho file X:" and then
+  nothing was gemma-4-e4b's way of stopping a 7-file project after 2 files, twice in a row; told "you only described it" it called `Write` three times. The test is the colon,
+  not a phrase list, so it works in any language. It runs before the verify round and only in coding sessions. The same two rounds (one shared budget) also catch a run that **has not yet edited a file or run a command** (`acted`; a read-only look around such as one `repo_map` call does not count) and either ends its answer on a `?` or a closing code fence (`asks_or_pastes_instead_of_acting`) or answers a request that names files (`files_named_in`) without any call having touched them: e4b did one of these on 4 of its first 5 samples of a three-file edit - 'Bạn đồng ý với kế hoạch này chứ?', a ```bash read_file "models.py"``` block, a plain 'Xin vui lòng xác nhận kế hoạch này', a lone `repo_map`. The nudge says not to ask for approval and names the unopened files. After the run has acted, a question or a code block at the end is an ordinary answer and is left alone.
+- **An endpoint the owner runs has no total deadline** (`query_llm::total_request_timeout`: loopback, RFC 1918, link-local, `.local` via `is_self_hosted_endpoint`; only a public
+  host keeps 120 s). Two more limits had the same effect and go too: the loop's per-turn cap (`LLM_TURN_TIMEOUT`, 180 s -> the 900 s the local engines get) and the 120 s silence limit, which on such an endpoint becomes 900 s (`needs_patient_client`): a subagent's non-streamed call to the LAN e4b died at exactly 120 s, and a streamed one is silent through prefill. A cut turn surfaces as `LLM_TIMEOUT`, which the pool treats as fatal and **resets the session** (context lost), unlike `NETWORK_ERROR` which preserves it - keep timeouts rare for slow models rather than relying on that.
+- **A coding session is never offered `EnterPlanMode`** (`tools_for_main_agent`): it advertises itself for "new project scaffolding or 3+ files", and a small model spent 100-500 s
+  planning, then hit the `ExitPlanMode` approval card. The person can still switch the session to Plan mode; only the model's way in is removed.
+- **A file whose every `Edit`/`Write` of a request was refused is reported unchanged** (`EditTally`, `unapplied_edits_nudge` / `unapplied_edits_warning`, `MAX_UNAPPLIED_NUDGES`=2): when the
+  answer would end the run, the agent is sent back twice with the file named and the refusal quoted, then the reply carries `⚠️ No change was applied to: models.py`. Per file, not per
+  request: on gemma-4-e4b one run changed `service.py` and had 12 `Edit` calls on `models.py` answered 'old_string not found', then said it was done - the verify reminder needs a
+  successful edit, so it never spoke. A later successful `Write` of the same file clears it (paths are compared by suffix: `models.py`, `./models.py`, `/abs/models.py` are one file). The
+  warning goes on the reply, never on the message kept for the model.
+- **A forced final answer must not be preceded by a `SessionError`.** The pool's wait loop ends the request on one (`ProcessEvent::Error`), and the forced-final
+  call that was meant to explain the stop never reaches the user. The turn cap, the token budget (`maxRunTokens`) and the stuck stop log a warning and
+  push the final nudge; only a forced final that itself fails emits `AGENT_LOOP_LIMIT`. (`TOOL_ERROR_LOOP` still emits first - check it before copying it.)
+- **The duplicate-call guard compares epochs, not just signatures** (`seen_tool_sigs: sig → epoch`). An epoch ends when `may_change_workspace` is true for a
+  fresh call. Without it the second `cargo test` of a session was answered "write your final answer now". Never key the guard on the signature alone.
+- **A coding session is judged by what calls returned** (`zen_core/stuck.rs`): same call + same result ×4, A/B ×3 rounds, same failure ×4. One nudge, history
+  cleared, a second hit within 25 turns stops the run. The name-based stall counter is off for coding sessions (eight `Read`s in a row are normal).
+- **Bash results end with `[exit code N]` when N ≠ 0** (also in the sandboxed branch); `finish_check::result_failed` reads it. Do not move it to a field the
+  model does not see - the model and the loop both need it.
+- **`Edit`/`Write` go through `tools::file_io`**: per-file lock around the whole read-modify-write, `write_atomic` (symlink followed, mode kept), `record` for
+  `Edit {undo: true}`, which refuses when the file no longer holds what the last edit left.
+- **`PreStop` is the hook that can refuse to stop; `Stop` is not.** `Stop` is non-blockable on purpose and marketplace plugins may register it; `PreStop` is
+  withheld from plugins (`VALID_HOOK_EVENTS`), pinned by `marketplace_plugins_get_observing_events_but_never_deciding_ones`.
+- **Never take a std `Mutex` guard across the options literal twice** - see the autonomy-map deadlock above; the same holds for `file_io::lock_for` (hold the
+  guard only across synchronous code, never an `.await`).
+- The Bash tool requires a `description`; a scripted driver that omits it never reaches the permission layer (`Missing required field: description`).
 
 ## Context compression (`src/context_compress/`)
 

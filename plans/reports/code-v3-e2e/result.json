@@ -1,0 +1,41 @@
+{
+ "pass": 65,
+ "fail": 0,
+ "cards": [
+  {
+   "tool": "Bash",
+   "title": "git push origin main — publishes commits to a remote",
+   "content": "{\n  \"command\": \"git push origin main\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:8396596a-20c5-442a-ad3d-59980d67c8d2"
+  },
+  {
+   "tool": "Bash",
+   "title": "rm -rf ~/e2e-nope-dir — deletes /Users/benji/Projects/SenClaw/.worktrees/senclaw-code-v3/plans/reports/code-v3-e2e/run/home/e2e-nope-dir outside the project folder",
+   "content": "{\n  \"command\": \"rm -rf ~/e2e-nope-dir\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:8396596a-20c5-442a-ad3d-59980d67c8d2"
+  },
+  {
+   "tool": "Write",
+   "title": "Write x.txt — edits /Users/benji/Projects/SenClaw/.worktrees/senclaw-code-v3/plans/reports/code-v3-e2e/run/outside/x.txt outside the project folder",
+   "content": "{\n  \"path\": \"/Users/benji/Projects/SenClaw/.worktrees/senclaw-code-v3/plans/reports/code-v3-e2e/run/outside/x.txt\"\n}",
+   "jid": "code:8396596a-20c5-442a-ad3d-59980d67c8d2"
+  },
+  {
+   "tool": "Bash",
+   "title": "python3 hello.py",
+   "content": "{\n  \"command\": \"python3 hello.py\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "code:8396596a-20c5-442a-ad3d-59980d67c8d2"
+  },
+  {
+   "tool": "Bash",
+   "title": "python3 -c \"print(1)\"",
+   "content": "{\n  \"command\": \"python3 -c \\\"print(1)\\\"\",\n  \"description\": \"e2e step\"\n}",
+   "jid": "web:plain"
+  }
+ ],
+ "stats": {
+  "askedAnyway": 3,
+  "level": "auto",
+  "ranUnattended": 53
+ }
+}

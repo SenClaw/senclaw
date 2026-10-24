@@ -1951,6 +1951,14 @@ impl AgentPool {
             self.core_api.set_pre_trigger_skill(jid, enabled);
             let after = crate::gateway::group_manager::get_after_process_enabled(path);
             self.core_api.set_after_process(jid, after);
+            // How far this chat may run before it asks. The engine applies it
+            // only where a checkpoint can undo what it does; read per turn so a
+            // flip in Settings → Agent behavior takes effect on the next message.
+            self.core_api.set_autonomy(
+                jid,
+                crate::gateway::group_manager::get_code_autonomy(path),
+                group.group_type == "code",
+            );
             // Default-flow handlers (open link / media / search / note): render
             // the `## User defaults` block and push it into the engine so the
             // system prompt reflects the user's Plugins → Widget settings.
@@ -3680,6 +3688,10 @@ fn pinned_memory(config: &Mutex<Option<Arc<Config>>>, folder: &str) -> String {
     };
     let path = dir.join(folder).join("MEMORY.md");
     match std::fs::read_to_string(&path) {
+        // A file that is only its template (a title, a comment) says nothing, and a small
+        // model answers the stub instead of the task: the final reply of a real coding run
+        // was "the user is providing an empty memory block".
+        Ok(content) if !has_content(&content) => String::new(),
         Ok(content) => cap_pinned(content.trim()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => {
@@ -3687,6 +3699,24 @@ fn pinned_memory(config: &Mutex<Option<Arc<Config>>>, folder: &str) -> String {
             String::new()
         }
     }
+}
+
+/// Whether a `MEMORY.md` says anything: some line that is not blank, a Markdown
+/// heading or an HTML comment. A fresh profile's file is `# Memory`.
+fn has_content(text: &str) -> bool {
+    let mut in_comment = false;
+    text.lines().any(|l| {
+        let t = l.trim();
+        if in_comment {
+            in_comment = !t.contains("-->");
+            return false;
+        }
+        if t.starts_with("<!--") {
+            in_comment = !t.contains("-->");
+            return false;
+        }
+        !(t.is_empty() || t.starts_with('#'))
+    })
 }
 
 /// How much of `MEMORY.md` rides along with every turn (about 2,000 tokens).
@@ -3762,6 +3792,25 @@ mod pinned_memory_tests {
             out.chars().filter(|c| *c == 'ế').count(),
             PINNED_MEMORY_MAX_CHARS
         );
+    }
+
+    #[test]
+    fn a_template_only_file_is_not_pinned() {
+        assert!(!has_content(""));
+        assert!(!has_content("# Memory\n"));
+        assert!(!has_content("# Memory\n\n## Notes\n\n"));
+        assert!(!has_content("# Memory\n<!-- add standing rules here\n   one per line -->\n"));
+        assert!(has_content("# Memory\n- likes tea\n"));
+        assert!(has_content("standing rule"));
+        assert!(has_content("<!-- note -->\nreal line"));
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("main")).unwrap();
+        std::fs::write(dir.path().join("main").join("MEMORY.md"), "# Memory\n").unwrap();
+        let mut cfg = crate::config::Config::from_env();
+        cfg.paths.profiles_dir = dir.path().to_path_buf();
+        let config = Mutex::new(Some(Arc::new(cfg)));
+        assert_eq!(pinned_memory(&config, "main"), "", "the stub never reaches the model");
     }
 
     #[test]

@@ -1493,6 +1493,23 @@ paths:
       - code
       x-handler: run_artifact
       x-untyped: true
+  /api/code/autonomy:
+    get:
+      operationId: get_api_code_autonomy
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Autonomy stats
+      tags:
+      - code
+      x-handler: autonomy_stats
+      x-untyped: true
   /api/code/edit-stats:
     get:
       operationId: get_api_code_edit_stats
@@ -11455,5 +11472,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 407
-x-untyped-operations: 502
+x-route-count: 408
+x-untyped-operations: 503

@@ -76,6 +76,9 @@ pub struct ZenCoreApi {
     /// to answer — the agent stopped at its first tool and waited out its
     /// timeout.
     default_skip_permissions: std::sync::atomic::AtomicBool,
+    /// Per-chat [`crate::zen_core::Autonomy`], kept for engines created later
+    /// (`ensure_engine` builds its options from here) and pushed to live ones.
+    autonomies: Mutex<HashMap<String, (crate::zen_core::Autonomy, bool)>>,
 }
 
 /// Wire-format tool-execution event used by the AgentPool → WS gateway path.
@@ -109,6 +112,7 @@ impl ZenCoreApi {
             on_widget_emit: Arc::new(Mutex::new(None)),
             usage_recorder: Arc::new(Mutex::new(None)),
             default_skip_permissions: std::sync::atomic::AtomicBool::new(false),
+            autonomies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -210,6 +214,10 @@ impl ZenCoreApi {
         let skip = self
             .default_skip_permissions
             .load(std::sync::atomic::Ordering::Relaxed);
+        // One lock, read once: two `lock()` calls inside the struct literal below
+        // keep both guards alive to the end of the statement, and a std mutex
+        // taken twice by one thread never comes back.
+        let (autonomy, code_session) = self.autonomies.lock().unwrap().get(jid).copied().unwrap_or_default();
         let opts = ZenCoreOptions {
             instance_id: jid.to_string(),
             model_config_id: self.model_overrides.lock().unwrap().get(jid).cloned(),
@@ -222,6 +230,8 @@ impl ZenCoreApi {
             skip_bash_exec_permission: skip,
             skip_skill_permission: skip,
             skip_mcp_tool_permission: skip,
+            autonomy,
+            code_session,
             ..Default::default()
         };
         let engine = ZenEngine::new(opts, self.mcp_manager.clone());
@@ -551,6 +561,13 @@ impl CoreApi for ZenCoreApi {
 
     fn set_default_skip_permissions(&self, skip: bool) {
         ZenCoreApi::set_default_skip_permissions(self, skip);
+    }
+
+    fn set_autonomy(&self, jid: &str, level: crate::zen_core::Autonomy, code_session: bool) {
+        self.autonomies.lock().unwrap().insert(jid.to_string(), (level, code_session));
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_autonomy(level, code_session);
+        }
     }
 
     fn update_thinking(&self, jid: &str, enabled: bool) {
@@ -990,5 +1007,23 @@ mod tests {
             std::path::Path::new(&dir).is_dir(),
             "default working dir must exist: {dir}"
         );
+    }
+
+    /// Found by a real daemon run, not by a unit test of the pieces: reading the
+    /// per-chat autonomy twice inside the options literal kept two guards of one
+    /// mutex alive, and every chat hung at "Preparing MCP servers".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_engine_created_after_set_autonomy_does_not_hang() {
+        use crate::agent::agent_pool::CoreApi;
+        let api = Arc::new(ZenCoreApi::new(None));
+        api.set_autonomy("code:regression", crate::zen_core::Autonomy::Auto, true);
+        let a = Arc::clone(&api);
+        let made = tokio::task::spawn_blocking(move || {
+            a.ensure_engine("code:regression");
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(20), made)
+            .await
+            .expect("ensure_engine deadlocked on the autonomy map")
+            .unwrap();
     }
 }

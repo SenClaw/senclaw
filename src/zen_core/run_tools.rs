@@ -729,6 +729,24 @@ async fn run_single_tool(
         tool_id,
         tool.is_read_only()
     );
+    // Syntax guard: remember what the file held, so the edit is judged by the
+    // errors it introduced and not by the ones the file already had.
+    let syntax_probe: Option<(String, Option<String>)> = if matches!(tool_name.as_str(), "Edit" | "Write") {
+        input
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .filter(|p| crate::repo_map::lang::spec_for_path(p).is_some())
+            .map(|p| {
+                let before = std::fs::metadata(p)
+                    .ok()
+                    .filter(|m| m.len() <= 1024 * 1024)
+                    .and_then(|_| std::fs::read_to_string(p).ok());
+                (p.to_string(), before)
+            })
+    } else {
+        None
+    };
+
     match tool.call(input.clone(), &tool_ctx).await {
         Ok(outputs) => {
             tracing::info!(
@@ -788,6 +806,19 @@ async fn run_single_tool(
                                             .unwrap_or(result_for_assistant);
                                     }
                                     data = new_out;
+                                }
+                            }
+                        }
+
+                        // Parse check: an edit that leaves the file unparseable says so
+                        // in its own result, before the model builds on it.
+                        if let Some((p, before)) = &syntax_probe {
+                            if let Ok(after) = std::fs::read_to_string(p) {
+                                if let Some(note) = crate::repo_map::syntax::introduced_by_edit(p, before.as_deref(), &after) {
+                                    result_for_assistant.push_str(&note);
+                                    if let serde_json::Value::Object(ref mut map) = data {
+                                        map.insert("syntaxErrors".into(), serde_json::Value::Bool(true));
+                                    }
                                 }
                             }
                         }

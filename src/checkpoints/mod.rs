@@ -37,6 +37,22 @@ pub use shadow_repo::{ChangedFile, RestoreReport, ShadowRepo};
 /// flagged; the caller can still ask per file.
 pub const MAX_DIFF_BYTES: usize = 200 * 1024;
 
+/// The folder a chat would be checkpointed in, ignoring the per-chat switch:
+/// a code session's folder, or any folder that is a git repository, but never
+/// `/` or `$HOME`. One rule, shared with the unattended-run policy
+/// ([`crate::zen_core::Autonomy`]): a chat runs without asking only where every
+/// change it makes can be undone from a checkpoint.
+pub fn checkpointable_dir(working_dir: &str, code_session: bool) -> Option<PathBuf> {
+    if working_dir.is_empty() {
+        return None;
+    }
+    let dir = crate::util::paths::expand_tilde(working_dir);
+    if !dir.is_absolute() || !dir.is_dir() || is_forbidden_root(&dir) {
+        return None;
+    }
+    (code_session || dir.join(".git").exists()).then_some(dir)
+}
+
 /// Tools whose completion always produces a checkpoint.
 const WRITE_TOOLS: &[&str] = &["Edit", "Write", "NotebookEdit"];
 
@@ -158,18 +174,10 @@ impl CheckpointService {
     /// `group_type == "code"` opts a non-git folder in; everything else needs
     /// a `.git` to prove it is a project and not somebody's home folder.
     pub fn eligible_dir(&self, jid: &str, working_dir: &str, group_type: &str) -> Option<PathBuf> {
-        if working_dir.is_empty() || !self.is_enabled(jid) {
+        if !self.is_enabled(jid) {
             return None;
         }
-        let dir = crate::util::paths::expand_tilde(working_dir);
-        if !dir.is_absolute() || !dir.is_dir() || is_forbidden_root(&dir) {
-            return None;
-        }
-        if group_type == "code" || dir.join(".git").exists() {
-            Some(dir)
-        } else {
-            None
-        }
+        checkpointable_dir(working_dir, group_type == "code")
     }
 
     // ----- recording ----------------------------------------------------

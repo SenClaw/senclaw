@@ -200,6 +200,8 @@ impl ZenEngine {
             options.skip_skill_permission,
             options.skip_mcp_tool_permission,
         );
+        permission_manager.set_autonomy(options.autonomy, options.code_session);
+        permission_manager.set_workspace(&options.working_dir);
 
         // A **read** timeout, not a total one: this client only ever carries LLM
         // requests, and a total deadline is a ceiling on how long a generation
@@ -607,6 +609,15 @@ impl ZenEngine {
         // a confusing "Missing required field: summary" error mid-conversation.
         if !is_plan && !is_dag {
             filtered.retain(|t| t.name() != crate::tools::TASK_DONE_TOOL_NAME);
+        }
+
+        // A coding session runs unattended. Plan mode ends in an approval request, and
+        // `EnterPlanMode` advertises itself for "new project scaffolding or any task
+        // spanning 3+ files" - so a small model took it on both a new-project and a
+        // three-file edit and spent 100-500 s planning before its first `Write`. Only the
+        // *entry* goes: the person can still put the session in Plan mode themselves.
+        if !is_plan && !is_dag && Self::session_works_on_a_project(&opts) {
+            filtered.retain(|t| t.name() != "EnterPlanMode");
         }
 
         // Layer 5 — defer filter. Deferred tools are excluded unless either:
@@ -1312,6 +1323,16 @@ impl ZenCore for ZenEngine {
     fn set_working_dir(&self, dir: &str) {
         info!("[{}] set_working_dir: {dir}", self.instance_id);
         self.options.write().unwrap().working_dir = dir.to_owned();
+        self.permission_manager.set_workspace(dir);
+    }
+
+    fn set_autonomy(&self, level: Autonomy, code_session: bool) {
+        {
+            let mut opts = self.options.write().unwrap();
+            opts.autonomy = level;
+            opts.code_session = code_session;
+        }
+        self.permission_manager.set_autonomy(level, code_session);
     }
 
     fn clear_working_dir(&self) {
@@ -1777,6 +1798,18 @@ impl ZenEngine {
             .edit_format
             .and_then(|f| f.prompt_reminder())
             .map(str::to_string);
+        // How to work in a project, for sessions that have one. It shares the
+        // edit-format slot: both are short, static, and belong after the repo map.
+        let edit_format_reminder = if Self::session_works_on_a_project(&opts) {
+            let unattended = self.permission_manager.autonomy() != Autonomy::Ask;
+            let style = crate::zen_core::prompt::code_session_reminder(unattended);
+            Some(match edit_format_reminder {
+                Some(f) => format!("{f}\n\n{style}"),
+                None => style,
+            })
+        } else {
+            edit_format_reminder
+        };
 
         let soul_block = Self::load_soul_prompt_block(&opts.agent_data_dir);
 
@@ -1873,7 +1906,7 @@ impl ZenEngine {
                     .identity_refresh_pending
                     .swap(false, Ordering::Relaxed);
             if refresh_identity {
-                let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
+                let include_project_doc = Self::session_works_on_a_project(&opts);
                 if let Some(ctx) = Self::collect_first_turn_context(
                     &opts.working_dir,
                     include_project_doc,
@@ -1936,6 +1969,9 @@ impl ZenEngine {
         let hook_manager_spawn = self.hook_manager.clone();
         let session_id_spawn = self.session_id.read().unwrap().clone().unwrap_or_default();
         let cwd_spawn = opts.working_dir.clone();
+        // Read per turn, like the control-plane settings, so a change in Settings applies to the next message.
+        let coding_session = Self::session_works_on_a_project(&opts);
+        let limits = crate::gateway::group_manager::get_agent_limits(&crate::control_plane::default_config_path());
         tokio::spawn(async move {
             let eb = event_bus_spawn.clone();
             // Mid-turn inject source: drains queued (non-command) inputs so
@@ -1982,8 +2018,13 @@ impl ZenEngine {
                 // Pass through the current agent_mode so the conversation loop
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
-                max_turns_override: opts.max_agent_turns,
-                pending_inject: Some(pending_inject),
+                coding_session,
+                // A coding task is dozens of read-edit-run turns, not the thirty a chat
+                // gets; the stuck detector and the token cap are what stop a runaway.
+                max_turns_override: opts.max_agent_turns.or(coding_session.then_some(limits.code_max_turns)),
+                max_run_tokens: coding_session.then_some(limits.max_run_tokens).filter(|n| *n > 0),
+                finish_judge: coding_session && limits.finish_judge,
+                    pending_inject: Some(pending_inject),
             };
 
             let result = conversation::query(messages, &config, &cancel).await;
@@ -2034,7 +2075,8 @@ impl ZenEngine {
                 }
             };
 
-            // Fire Stop hook (non-blockable)
+            // Fire Stop hook (non-blockable; a hook that must be able to refuse
+            // uses PreStop, which the loop runs before the turn ends)
             if hook_manager_spawn.has_hooks_for_event(&HookEvent::Stop) {
                 let base = HookInputBase {
                     hook_event_name: HookEvent::Stop,
@@ -2683,6 +2725,9 @@ until you have carried out the skill's steps.\n\
             // Compaction summarises what was said, not what was recalled.
             turn_context: None,
             agent_mode: opts.agent_mode,
+            coding_session: false,
+            max_run_tokens: None,
+            finish_judge: false,
             max_turns_override: None,
             pending_inject: None,
         };
@@ -2795,14 +2840,22 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
         ))
     }
 
-    /// Whether the given instance id corresponds to an agent that operates
-    /// inside a real workspace (code edits, file ops, project bash). Only
-    /// these sessions get `SENCLAW.md` injected into their first user turn;
-    /// regular chat agents (`web:*`, `app:*`, `virtual:*`) skip it to save
-    /// ~2k tokens per turn and avoid polluting attention with project docs
-    /// irrelevant to the chat query.
-    fn instance_uses_workspace(_instance_id: &str) -> bool {
-        false
+    /// Whether this session works inside a project folder: a code session, a
+    /// chat whose folder is a git repository, or a chat created in a project.
+    /// Only these get the repository's own instructions (`AGENTS.md` /
+    /// `CLAUDE.md` / `SENCLAW.md`) and its build and test commands on the first
+    /// turn; a regular chat (`web:*`, `app:*`, `virtual:*`) skips them, which
+    /// saves ~2k tokens per turn and keeps a project's notes out of an
+    /// unrelated question.
+    ///
+    /// This used to be `fn instance_uses_workspace(_: &str) -> bool { false }`,
+    /// so no session — code sessions included — ever saw the repository's
+    /// instructions, and a model on a local engine started every task without
+    /// knowing how the project is built or tested.
+    fn session_works_on_a_project(opts: &ZenCoreOptions) -> bool {
+        opts.code_session
+            || opts.project_context.is_some()
+            || crate::checkpoints::checkpointable_dir(&opts.working_dir, false).is_some()
     }
 
     /// Read `SENCLAW.md` (walks up from `working_dir`), the user profile, and
@@ -2812,8 +2865,9 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
     /// When `include_project_doc` is `false`, only the date line is emitted —
     /// the project markdown is skipped entirely. Used for non-workspace agents.
     ///
-    /// Reads `SENCLAW.md` first, then falls back to `CLAUDE.md` for backward
-    /// compatibility with existing repos that haven't renamed yet.
+    /// Reads `SENCLAW.md` first, then `AGENTS.md` (the file most agents share),
+    /// then `CLAUDE.md` for repos that have not renamed theirs. The first one
+    /// found while walking up from the working folder is the one used.
     ///
     /// The user profile (Soul Core) rides here rather than in the per-turn
     /// memory blocks in `AgentPool` because it is stable for the whole
@@ -2844,7 +2898,7 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
             let mut dir = std::path::Path::new(working_dir).to_path_buf();
             let project_doc: Option<(&'static str, String)> = loop {
                 let mut hit: Option<(&'static str, String)> = None;
-                for fname in ["SENCLAW.md", "CLAUDE.md"] {
+                for fname in ["SENCLAW.md", "AGENTS.md", "CLAUDE.md"] {
                     let candidate = dir.join(fname);
                     if candidate.exists() {
                         if let Ok(content) = std::fs::read_to_string(&candidate) {
@@ -2873,6 +2927,10 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
                     );
                     parts.push(format!("Project instructions ({fname}):\n{body}"));
                 }
+            }
+            // How this repository is built and tested, read from its manifests.
+            if let Some(block) = crate::repo_map::commands::render(std::path::Path::new(working_dir)) {
+                parts.push(block);
             }
         }
 
@@ -3227,6 +3285,24 @@ mod tests {
         assert!(names.contains(&"Read"));
         assert!(!names.contains(&"Write"));
         assert!(!names.contains(&"Glob"));
+    }
+
+    #[test]
+    fn a_coding_session_is_not_offered_plan_mode_but_a_plain_chat_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = |code_session: bool| {
+            let opts = ZenCoreOptions {
+                instance_id: format!("test-planmode-{code_session}"),
+                working_dir: dir.path().to_string_lossy().into_owned(),
+                code_session,
+                ..Default::default()
+            };
+            let engine = ZenEngine::new(opts, None);
+            engine.tools_for_main_agent().iter().map(|t| t.name().to_string()).collect::<Vec<_>>()
+        };
+        assert!(!names(true).iter().any(|n| n == "EnterPlanMode"), "a coding session never enters Plan mode on its own");
+        assert!(names(false).iter().any(|n| n == "EnterPlanMode"), "a plain chat keeps it");
+        assert!(names(true).iter().any(|n| n == "Write"), "and keeps everything else");
     }
 
     #[test]
@@ -4552,5 +4628,57 @@ mod tests {
             .find(|d| d["function"]["name"] == name)
             .expect("the loaded tool is declared on the next turn");
         assert_eq!(lake["function"]["parameters"], schema);
+    }
+
+    // ------------------------------------------------------------------
+    // First-turn context of a coding session
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn a_coding_session_gets_the_repositorys_instructions_and_how_to_test_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("AGENTS.md"), "Use tabs. Never edit generated/.").unwrap();
+        std::fs::write(d.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        let dir = d.path().to_string_lossy().to_string();
+
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:abc").unwrap();
+        assert!(ctx.contains("Project instructions (AGENTS.md)"), "{ctx}");
+        assert!(ctx.contains("Never edit generated/"), "{ctx}");
+        assert!(ctx.contains("<project_commands>") && ctx.contains("cargo test"), "{ctx}");
+
+        // A chat that is not working on a project carries neither.
+        let plain = ZenEngine::collect_first_turn_context(&dir, false, "web:abc").unwrap();
+        assert!(!plain.contains("Use tabs") && !plain.contains("<project_commands>"), "{plain}");
+    }
+
+    #[test]
+    fn the_projects_own_file_order_is_senclaw_then_agents_then_claude() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("CLAUDE.md"), "from-claude").unwrap();
+        std::fs::write(d.path().join("AGENTS.md"), "from-agents").unwrap();
+        let dir = d.path().to_string_lossy().to_string();
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:a").unwrap();
+        assert!(ctx.contains("from-agents") && !ctx.contains("from-claude"), "{ctx}");
+        std::fs::write(d.path().join("SENCLAW.md"), "from-senclaw").unwrap();
+        let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:a").unwrap();
+        assert!(ctx.contains("from-senclaw") && !ctx.contains("from-agents"), "{ctx}");
+    }
+
+    #[test]
+    fn which_sessions_count_as_working_on_a_project() {
+        let git = tempfile::tempdir().unwrap();
+        std::fs::create_dir(git.path().join(".git")).unwrap();
+        let plain = tempfile::tempdir().unwrap();
+        let opts = |dir: &std::path::Path| ZenCoreOptions { working_dir: dir.to_string_lossy().to_string(), ..Default::default() };
+
+        assert!(ZenEngine::session_works_on_a_project(&opts(git.path())), "a git repository");
+        assert!(!ZenEngine::session_works_on_a_project(&opts(plain.path())), "an ordinary folder");
+        let mut code = opts(plain.path());
+        code.code_session = true;
+        assert!(ZenEngine::session_works_on_a_project(&code), "a code session");
+        let mut project = opts(plain.path());
+        project.project_context = Some("<project>x</project>".into());
+        assert!(ZenEngine::session_works_on_a_project(&project), "a chat created in a project");
+        assert!(!ZenEngine::session_works_on_a_project(&ZenCoreOptions::default()), "no folder");
     }
 }

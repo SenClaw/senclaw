@@ -29,22 +29,48 @@ pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// [`REQUEST_TIMEOUT`] exists to bound a remote provider that has stopped
 /// answering. But a total deadline is *also* a ceiling on how long a generation
-/// may legitimately take, and a local engine blows through it honestly:
+/// may legitimately take, and a model the owner runs blows through it honestly:
 /// `DEFAULT_MLX_MAX_NEW_TOKENS` is 8192, which at ~60 tok/s is over two minutes
-/// of steady output — before prefill, and before a cold weight load. Cutting
-/// that off looks exactly like the model dying mid-sentence.
+/// of steady output - before prefill, and before a cold weight load. A 4B model
+/// on another machine of the owner's network (LM Studio at 192.168.x.x, 7-10
+/// tok/s, a 26k-token prompt) needs two minutes for one 100-line `Write`. Cutting
+/// that off looks exactly like the model dying mid-sentence: "Network error:
+/// operation timed out", and the run ends.
 ///
-/// So a loopback endpoint gets no deadline. Nothing is lost: a local engine
+/// So an endpoint the owner runs - this machine or a box on their own network
+/// ([`is_self_hosted_endpoint`]) - gets no deadline. Nothing is lost: a server
 /// that hangs is caught by the client's `read_timeout`
-/// ([`STREAM_STALL_TIMEOUT`]), which resets on every byte — silence kills, a
-/// slow-but-moving stream does not. This covers Ollama and LM Studio as much as
-/// it covers a SenClaw local model.
+/// ([`STREAM_STALL_TIMEOUT`]), which resets on every byte - silence kills, a
+/// slow-but-moving stream does not. Only a public host keeps the total deadline.
 fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
-    if is_loopback_endpoint(&profile.base_url) {
+    if is_self_hosted_endpoint(&profile.base_url) {
         None
     } else {
         Some(REQUEST_TIMEOUT)
     }
+}
+
+/// How long a request to an endpoint the owner runs may stay silent. The 120 s
+/// [`STREAM_STALL_TIMEOUT`] is right for a provider on the internet, and wrong here in
+/// two ways. A request that is not streamed (a subagent's, the judge's) gets nothing
+/// back until the whole reply exists, so 120 s is a total deadline in disguise: a
+/// subagent's call to a LAN gemma-4-e4b (2,300 reasoning tokens at 7-10 tok/s) died at
+/// exactly 120 s. And a streamed one is silent through prefill and thinking: the
+/// first request after a cancelled one waits behind the server still finishing it.
+/// 15 minutes - the same budget a turn gets (`LLM_TURN_TIMEOUT_LOCAL`) - is a dead
+/// server, not a slow one; Stop still ends the read at once.
+const OWN_SERVER_SILENCE: Duration = Duration::from_secs(900);
+
+/// Whether a request goes out on the patient client (see [`OWN_SERVER_SILENCE`]).
+fn needs_patient_client(base_url: &str) -> bool {
+    is_self_hosted_endpoint(base_url)
+}
+
+fn patient_client() -> Option<&'static Client> {
+    static CLIENT: std::sync::OnceLock<Option<Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| Client::builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(OWN_SERVER_SILENCE).build().ok())
+        .as_ref()
 }
 
 /// The host a base URL names, lowercased, with scheme, userinfo, port and path
@@ -213,9 +239,11 @@ pub(crate) async fn post_authed(
 ) -> Result<reqwest::Response> {
     let mut token = profile.api_key.clone();
 
-    // No total deadline for a loopback engine — see `total_request_timeout`.
-    // The client's `read_timeout` is what catches a stall in that case.
+    // No total deadline for a server the owner runs - see `total_request_timeout`.
+    // The client's `read_timeout` is what catches a stall in that case, and a request
+    // goes out on the patient client - see `needs_patient_client`.
     let deadline = total_request_timeout(profile);
+    let client = if needs_patient_client(&profile.base_url) { patient_client().unwrap_or(client) } else { client };
 
     for attempt in 0..2 {
         let mut builder = client.post(url).json(body);
@@ -1157,6 +1185,33 @@ fn base_url_hint(base_url: &str) -> String {
     }
 }
 
+/// The message of an error a server sent inside an event stream (`{"error":{"message":...}}`,
+/// `{"error":"..."}` or a bare `{"message":...}`), or `None` when the chunk is not an error.
+fn stream_error_message(chunk: &Value) -> Option<String> {
+    match chunk.get("error") {
+        Some(Value::Object(e)) => {
+            let message = e.get("message").and_then(Value::as_str).filter(|m| !m.trim().is_empty());
+            Some(message.map(str::to_string).unwrap_or_else(|| Value::Object(e.clone()).to_string()))
+        }
+        Some(Value::String(e)) if !e.trim().is_empty() => Some(e.clone()),
+        _ => chunk.get("message").and_then(Value::as_str).filter(|m| !m.trim().is_empty()).map(str::to_string),
+    }
+}
+
+/// How big a request a server says it was given and how much it can take, from the wording of the
+/// servers that say so: llama.cpp / LM Studio ("request (12719 tokens) exceeds the available context
+/// size (8192 tokens)", `"n_prompt_tokens":12719,"n_ctx":8192`). `(needed, window)`.
+fn context_overflow_numbers(msg: &str) -> Option<(u64, u64)> {
+    fn number_after(text: &str, marker: &str) -> Option<u64> {
+        let rest = &text[text.find(marker)? + marker.len()..];
+        let digits: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    }
+    let needed = number_after(msg, "\"n_prompt_tokens\":").or_else(|| number_after(msg, "request ("))?;
+    let window = number_after(msg, "\"n_ctx\":").or_else(|| number_after(msg, "context size ("))?;
+    Some((needed, window))
+}
+
 async fn parse_openai_stream(
     response: reqwest::Response,
     cancel: &CancellationToken,
@@ -1215,6 +1270,17 @@ async fn parse_openai_stream(
                 }
             };
 
+            // A server that cannot answer says so inside the stream: LM Studio / llama.cpp
+            // send `event: error` + `data: {"error":{"message":"request (12719 tokens) exceeds
+            // the available context size (8192 tokens)"}}` with a 200 status. Read as a chunk
+            // with no choices it was an empty reply, retried twice, and reported as "the model
+            // returned no response (auth failure, model overload, tool count)".
+            if delta.get("choices").is_none() {
+                if let Some(message) = stream_error_message(&delta) {
+                    bail!("{message}");
+                }
+            }
+
             if model_name.is_empty() {
                 model_name = delta["model"].as_str().unwrap_or("").to_string();
             }
@@ -1236,7 +1302,9 @@ async fn parse_openai_stream(
                                 }
                             }
                         }
-                        if let Some(reasoning) = delta["reasoning_content"].as_str() {
+                        // `reasoning_content` (DeepSeek, vLLM) or `reasoning` (LM Studio, OpenRouter:
+                        // gpt-oss streams its analysis under this name).
+                        if let Some(reasoning) = delta["reasoning_content"].as_str().or_else(|| delta["reasoning"].as_str()) {
                             reasoning_buf.push_str(reasoning);
                         }
                         if let Some(tc_deltas) = delta["tool_calls"].as_array() {
@@ -1291,6 +1359,7 @@ fn parse_openai_non_stream(json: &Value) -> Result<Message> {
     let text = msg["content"].as_str().unwrap_or("").to_string();
     let reasoning = msg
         .get("reasoning_content")
+        .or_else(|| msg.get("reasoning"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -1758,14 +1827,26 @@ impl LlmError {
             };
         }
 
-        // OpenAI context length error
+        // Context length error: OpenAI's wording, and the local servers' (llama.cpp / LM Studio:
+        // "exceeds the available context size", type `exceed_context_size_error`).
         if msg_lower.contains("context_length_exceeded")
             || msg_lower.contains("maximum context length")
             || msg_lower.contains("reduce the length")
+            || msg_lower.contains("exceeds the available context size")
+            || msg_lower.contains("exceed_context_size_error")
         {
+            // A server that says how much it can take is a setting to raise, not a prompt to
+            // shorten: the agent's own prompt is ~25k tokens before the first question.
+            let message = match context_overflow_numbers(&msg) {
+                Some((needed, window)) => format!(
+                    "Context length exceeded: this request needs about {needed} tokens but the model server only has a window of {window}. \
+Load the model with a larger context length (LM Studio: Context Length; llama.cpp: -c) - the agent's prompt alone is about 25,000 tokens, so 32768 or more - or pick a model with a larger window."
+                ),
+                None => "Context length exceeded".into(),
+            };
             return Self {
                 code: "CONTEXT_TOO_LONG".into(),
-                message: "Context length exceeded".into(),
+                message,
                 error_type: "context_length_exceeded".into(),
                 is_context_length: true,
             };
@@ -2165,7 +2246,7 @@ mod loopback_tests {
     }
 
     #[test]
-    fn a_loopback_profile_gets_no_total_deadline() {
+    fn a_self_hosted_profile_gets_no_total_deadline() {
         let mut p = super::tests::profile("openai", "gpt-4");
         p.base_url = "https://api.openai.com/v1".into();
         assert_eq!(total_request_timeout(&p), Some(REQUEST_TIMEOUT));
@@ -2174,6 +2255,86 @@ mod loopback_tests {
         // a total deadline would cut it mid-sentence.
         p.base_url = "http://127.0.0.1:11434/v1".into();
         assert_eq!(total_request_timeout(&p), None);
+
+        // LM Studio on another machine of the owner's network: 7-10 tok/s, so one
+        // long tool call takes over two minutes. It ended every run with
+        // "Network error: operation timed out".
+        for url in ["http://192.168.0.93:1234/v1", "http://10.1.2.3:11434/v1", "http://172.16.0.5:8080/v1", "http://my-mac.local:1234/v1", "http://[fd12:3456::1]:8080/v1"] {
+            p.base_url = url.into();
+            assert_eq!(total_request_timeout(&p), None, "{url}");
+        }
+
+        // Silent through prefill, thinking and (not streamed) the whole reply: only on a
+        // server the owner runs does a request get the patient client.
+        assert!(super::needs_patient_client("http://192.168.0.93:1234/v1"));
+        assert!(super::needs_patient_client("http://127.0.0.1:11434/v1"));
+        assert!(!super::needs_patient_client("https://api.deepseek.com"), "a public host keeps the short limit");
+        assert!(super::patient_client().is_some());
+
+        // Look-alikes of a private address are public hosts and keep the deadline.
+        for url in ["http://192.168.0.1.evil.com/v1", "http://10.0.0.1x/v1", "https://api.deepseek.com", ""] {
+            p.base_url = url.into();
+            assert_eq!(total_request_timeout(&p), Some(REQUEST_TIMEOUT), "{url}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod server_error_tests {
+    use super::{context_overflow_numbers, parse_openai_stream, stream_error_message, LlmError};
+    use tokio_util::sync::CancellationToken;
+
+    /// What LM Studio sent for gpt-oss-20b loaded with an 8192-token window, byte for byte
+    /// (the 200 status and the event name are why it was read as an empty reply).
+    const LM_STUDIO_OVERFLOW: &str = "event: error\ndata: {\"error\":{\"message\":\"Engine protocol predict request returned 400: {\\\"error\\\":{\\\"code\\\":400,\\\"message\\\":\\\"request (12719 tokens) exceeds the available context size (8192 tokens), try increasing it\\\",\\\"type\\\":\\\"exceed_context_size_error\\\",\\\"n_prompt_tokens\\\":12719,\\\"n_ctx\\\":8192}}\"},\"message\":\"x\"}\n\n";
+
+    fn response(body: &'static str) -> reqwest::Response {
+        reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(body)))
+    }
+
+    #[tokio::test]
+    async fn a_server_that_answers_an_error_inside_the_stream_is_an_error_not_an_empty_reply() {
+        let err = parse_openai_stream(response(LM_STUDIO_OVERFLOW), &CancellationToken::new(), None).await.unwrap_err();
+        let classified = LlmError::classify(&err);
+        assert_eq!(classified.code, "CONTEXT_TOO_LONG", "{err:#}");
+        assert!(classified.is_context_length);
+        assert!(classified.message.contains("about 12719 tokens") && classified.message.contains("window of 8192"), "{}", classified.message);
+        assert!(classified.message.contains("32768"), "tells what to raise it to");
+    }
+
+    #[tokio::test]
+    async fn another_error_shape_keeps_the_servers_own_words() {
+        let err = parse_openai_stream(response("data: {\"error\":{\"message\":\"model is loading\"}}\n\n"), &CancellationToken::new(), None).await.unwrap_err();
+        assert!(format!("{err:#}").contains("model is loading"));
+        let err = parse_openai_stream(response("data: {\"error\":\"quota exhausted\"}\n\n"), &CancellationToken::new(), None).await.unwrap_err();
+        assert!(format!("{err:#}").contains("quota exhausted"));
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_stream_is_untouched_and_reasoning_is_read_under_either_name() {
+        // gpt-oss through LM Studio streams its analysis as `reasoning`, DeepSeek as `reasoning_content`.
+        for field in ["reasoning", "reasoning_content"] {
+            let body: &'static str = Box::leak(
+                format!(
+                    "data: {{\"model\":\"m\",\"choices\":[{{\"delta\":{{\"{field}\":\"think\"}}}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{\"content\":\"hi\"}}}}]}}\n\ndata: [DONE]\n\n"
+                )
+                .into_boxed_str(),
+            );
+            let msg = parse_openai_stream(response(body), &CancellationToken::new(), None).await.unwrap();
+            let (text, reasoning, calls) = crate::zen_core::conversation::extract_content(&msg);
+            assert_eq!((text.as_str(), reasoning.as_str(), calls.len()), ("hi", "think", 0), "{field}");
+        }
+    }
+
+    #[test]
+    fn the_numbers_are_read_from_either_wording_and_other_errors_stay_generic() {
+        assert_eq!(context_overflow_numbers("request (12719 tokens) exceeds the available context size (8192 tokens), try increasing it"), Some((12719, 8192)));
+        assert_eq!(context_overflow_numbers("{\"n_prompt_tokens\":300,\"n_ctx\":128}"), Some((300, 128)));
+        assert_eq!(context_overflow_numbers("maximum context length is 128000 tokens"), None);
+        let e = LlmError::classify(&anyhow::anyhow!("This model's maximum context length is 128000 tokens (context_length_exceeded)"));
+        assert_eq!((e.code.as_str(), e.message.as_str()), ("CONTEXT_TOO_LONG", "Context length exceeded"));
+        assert_eq!(stream_error_message(&serde_json::json!({"choices": []})), None);
+        assert_eq!(stream_error_message(&serde_json::json!({"error": {"code": 5}})).as_deref(), Some("{\"code\":5}"));
     }
 }
 

@@ -23,6 +23,7 @@ pub mod context;
 pub mod conversation;
 pub mod engine;
 pub mod events;
+pub mod finish_check;
 pub mod hooks;
 pub mod model_manager;
 pub mod permissions;
@@ -31,6 +32,7 @@ pub mod query_llm;
 pub mod run_tools;
 pub mod session_store;
 pub mod state;
+pub mod stuck;
 pub mod vision;
 pub mod workbench;
 
@@ -1137,6 +1139,45 @@ pub struct McpServerConfig {
     pub request_timeout_secs: Option<u64>,
 }
 
+/// How far a session may run before it stops to ask.
+///
+/// The four `skip_*_permission` flags are all-or-nothing: either every Bash
+/// command and edit prompts (a coding task is dozens of cards) or nothing does
+/// (a stray `git push` goes straight out). `Auto` is the level between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Autonomy {
+    /// Prompt for every edit and every command that is not provably read-only.
+    #[default]
+    Ask,
+    /// Edits inside the project and commands that stay inside it (build, test,
+    /// lint, local git) run unattended; anything that publishes, deletes
+    /// outside the project, needs privileges or cannot be understood asks.
+    /// See [`crate::util::command_risk`].
+    Auto,
+    /// Nothing asks. Same as turning every `skip_*_permission` on.
+    Full,
+}
+
+impl Autonomy {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ask" | "off" | "manual" => Some(Self::Ask),
+            "auto" | "on" => Some(Self::Auto),
+            "full" | "yolo" | "all" => Some(Self::Full),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Auto => "auto",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// Runtime options used while creating a zen-core instance.
 #[derive(Debug, Clone)]
 pub struct ZenCoreOptions {
@@ -1194,6 +1235,13 @@ pub struct ZenCoreOptions {
     /// `SENCLAW_MAX_AGENT_TURNS` env still overrides everything. Virtual
     /// workers doing browser research set this higher (see VirtualWorkerPool).
     pub max_agent_turns: Option<usize>,
+    /// How far this session runs before it asks. `Ask` (the default) keeps the
+    /// behaviour of every session that never heard of the setting.
+    pub autonomy: Autonomy,
+    /// This chat is a code session (`group_type = "code"`): its folder is
+    /// checkpointed even when it is not a git repository, which is what lets
+    /// [`Self::autonomy`] above `Ask` apply to it.
+    pub code_session: bool,
 }
 
 impl Default for ZenCoreOptions {
@@ -1224,6 +1272,8 @@ impl Default for ZenCoreOptions {
             turn_context: None,
             model_config_id: None,
             max_agent_turns: None,
+            autonomy: Autonomy::Ask,
+            code_session: false,
         }
     }
 }
@@ -1376,6 +1426,8 @@ pub trait ZenCore: Send + Sync {
     fn set_working_dir(&self, dir: &str);
     fn clear_working_dir(&self);
     fn update_skip_permissions(&self, skip: bool);
+    /// Set how far this session runs before it asks; see [`Autonomy`].
+    fn set_autonomy(&self, level: Autonomy, code_session: bool);
     fn update_thinking(&self, enabled: bool);
     fn set_use_tools(&self, tools: Vec<String>);
     fn reload_skills(&self, disabled: &[String]);

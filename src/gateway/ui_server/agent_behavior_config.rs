@@ -21,7 +21,14 @@
 //!   later call of the chat; the full text stays on disk (`crate::context_compress`).
 //!   Default **ON**.
 //!
-//! All five are persisted in the global config (`~/.senclaw/config.json`) and
+//! - **codeAutonomy** — how far a coding chat runs before it asks: `ask` (every
+//!   command and edit prompts), `auto` (the dev loop runs, what cannot be taken
+//!   back asks — the default) or `full` (nothing asks). `crate::util::command_risk`.
+//!
+//! - **codeMaxTurns** / **maxRunTokens** / **finishJudge** — what one coding request may
+//!   use (500 turns, 10M tokens, no judge by default); a chat keeps its 30 turns.
+//!
+//! All six are persisted in the global config (`~/.senclaw/config.json`) and
 //! read per-turn by `AgentPool`.
 
 use std::sync::Arc;
@@ -30,8 +37,8 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
 
 use crate::gateway::group_manager::{
-    get_after_process_enabled, get_context_compression_enabled, get_memory_recall_enabled,
-    get_pre_cognitive_enabled, get_pre_trigger_skill_enabled, save_after_process_enabled,
+    get_after_process_enabled, get_agent_limits, get_code_autonomy, get_context_compression_enabled, get_memory_recall_enabled,
+    get_pre_cognitive_enabled, get_pre_trigger_skill_enabled, save_after_process_enabled, save_agent_limits, save_code_autonomy,
     save_context_compression_enabled, save_memory_recall_enabled, save_pre_cognitive_enabled,
     save_pre_trigger_skill_enabled,
 };
@@ -40,12 +47,17 @@ use super::core::{AppError, UiState};
 
 fn current(s: &UiState) -> serde_json::Value {
     let path = &s.config.paths.global_config_path;
+    let limits = get_agent_limits(path);
     serde_json::json!({
         "preTriggerSkill": get_pre_trigger_skill_enabled(path),
         "preCognitive": get_pre_cognitive_enabled(path),
         "afterProcess": get_after_process_enabled(path),
         "memoryRecall": get_memory_recall_enabled(path),
         "contextCompression": get_context_compression_enabled(path),
+        "codeAutonomy": get_code_autonomy(path).as_str(),
+        "codeMaxTurns": limits.code_max_turns,
+        "maxRunTokens": limits.max_run_tokens,
+        "finishJudge": limits.finish_judge,
     })
 }
 
@@ -67,6 +79,18 @@ pub(crate) struct AgentBehaviorBody {
     memory_recall: Option<bool>,
     #[serde(rename = "contextCompression")]
     context_compression: Option<bool>,
+    /// `ask` | `auto` | `full`; anything else is a 400, not a silent `auto`.
+    #[serde(rename = "codeAutonomy")]
+    code_autonomy: Option<String>,
+    /// Most tool-calling turns of one coding request, 10..=5000.
+    #[serde(rename = "codeMaxTurns")]
+    code_max_turns: Option<u64>,
+    /// Most tokens of one coding request; 0 = no cap.
+    #[serde(rename = "maxRunTokens")]
+    max_run_tokens: Option<u64>,
+    /// Ask a model whether the work is finished before a coding request ends.
+    #[serde(rename = "finishJudge")]
+    finish_judge: Option<bool>,
 }
 
 pub(crate) async fn agent_behavior_set(
@@ -92,6 +116,22 @@ pub(crate) async fn agent_behavior_set(
     }
     if let Some(v) = body.context_compression {
         save_context_compression_enabled(path, v)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(v) = body.code_autonomy {
+        let level = crate::zen_core::Autonomy::parse(&v).ok_or_else(|| {
+            AppError(StatusCode::BAD_REQUEST, format!("codeAutonomy must be ask, auto or full, not {v:?}"))
+        })?;
+        save_code_autonomy(path, level)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(n) = body.code_max_turns {
+        if !(10..=5000).contains(&n) {
+            return Err(AppError(StatusCode::BAD_REQUEST, format!("codeMaxTurns must be between 10 and 5000, not {n}")));
+        }
+    }
+    if body.code_max_turns.is_some() || body.max_run_tokens.is_some() || body.finish_judge.is_some() {
+        save_agent_limits(path, body.code_max_turns, body.max_run_tokens, body.finish_judge)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     Ok(Json(current(&s)))
@@ -172,5 +212,24 @@ mod tests {
         let v = post(&s, json!({"contextCompression": true})).await;
         assert_eq!(v["contextCompression"], true);
         assert!(crate::gateway::group_manager::get_context_compression_enabled(&config_path));
+    }
+
+    #[tokio::test]
+    async fn the_limits_of_a_coding_request_have_defaults_and_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let s = state(&config_path);
+        let v = post(&s, json!({})).await;
+        assert_eq!((v["codeMaxTurns"].as_u64(), v["maxRunTokens"].as_u64(), v["finishJudge"].as_bool()), (Some(500), Some(10_000_000), Some(false)));
+
+        let v = post(&s, json!({"codeMaxTurns": 120, "maxRunTokens": 0, "finishJudge": true})).await;
+        assert_eq!((v["codeMaxTurns"].as_u64(), v["maxRunTokens"].as_u64(), v["finishJudge"].as_bool()), (Some(120), Some(0), Some(true)));
+        // A later partial update leaves the other fields as they are.
+        let v = post(&s, json!({"codeMaxTurns": 200})).await;
+        assert_eq!((v["codeMaxTurns"].as_u64(), v["maxRunTokens"].as_u64(), v["finishJudge"].as_bool()), (Some(200), Some(0), Some(true)));
+
+        let body: AgentBehaviorBody = serde_json::from_value(json!({"codeMaxTurns": 3})).unwrap();
+        let refused = agent_behavior_set(State(s.clone()), Json(body)).await;
+        assert!(matches!(refused, Err(AppError(StatusCode::BAD_REQUEST, _))));
     }
 }

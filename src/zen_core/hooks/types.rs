@@ -24,6 +24,13 @@ pub enum HookEvent {
     /// redaction / truncation).
     OutputFilter,
     Stop,
+    /// Fired when the agent is about to end its turn, before `Stop`. Unlike
+    /// `Stop` it decides: `blocked: true` (or `decision: "reject"`) sends the
+    /// hook's `reason` back as the next user message and the agent keeps
+    /// working (at most 3 times a request). Withheld from marketplace plugins
+    /// (an untrusted package must not be able to keep an agent running or put
+    /// words in its context); only the user's own hooks.json can register it.
+    PreStop,
     SessionStart,
     SessionEnd,
     PreCompact,

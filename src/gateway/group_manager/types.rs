@@ -391,6 +391,17 @@ pub(super) struct GlobalConfig {
         rename = "contextCompression"
     )]
     pub(super) context_compression: Option<bool>,
+    /// How far a coding chat runs before it asks (`ask` | `auto` | `full`, see
+    /// `crate::zen_core::Autonomy`). Absent means `auto`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "codeAutonomy"
+    )]
+    pub(super) code_autonomy: Option<String>,
+    /// Limits of one coding request (`crate::zen_core::conversation`).
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "agentLimits")]
+    pub(super) agent_limits: Option<AgentLimitsConfig>,
     /// Autonomous MCP dispatcher: when enabled, ready tasks on dispatch sources
     /// (e.g. the Kanban board) are auto-run by persona worker agents.
     #[serde(
@@ -615,4 +626,19 @@ mod defaults_tests {
         let back: DefaultsConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back, d);
     }
+}
+
+/// The `agentLimits` section of `config.json`. Every field is optional; an
+/// absent one means the built-in default (see [`AgentLimits`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentLimitsConfig {
+    /// Most tool-calling turns of one coding request (a chat keeps 30).
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "codeMaxTurns")]
+    pub code_max_turns: Option<u64>,
+    /// Most tokens (input + output, all calls) of one coding request; 0 = no cap.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "maxRunTokens")]
+    pub max_run_tokens: Option<u64>,
+    /// Ask a model whether the work is finished before a coding request ends.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "finishJudge")]
+    pub finish_judge: Option<bool>,
 }

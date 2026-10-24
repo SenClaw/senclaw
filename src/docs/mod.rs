@@ -420,7 +420,7 @@ fn title_and_summary(text: &str, fallback: &str) -> (String, String) {
 /// Vietnamese-specific letters. Deliberately not a general language detector:
 /// the only question is whether this project's docs are Vietnamese, and these
 /// characters appear in no English text.
-fn has_vietnamese_diacritics(s: &str) -> bool {
+pub(crate) fn has_vietnamese_diacritics(s: &str) -> bool {
     s.chars().any(|c| {
         matches!(c,
             'ă' | 'â' | 'đ' | 'ê' | 'ô' | 'ơ' | 'ư'

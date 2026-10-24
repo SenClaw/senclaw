@@ -18,11 +18,13 @@
 //!   git repository or carries a project manifest; `$HOME` is never crawled.
 //! - Off switch: `SENCLAW_REPO_MAP_TOKENS=0` (default budget 2000).
 
+pub mod commands;
 pub mod lang;
 pub mod parse;
 pub mod rank;
 pub mod render;
 pub mod scan;
+pub mod syntax;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

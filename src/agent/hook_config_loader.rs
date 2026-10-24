@@ -201,6 +201,7 @@ fn parse_hook_event(s: &str) -> Option<HookEvent> {
         "PrePermission" => Some(HookEvent::PrePermission),
         "OutputFilter" => Some(HookEvent::OutputFilter),
         "Stop" => Some(HookEvent::Stop),
+        "PreStop" => Some(HookEvent::PreStop),
         "SessionStart" => Some(HookEvent::SessionStart),
         "SessionEnd" => Some(HookEvent::SessionEnd),
         "PreCompact" => Some(HookEvent::PreCompact),
@@ -942,7 +943,7 @@ mod tests {
         // plugin may watch, it may not approve its own tool calls or rewrite
         // what a tool reported.
         assert!(VALID_HOOK_EVENTS.contains(&"SessionEnd"));
-        for deciding in ["PrePermission", "OutputFilter"] {
+        for deciding in ["PrePermission", "OutputFilter", "PreStop"] {
             assert!(
                 !VALID_HOOK_EVENTS.contains(&deciding),
                 "{deciding} lets untrusted code decide, not observe"
