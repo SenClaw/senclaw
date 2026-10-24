@@ -70,6 +70,26 @@ pub fn detect(dir: &Path) -> Vec<Stack> {
     found
 }
 
+/// A folder of plain scripts with `test_*.py` files and no manifest - what a model
+/// writes when asked for a small module. The runner is read from the first test
+/// file: `unittest` finds nothing in pytest-style functions and exits 0, which
+/// would read as a pass.
+fn loose_python_tests(dir: &Path, rel: &str) -> Option<Stack> {
+    let mut tests: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("test") && n.ends_with(".py"))
+        .collect();
+    tests.sort();
+    let first = tests.first()?;
+    let body = read_small(&dir.join(first)).unwrap_or_default();
+    let command = if body.contains("import unittest") || body.contains("from unittest") { "python3 -m unittest" } else { "python3 -m pytest" };
+    let command = if rel.is_empty() { command.to_string() } else { format!("cd {rel} && {command}") };
+    Some(Stack { name: "Python".into(), marker: "test*.py", dir: rel.into(), commands: vec![("test", command)] })
+}
+
 fn stacks_in(dir: &Path, rel: &str) -> Vec<Stack> {
     let mut out = Vec::new();
     let prefix = |c: &str| if rel.is_empty() { c.to_string() } else { format!("cd {rel} && {c}") };
@@ -115,6 +135,8 @@ fn stacks_in(dir: &Path, rel: &str) -> Vec<Stack> {
             commands.push(("typecheck", prefix(&format!("{runner}mypy ."))));
         }
         out.push(Stack { name: "Python".into(), marker, dir: rel.into(), commands });
+    } else if let Some(stack) = loose_python_tests(dir, rel) {
+        out.push(stack);
     }
 
     if has("go.mod") {
@@ -336,6 +358,21 @@ mod tests {
         assert_eq!(cmd(&s[0], "typecheck"), Some("uv run mypy ."));
         let d = dir_with(&[("requirements.txt", "flask\n")]);
         assert_eq!(cmd(&detect(d.path())[0], "lint"), None);
+    }
+
+    #[test]
+    fn loose_test_files_without_a_manifest_name_the_runner_they_are_written_for() {
+        let d = dir_with(&[("wordfreq.py", "def f(): pass\n"), ("test_wordfreq.py", "import unittest\nclass T(unittest.TestCase): pass\n")]);
+        let s = detect(d.path());
+        assert_eq!(s.len(), 1);
+        assert_eq!(cmd(&s[0], "test"), Some("python3 -m unittest"));
+        // pytest-style functions: unittest would run nothing and exit 0.
+        let d = dir_with(&[("test_calc.py", "from calc import add\ndef test_add():\n    assert add(1, 2) == 3\n")]);
+        assert_eq!(cmd(&detect(d.path())[0], "test"), Some("python3 -m pytest"));
+        // No test file, no stack; a manifest wins over the guess.
+        assert!(detect(dir_with(&[("script.py", "print(1)\n")]).path()).is_empty());
+        let d = dir_with(&[("requirements.txt", "flask\n"), ("test_a.py", "import unittest\n")]);
+        assert_eq!(cmd(&detect(d.path())[0], "test"), Some("pytest"));
     }
 
     #[test]
