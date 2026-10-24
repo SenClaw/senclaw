@@ -1087,6 +1087,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         // What the agent remembers: list/search the extracted facts, forget one.
         .merge(super::memory_facts::routes())
+        .merge(super::bg_tasks::routes())
         // Projects: a folder root plus its context, and the sessions in it.
         .merge(super::projects::routes(super::projects::ProjectsCtx {
             db: state.db.clone(),

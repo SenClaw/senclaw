@@ -258,6 +258,9 @@ impl PermissionChecker for AllowAllPermissions {
 /// Context passed through the tool execution pipeline.
 pub struct RunContext<'a> {
     pub agent_id: &'a str,
+    /// The chat this turn belongs to; a tool that starts something that outlives
+    /// the call (a background task) reads it through `bg_tasks::current_chat`.
+    pub chat_jid: &'a str,
     pub working_dir: &'a str,
     pub agent_data_dir: &'a str,
     pub tools: &'a [Arc<dyn Tool>],
@@ -354,6 +357,7 @@ async fn run_serially(
         }
         let dynamic_ctx = RunContext {
             agent_id: ctx.agent_id,
+            chat_jid: ctx.chat_jid,
             working_dir: ctx.working_dir,
             agent_data_dir: ctx.agent_data_dir,
             tools: &active_tools,
@@ -729,7 +733,7 @@ async fn run_single_tool(
         tool_id,
         tool.is_read_only()
     );
-    match tool.call(input.clone(), &tool_ctx).await {
+    match crate::bg_tasks::with_chat(ctx.chat_jid, tool.call(input.clone(), &tool_ctx)).await {
         Ok(outputs) => {
             tracing::info!(
                 "[RunTools] complete agent={} tool={} id={} outputs={}",
@@ -1176,6 +1180,7 @@ mod tests {
     ) -> RunContext<'a> {
         RunContext {
             agent_id: "main",
+            chat_jid: "",
             working_dir: "/tmp",
             agent_data_dir: "/tmp",
             tools,

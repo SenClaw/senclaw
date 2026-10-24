@@ -185,6 +185,43 @@ pub async fn agent_shell(command: &str, working_dir: &str, timeout_ms: u64) -> R
     .await
 }
 
+/// [`agent_shell`] for a foreground `Bash`: also returns what the shell left
+/// running, so the caller can register it as a background task.
+pub async fn agent_shell_foreground(
+    command: &str,
+    working_dir: &str,
+    timeout_ms: u64,
+) -> Result<(Run, runner::Leftover)> {
+    let db = shared_db().ok_or_else(|| anyhow!("sandbox engine unavailable"))?;
+    let p = load(&db);
+    let sb = ensure_agent_sandbox(&db, working_dir, &p)?;
+    runner::exec_with_leftover(
+        &db,
+        &sb,
+        command,
+        Some(timeout_ms as i64),
+        BTreeMap::new(),
+        "exec",
+        None,
+        command,
+        runner::shell_argv(&sb),
+        true,
+    )
+    .await
+}
+
+/// Start a background `Bash` command in the sandbox write-jailed to
+/// `working_dir`; returns the running child and what confines it.
+pub async fn agent_shell_spawn(
+    command: &str,
+    working_dir: &str,
+) -> Result<(tokio::process::Child, String)> {
+    let db = shared_db().ok_or_else(|| anyhow!("sandbox engine unavailable"))?;
+    let p = load(&db);
+    let sb = ensure_agent_sandbox(&db, working_dir, &p)?;
+    runner::spawn_direct(&db, &sb, command, runner::shell_argv(&sb)).await
+}
+
 /// Run a python/node/bash snippet in a throwaway sandbox for the REPL and the
 /// scheduler. `network` comes from the caller's policy switch.
 pub async fn run_once_sandboxed(

@@ -11,6 +11,7 @@ mod agent_behavior_config;
 pub mod app_auth;
 pub mod auth;
 mod background;
+mod bg_tasks;
 pub mod bash_sandbox;
 mod chat;
 mod checkpoints;

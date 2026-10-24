@@ -25,7 +25,7 @@ impl Tool for PeekBgJobTool {
     }
 
     fn description(&self) -> &str {
-        "Retrieve the output of a background job started by Bash with background=true. \
+        "Retrieve the output of a background job started by Bash with run_in_background=true (or left running by a Bash command: the result names its job id). \
          Use wait=true (default) to wait for completion, or wait=false to get the current snapshot."
     }
 

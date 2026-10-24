@@ -1725,6 +1725,7 @@ pub async fn query(
         // 5. Run tools
         let ctx = RunContext {
             agent_id: &config.agent_id,
+            chat_jid: &config.chat_jid,
             working_dir: &config.working_dir,
             agent_data_dir: &config.agent_data_dir,
             tools: &turn_tools,

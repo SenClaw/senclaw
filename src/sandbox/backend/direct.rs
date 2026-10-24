@@ -24,7 +24,8 @@ use std::time::Instant;
 
 use tokio::io::AsyncWriteExt;
 
-use super::{build_env, clamp, ExecSpec, Outcome};
+use super::{build_env, clamp, ExecSpec, Outcome, MAX_OUTPUT};
+use crate::bg_tasks::capture::{wait_shell, Capture, Waited};
 use crate::sandbox::caps::DirectKind;
 use crate::sandbox::db::Sandbox;
 
@@ -78,16 +79,16 @@ pub(crate) fn bwrap_state_mask(home: &str, state_dir: &str) -> Option<[String; 2
     (!state.is_empty() && state != "/" && !under_home).then(|| ["--tmpfs".to_string(), state.to_string()])
 }
 
-pub async fn exec(
+/// The confined command for `sb`, ready to spawn: working directory, built
+/// environment, own session. `Err` is the reason it cannot be built.
+fn build_command(
     sb: &Sandbox,
-    spec: &ExecSpec,
     kind: DirectKind,
     allowlist: &[String],
-) -> Outcome {
-    let start = Instant::now();
+) -> Result<tokio::process::Command, String> {
     let workdir = PathBuf::from(&sb.workdir);
     if let Err(e) = std::fs::create_dir_all(workdir.join(".tmp")) {
-        return failed(format!("cannot create sandbox directory: {e}"), kind, start);
+        return Err(format!("cannot create sandbox directory: {e}"));
     }
 
     // Canonicalize before it reaches a sandbox profile. On macOS `/tmp` and the
@@ -98,11 +99,8 @@ pub async fn exec(
     let workdir = workdir.canonicalize().unwrap_or(workdir);
     let workdir_s = workdir.to_string_lossy().to_string();
 
-    let mut cmd = match kind {
-        DirectKind::Seatbelt => match seatbelt_command(sb, &workdir_s, allowlist) {
-            Ok(c) => c,
-            Err(e) => return failed(e, kind, start),
-        },
+    let cmd = match kind {
+        DirectKind::Seatbelt => seatbelt_command(sb, &workdir_s, allowlist)?,
         DirectKind::Bubblewrap => bwrap_command(sb, &workdir_s, allowlist),
         DirectKind::Degraded => {
             let mut c = tokio::process::Command::new("/bin/sh");
@@ -112,22 +110,23 @@ pub async fn exec(
         // AppContainer is handled by `direct_windows`; reaching it here means
         // the caller dispatched to the wrong backend for this OS.
         DirectKind::AppContainer | DirectKind::Unsupported => {
-            return failed(
-                "direct execution is not supported on this OS — use the docker backend"
-                    .into(),
-                kind,
-                start,
-            )
+            return Err("direct execution is not supported on this OS — use the docker backend".into())
         }
     };
+    Ok(cmd)
+}
 
+/// Pipes, environment and its own process group, applied to a [`build_command`].
+fn prepare(cmd: &mut tokio::process::Command, sb: &Sandbox, spec: &ExecSpec) {
+    let workdir = PathBuf::from(&sb.workdir);
+    let workdir = workdir.canonicalize().unwrap_or(workdir);
+    let workdir_s = workdir.to_string_lossy().to_string();
     cmd.current_dir(&workdir)
         .env_clear()
         .envs(build_env(sb, &spec.extra_env, &workdir_s))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+        .stderr(Stdio::piped());
 
     // Put the child in its own process group. Without this, killing the timed
     // out `sh` leaves its children running: `python -c 'while True: pass'`
@@ -140,6 +139,21 @@ pub async fn exec(
             Ok(())
         });
     }
+}
+
+pub async fn exec(
+    sb: &Sandbox,
+    spec: &ExecSpec,
+    kind: DirectKind,
+    allowlist: &[String],
+) -> Outcome {
+    let start = Instant::now();
+    let mut cmd = match build_command(sb, kind, allowlist) {
+        Ok(c) => c,
+        Err(e) => return failed(e, kind, start),
+    };
+    prepare(&mut cmd, sb, spec);
+    cmd.kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -160,23 +174,32 @@ pub async fn exec(
         let _ = stdin.shutdown().await;
     }
 
+    // Read by tasks of their own, so the run can end when the shell does rather
+    // than when every process that inherited the pipes has.
+    let out_cap = Capture::spawn(child.stdout.take(), MAX_OUTPUT + 8);
+    let err_cap = Capture::spawn(child.stderr.take(), MAX_OUTPUT + 8);
+
     let timeout = std::time::Duration::from_millis(spec.timeout_ms);
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(out)) => {
-            let (stdout, t1) = clamp(String::from_utf8_lossy(&out.stdout).to_string());
-            let (stderr, t2) = clamp(String::from_utf8_lossy(&out.stderr).to_string());
+    match wait_shell(&mut child, timeout, &out_cap, &err_cap, spec.keep_leftovers).await {
+        Waited::Exited { status, held } => {
+            let (so, c1) = out_cap.snapshot();
+            let (se, c2) = err_cap.snapshot();
+            let (stdout, t1) = clamp(String::from_utf8_lossy(&so).to_string());
+            let (stderr, t2) = clamp(String::from_utf8_lossy(&se).to_string());
             Outcome {
-                exit_code: out.status.code(),
+                exit_code: status.code(),
                 stdout,
                 stderr,
-                truncated: t1 || t2,
+                truncated: t1 || t2 || c1 || c2,
                 timed_out: false,
                 duration_ms: start.elapsed().as_millis() as i64,
                 isolation: kind.as_str().to_string(),
+                group: if spec.keep_leftovers { pid } else { None },
+                held,
             }
         }
-        Ok(Err(e)) => failed(format!("error while waiting for the process: {e}"), kind, start),
-        Err(_) => {
+        Waited::Failed(e) => failed(format!("error while waiting for the process: {e}"), kind, start),
+        Waited::TimedOut => {
             kill_group(pid);
             Outcome {
                 exit_code: None,
@@ -186,9 +209,28 @@ pub async fn exec(
                 timed_out: true,
                 duration_ms: start.elapsed().as_millis() as i64,
                 isolation: kind.as_str().to_string(),
+                ..Default::default()
             }
         }
     }
+}
+
+/// Start the script confined and return the child without waiting: a background
+/// task. Its own session, no kill-on-drop — the registry stops it.
+pub async fn spawn(
+    sb: &Sandbox,
+    spec: &ExecSpec,
+    kind: DirectKind,
+    allowlist: &[String],
+) -> Result<tokio::process::Child, String> {
+    let mut cmd = build_command(sb, kind, allowlist)?;
+    prepare(&mut cmd, sb, spec);
+    let mut child = cmd.spawn().map_err(|e| format!("cannot start process: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(spec.script.as_bytes()).await;
+        let _ = stdin.shutdown().await;
+    }
+    Ok(child)
 }
 
 /// RAII registration in the monitor.
@@ -571,6 +613,7 @@ fn failed(msg: String, kind: DirectKind, start: Instant) -> Outcome {
         timed_out: false,
         duration_ms: start.elapsed().as_millis() as i64,
         isolation: kind.as_str().to_string(),
+        ..Default::default()
     }
 }
 

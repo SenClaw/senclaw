@@ -18,6 +18,7 @@ pub mod acp;
 pub mod agent;
 pub mod apps;
 pub mod background;
+pub mod bg_tasks;
 pub mod browser;
 pub mod browser_agent;
 pub mod build_info;
@@ -1371,6 +1372,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 1. Database =====
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
     tracing::info!("[SenClaw] DB initialized: {}", cfg.paths.db_path.display());
+
+    // Tasks an agent left running: list what a crashed predecessor left, watch the rest.
+    bg_tasks::init(util::paths::senclaw_home().join("bg-tasks.json"));
 
     // Load enabled MCP tool aliases (Plugins → Alias) into the process-wide
     // registry so `resolve_tool_by_name` applies renames/overrides from the
@@ -3585,12 +3589,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }
     }
 
+    // What agents left running (dev servers, watchers) ends with the daemon, at
+    // the same time as the apps below — the window before SIGKILL is short.
+    let bg_shutdown = tokio::spawn(bg_tasks::shutdown_all());
     // Stop every Space App process FIRST: they are what outlives the daemon,
     // and the window before SIGKILL is short (~800 ms from the desktop app).
     space_mcp_launcher.shutdown().await;
     // Every runtime process this daemon launched (engines: decision, OCR,
     // Whisper, TTS, GGUF/MLX models) — same reasoning as Space Apps above.
     runtime_manager.stop_all().await;
+    let _ = bg_shutdown.await;
 
     // Flush in-flight workflow run state (running orphans reconcile on next boot)
     workflow_service.flush();

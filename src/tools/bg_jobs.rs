@@ -2,9 +2,12 @@
 //!
 //! Mirrors sema-core's `TaskManager` — a process-wide registry of jobs that
 //! were launched in the background. Used by `PeekBgJob` to fetch output and
-//! `StopBgJob` to terminate.
+//! `StopBgJob` to terminate, and by `/api/bg-tasks` to show a person what an
+//! agent left running (see [`crate::bg_tasks`], which creates, adopts, watches
+//! and stops the entries).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -47,10 +50,85 @@ impl JobKind {
     }
 }
 
+/// How a job came to be in the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The daemon started it (`Bash` with `run_in_background`).
+    Spawned,
+    /// A foreground command left it running; found in the shell's process group.
+    Adopted,
+    /// Read back from `bg-tasks.json` after a daemon restart.
+    Restored,
+}
+
+impl Origin {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Origin::Spawned => "spawned",
+            Origin::Adopted => "adopted",
+            Origin::Restored => "restored",
+        }
+    }
+}
+
+/// What a person needs to recognise a job and to know whose it is. Immutable.
+#[derive(Debug, Clone)]
+pub struct JobMeta {
+    /// The chat whose agent started it; empty when started outside a chat.
+    pub chat_jid: String,
+    /// The agent's own one-line description of the command.
+    pub description: String,
+    pub cwd: String,
+    pub origin: Origin,
+    /// `seatbelt` / `bubblewrap` / … when the command ran in the OS sandbox.
+    pub isolation: String,
+    /// Wall clock, ms since the epoch (`started_at` is monotonic and cannot be shown).
+    pub started_ms: i64,
+}
+
+impl Default for JobMeta {
+    fn default() -> Self {
+        Self {
+            chat_jid: String::new(),
+            description: String::new(),
+            cwd: String::new(),
+            origin: Origin::Spawned,
+            isolation: String::new(),
+            started_ms: now_ms(),
+        }
+    }
+}
+
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// What changes while a job runs.
+#[derive(Debug, Default, Clone)]
+pub struct JobState {
+    /// The process group the job lives in (Unix). Its leader's pid, because the
+    /// shell is a session leader (`setsid`).
+    pub pgid: Option<u32>,
+    /// The pid the job was started as; on Windows the only handle there is.
+    pub pid: Option<u32>,
+    /// Live members of the group, refreshed by the watcher.
+    pub pids: Vec<u32>,
+    /// TCP ports the group listens on, refreshed by the watcher.
+    pub ports: Vec<u16>,
+    pub exit_code: Option<i32>,
+    pub ended_ms: Option<i64>,
+    /// The started shell has exited. The job runs on while its group has a member.
+    pub child_exited: bool,
+}
+
 pub struct BgJob {
     pub id: String,
     pub kind: JobKind,
     pub command: String,
+    pub meta: JobMeta,
     pub started_at: Instant,
     /// Accumulated stdout/stderr (capped at 1 MiB).
     output: Mutex<String>,
@@ -61,22 +139,70 @@ pub struct BgJob {
     finished: Arc<Notify>,
     /// Optional handle to terminate the underlying child process.
     child: Mutex<Option<Child>>,
+    state: Mutex<JobState>,
+    /// A stop was asked for: the exit that follows is "stopped", not "failed".
+    stopping: AtomicBool,
 }
 
 impl BgJob {
     pub fn new(id: String, kind: JobKind, command: String) -> Arc<Self> {
+        Self::with_meta(id, kind, command, JobMeta::default())
+    }
+
+    pub fn with_meta(id: String, kind: JobKind, command: String, meta: JobMeta) -> Arc<Self> {
         let (tx, _rx) = broadcast::channel(256);
         Arc::new(Self {
             id,
             kind,
             command,
+            meta,
             started_at: Instant::now(),
             output: Mutex::new(String::new()),
             status: Mutex::new(JobStatus::Running),
             chunk_tx: tx,
             finished: Arc::new(Notify::new()),
             child: Mutex::new(None),
+            state: Mutex::new(JobState::default()),
+            stopping: AtomicBool::new(false),
         })
+    }
+
+    pub fn state(&self) -> JobState {
+        self.state.lock().unwrap().clone()
+    }
+
+    pub fn update_state(&self, f: impl FnOnce(&mut JobState)) {
+        f(&mut self.state.lock().unwrap());
+    }
+
+    pub fn pgid(&self) -> Option<u32> {
+        self.state.lock().unwrap().pgid
+    }
+
+    pub fn stop_requested(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
+    pub fn request_stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+    }
+
+    /// The job is over. A requested stop wins over the exit code: SIGTERM ends a
+    /// shell with 143, which must read "stopped", not "failed".
+    pub fn finish(&self, exit_code: Option<i32>) {
+        if let Some(c) = exit_code {
+            self.update_state(|s| s.exit_code = Some(c));
+        }
+        let code = self.state.lock().unwrap().exit_code;
+        let status = if self.stop_requested() {
+            JobStatus::Stopped
+        } else {
+            match code {
+                Some(0) | None => JobStatus::Done,
+                Some(_) => JobStatus::Failed,
+            }
+        };
+        self.mark_done(status);
     }
 
     pub fn status(&self) -> JobStatus {
@@ -120,12 +246,19 @@ impl BgJob {
         let mut s = self.status.lock().unwrap();
         if *s == JobStatus::Running {
             *s = status;
+            self.state.lock().unwrap().ended_ms = Some(now_ms());
             self.finished.notify_waiters();
         }
     }
 
-    /// Force-kill the child process (if any) and mark stopped.
+    /// Stop the job: the whole process group when it has one (a dev server is a
+    /// shell, npm and node, and killing the head leaves the rest), else the child.
+    /// True when something was signalled and is gone.
     pub async fn kill(&self) -> bool {
+        self.request_stop();
+        if crate::bg_tasks::has_group(self) {
+            return crate::bg_tasks::stop(self).await;
+        }
         let child = self.child.lock().unwrap().take();
         let killed = if let Some(mut c) = child {
             c.kill().await.is_ok()
@@ -168,6 +301,13 @@ impl BgJobManager {
         format!("{}-{:05}", kind.as_str().to_lowercase(), *n)
     }
 
+    /// After a restart, ids read back from disk must not be handed out again.
+    pub fn bump_counter_past(&self, id: &str) {
+        let n: u64 = id.rsplit('-').next().and_then(|d| d.parse().ok()).unwrap_or(0);
+        let mut c = self.counter.lock().unwrap();
+        *c = (*c).max(n);
+    }
+
     pub fn register(&self, job: Arc<BgJob>) {
         self.jobs.lock().unwrap().insert(job.id.clone(), job);
     }
@@ -178,6 +318,33 @@ impl BgJobManager {
 
     pub fn list(&self) -> Vec<Arc<BgJob>> {
         self.jobs.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Forget a job. Only a finished one: a running job is stopped first.
+    pub fn remove(&self, id: &str) -> bool {
+        let mut jobs = self.jobs.lock().unwrap();
+        match jobs.get(id) {
+            Some(j) if j.status() != JobStatus::Running => jobs.remove(id).is_some(),
+            _ => false,
+        }
+    }
+
+    /// Keep the table bounded: finished jobs older than `max_age` go, and so do
+    /// the oldest ones beyond `keep`. Running jobs are never dropped.
+    pub fn prune_finished(&self, max_age: Duration, keep: usize) {
+        let now = now_ms();
+        let mut jobs = self.jobs.lock().unwrap();
+        let mut finished: Vec<(String, i64)> = jobs
+            .values()
+            .filter(|j| j.status() != JobStatus::Running)
+            .map(|j| (j.id.clone(), j.state().ended_ms.unwrap_or(j.meta.started_ms)))
+            .collect();
+        finished.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+        for (i, (id, ended)) in finished.iter().enumerate() {
+            if i >= keep || now - ended > max_age.as_millis() as i64 {
+                jobs.remove(id);
+            }
+        }
     }
 
     /// Wait for a job to leave `Running`, up to `timeout`. Returns the final

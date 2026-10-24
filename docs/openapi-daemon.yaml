@@ -524,6 +524,143 @@ paths:
       - background
       x-handler: runs
       x-untyped: true
+  /api/bg-tasks:
+    get:
+      operationId: get_api_bg_tasks
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: List
+      tags:
+      - bg-tasks
+      x-handler: list
+      x-untyped: true
+  /api/bg-tasks/clear-finished:
+    post:
+      operationId: post_api_bg_tasks_clear_finished
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Clear finished
+      tags:
+      - bg-tasks
+      x-handler: clear_finished
+      x-untyped: true
+  /api/bg-tasks/stop-all:
+    post:
+      operationId: post_api_bg_tasks_stop_all
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Stop all
+      tags:
+      - bg-tasks
+      x-handler: stop_all
+      x-untyped: true
+  /api/bg-tasks/{id}:
+    delete:
+      operationId: delete_api_bg_tasks_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Dismiss
+      tags:
+      - bg-tasks
+      x-handler: dismiss
+      x-untyped: true
+    get:
+      operationId: get_api_bg_tasks_id
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Detail
+      tags:
+      - bg-tasks
+      x-handler: detail
+      x-untyped: true
+  /api/bg-tasks/{id}/stop:
+    post:
+      operationId: post_api_bg_tasks_id_stop
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+        required: false
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: Stop one
+      tags:
+      - bg-tasks
+      x-handler: stop_one
+      x-untyped: true
   /api/browser-agent/approvals:
     get:
       operationId: get_api_browser_agent_approvals
@@ -11398,6 +11535,7 @@ tags:
 - name: agents-rules
 - name: auth
 - name: background
+- name: bg-tasks
 - name: browser
 - name: browser-agent
 - name: chat
@@ -11455,5 +11593,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 407
-x-untyped-operations: 502
+x-route-count: 412
+x-untyped-operations: 508
