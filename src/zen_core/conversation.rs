@@ -1310,7 +1310,7 @@ fn restart_prompt(request: &str, plan: &str) -> String {
     let request = request.trim();
     let plan = plan.trim();
     let mut out = String::from(
-        "(Automatic message - not typed by the person. The conversation so far was cleared because they approved the plan with \"clear context and start fresh\"; everything you need is below.)\n\n",
+        "(Automatic message - not typed by the person. The conversation so far was cleared because they approved the plan with \"clear context and start fresh\"; their request and the plan are below.)\n\n",
     );
     if !request.is_empty() {
         let request: String = request.chars().take(RESTART_REQUEST_MAX_CHARS).collect();

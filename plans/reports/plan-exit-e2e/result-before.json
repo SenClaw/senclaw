@@ -1,0 +1,83 @@
+{
+ "label": "before",
+ "pass": 5,
+ "fail": 15,
+ "planRequests": [
+  {
+   "jid": "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "plan": "P1-PLAN: 1. write todo.py"
+  },
+  {
+   "jid": "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "plan": ""
+  },
+  {
+   "jid": "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "plan": "P2-PLAN: write p2.txt"
+  }
+ ],
+ "modeChanges": [
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "Plan"
+  ],
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "Agent"
+  ],
+  [
+   "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "Plan"
+  ],
+  [
+   "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "Agent"
+  ],
+  [
+   "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "Agent"
+  ],
+  [
+   "code:3fbf1527-ccb0-4069-9734-abb394924f69",
+   "Agent"
+  ],
+  [
+   "code:913125ba-389f-4b82-ab01-ea90c5867e13",
+   "Agent"
+  ]
+ ],
+ "replies": [
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "P1-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "[]"
+  ],
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "[]"
+  ],
+  [
+   "code:6f4560d0-ba74-48af-8082-e7a64d45da8a",
+   "[]"
+  ],
+  [
+   "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "P2-TEXT the plan is above."
+  ],
+  [
+   "code:f2821a02-7ca2-4be7-8a30-bd3a53a31af0",
+   "MOCK-DONE P2"
+  ],
+  [
+   "code:3fbf1527-ccb0-4069-9734-abb394924f69",
+   "P3-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:913125ba-389f-4b82-ab01-ea90c5867e13",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ]
+ ]
+}

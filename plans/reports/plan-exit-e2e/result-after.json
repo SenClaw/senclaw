@@ -1,0 +1,87 @@
+{
+ "label": "after",
+ "pass": 20,
+ "fail": 0,
+ "planRequests": [
+  {
+   "jid": "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "plan": "P1-PLAN: 1. write todo.py"
+  },
+  {
+   "jid": "code:24b0a31f-3b03-4df0-8ccf-775b587d0f01",
+   "plan": "P2-PLAN: write p2.txt"
+  }
+ ],
+ "modeChanges": [
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "Plan"
+  ],
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "Agent"
+  ],
+  [
+   "code:24b0a31f-3b03-4df0-8ccf-775b587d0f01",
+   "Plan"
+  ],
+  [
+   "code:24b0a31f-3b03-4df0-8ccf-775b587d0f01",
+   "Agent"
+  ],
+  [
+   "code:40f6d993-e400-41ba-8427-6c4fcf9b3ce2",
+   "Agent"
+  ],
+  [
+   "code:3ae8d401-7c9a-41bc-b1e4-fc485d4163ca",
+   "Agent"
+  ]
+ ],
+ "replies": [
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "P1-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "MOCK-DONE P1"
+  ],
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "MOCK-DONE P1"
+  ],
+  [
+   "code:f2c8a594-57c0-4325-a82a-220e60e85217",
+   "MOCK-DONE P1\n\n⚠️ Not verified: source files were edited and no build/test/lint command ran afterwards, so the result above is unconfirmed. Run `cargo test` before relying on it."
+  ],
+  [
+   "code:24b0a31f-3b03-4df0-8ccf-775b587d0f01",
+   "P2-TEXT the plan is above."
+  ],
+  [
+   "code:24b0a31f-3b03-4df0-8ccf-775b587d0f01",
+   "MOCK-DONE P2"
+  ],
+  [
+   "code:40f6d993-e400-41ba-8427-6c4fcf9b3ce2",
+   "P3-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:40f6d993-e400-41ba-8427-6c4fcf9b3ce2",
+   "MOCK-DONE P3"
+  ],
+  [
+   "code:3ae8d401-7c9a-41bc-b1e4-fc485d4163ca",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:3ae8d401-7c9a-41bc-b1e4-fc485d4163ca",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:3ae8d401-7c9a-41bc-b1e4-fc485d4163ca",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up).\n\n⚠️ Not looked up: the skill `web-research` was loaded but no tool was called afterwards, so the figures, dates and links above do not come from a live source. Do not rely on them."
+  ]
+ ]
+}
