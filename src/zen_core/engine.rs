@@ -611,6 +611,15 @@ impl ZenEngine {
             filtered.retain(|t| t.name() != crate::tools::TASK_DONE_TOOL_NAME);
         }
 
+        // A coding session runs unattended. Plan mode ends in an approval request, and
+        // `EnterPlanMode` advertises itself for "new project scaffolding or any task
+        // spanning 3+ files" - so a small model took it on both a new-project and a
+        // three-file edit and spent 100-500 s planning before its first `Write`. Only the
+        // *entry* goes: the person can still put the session in Plan mode themselves.
+        if !is_plan && !is_dag && Self::session_works_on_a_project(&opts) {
+            filtered.retain(|t| t.name() != "EnterPlanMode");
+        }
+
         // Layer 5 — defer filter. Deferred tools are excluded unless either:
         //   - they opted into `always_load()` (e.g. ToolSearch itself), OR
         //   - the model has already discovered them via a prior `ToolSearch`
@@ -3276,6 +3285,24 @@ mod tests {
         assert!(names.contains(&"Read"));
         assert!(!names.contains(&"Write"));
         assert!(!names.contains(&"Glob"));
+    }
+
+    #[test]
+    fn a_coding_session_is_not_offered_plan_mode_but_a_plain_chat_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = |code_session: bool| {
+            let opts = ZenCoreOptions {
+                instance_id: format!("test-planmode-{code_session}"),
+                working_dir: dir.path().to_string_lossy().into_owned(),
+                code_session,
+                ..Default::default()
+            };
+            let engine = ZenEngine::new(opts, None);
+            engine.tools_for_main_agent().iter().map(|t| t.name().to_string()).collect::<Vec<_>>()
+        };
+        assert!(!names(true).iter().any(|n| n == "EnterPlanMode"), "a coding session never enters Plan mode on its own");
+        assert!(names(false).iter().any(|n| n == "EnterPlanMode"), "a plain chat keeps it");
+        assert!(names(true).iter().any(|n| n == "Write"), "and keeps everything else");
     }
 
     #[test]
