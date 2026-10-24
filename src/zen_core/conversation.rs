@@ -914,21 +914,52 @@ If everything is already done, answer again with the final result and no trailin
     )
 }
 
-/// A run that has called no tool yet and answers with a question or a block of code has
+/// A run that has edited and run nothing yet and answers with a question or a block of code has
 /// done nothing: it asked the person to approve a plan the request already asked for
 /// ("Bạn đồng ý với kế hoạch này chứ?"), or wrote the calls it meant to make as text
-/// (```bash read_file "models.py"```). gemma-4-e4b did one of the two on both samples of
-/// a three-file edit, before any tool call, in 17 and 28 seconds. After the run has acted
-/// a question or a block of code is an ordinary end of an answer, so this is asked only
-/// of a run with no tool call so far.
+/// (```bash read_file "models.py"```). gemma-4-e4b did one of the two on both of its first
+/// two samples of a three-file edit, before any tool call, in 17 and 28 seconds. After the
+/// run has acted a question or a block of code is an ordinary end of an answer, so this is
+/// asked only of a run that has not yet edited a file or run a command (a read-only look
+/// around - one `repo_map` call - does not count as acting: a third sample did exactly that
+/// and stopped).
 fn asks_or_pastes_instead_of_acting(text: &str) -> bool {
     let t = text.trim_end_matches(|c: char| c.is_whitespace() || c == '*' || c == '_');
     t.ends_with('?') || t.ends_with('？') || t.ends_with("```")
 }
 
-fn no_approval_nudge() -> String {
+/// The files a request names: tokens that end in a source, document or config extension
+/// (`inventory/models.py`, `README.md`). Words, versions and domain names are not files
+/// (`e.g.`, `v1.2`, `example.com`). At most six, in the order they appear.
+///
+/// Two more samples of that three-file edit ended without a tool call and with neither
+/// a question mark nor a code block ('Xin vui lòng xác nhận kế hoạch này trước khi tôi
+/// tiến hành.' and a '?' in the middle of the last paragraph), so how the answer ends
+/// cannot be the only test. What every one of them had in common is the request: it named
+/// files, and the run opened none of them.
+fn files_named_in(request: &str) -> Vec<String> {
+    const EXTENSIONS: &[&str] = &["md", "json", "toml", "yaml", "yml", "txt", "html", "css", "sql", "dart", "swift", "kt", "kts", "rb", "php", "vue", "svelte", "scala", "sh", "lua", "zig"];
+    let mut found: Vec<String> = Vec::new();
+    for raw in request.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '"' | '\'' | '`' | ':')) {
+        let tok = raw.trim_end_matches(|c: char| matches!(c, '.' | '?' | '!'));
+        let Some((stem, ext)) = tok.rsplit_once('.') else { continue };
+        let name = stem.rsplit('/').next().unwrap_or(stem);
+        let is_ext = !ext.is_empty() && ext.len() <= 6 && ext.chars().all(|c| c.is_ascii_alphanumeric());
+        let known = EXTENSIONS.contains(&ext) || crate::repo_map::lang::spec_for_path(tok).is_some();
+        if is_ext && known && name.chars().any(|c| c.is_alphabetic()) && !tok.contains("://") && !found.iter().any(|f| f == tok) {
+            found.push(tok.to_string());
+            if found.len() == 6 {
+                break;
+            }
+        }
+    }
+    found
+}
+
+fn no_approval_nudge(unopened: &[String]) -> String {
+    let files = if unopened.is_empty() { String::new() } else { format!("The request names {}, and you have not opened {}. ", unopened.join(", "), if unopened.len() == 1 { "it" } else { "them" }) };
     format!(
-        "{}Your answer made no tool call and ends with a question or a block of code, so nothing was done. \
+        "{}You have edited and run nothing yet, and your answer stops short of the work, so nothing was done. {files}\
 The person has already asked for this work: do not ask for approval or confirmation, and do not write commands out as text. \
 Call the tools now (Read the files first if you need to see them). Only if you cannot go on without information the request \
 does not contain, say in one sentence what is missing.",
@@ -1416,6 +1447,10 @@ pub async fn query(
     let mut unverified_edit = false;
     let mut verify_nudges: u8 = 0;
     let mut announce_nudges: u8 = 0;
+    // Set once the run has edited a file or run a command (whether or not it worked), and what
+    // its calls were given (a call label is cut at 80 characters, a path often is not shorter).
+    let mut acted = false;
+    let mut touched: Vec<String> = Vec::new();
     let mut last_edit_path: Option<String> = None;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
@@ -2009,8 +2044,22 @@ pub async fn query(
                 if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES {
                     let unfinished = if announces_without_acting(&text_content) {
                         Some(("ends on a colon", announce_nudge()))
-                    } else if evidence.is_empty() && asks_or_pastes_instead_of_acting(&text_content) {
-                        Some(("asks or pastes commands before any tool call", no_approval_nudge()))
+                    } else if !acted {
+                        // Nothing edited or run yet. Files the request names that no call has touched.
+                        let unopened: Vec<String> = files_named_in(&original_prompt)
+                            .into_iter()
+                            .filter(|f| {
+                                let base = f.rsplit('/').next().unwrap_or(f);
+                                !touched.iter().any(|t| t.contains(base))
+                            })
+                            .collect();
+                        if asks_or_pastes_instead_of_acting(&text_content) {
+                            Some(("asks or pastes commands before editing or running anything", no_approval_nudge(&unopened)))
+                        } else if !unopened.is_empty() {
+                            Some(("stops short of a request that names files it has not opened", no_approval_nudge(&unopened)))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
@@ -2407,6 +2456,12 @@ pub async fn query(
                 }
                 evidence.add(&label, failed);
                 if config.coding_session {
+                    if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
+                        acted = true;
+                    }
+                    if touched.len() < 200 {
+                        touched.push(input.to_string().chars().take(2000).collect());
+                    }
                     if is_source_edit(name, input) {
                         if !failed {
                             unverified_edit = true;
@@ -3413,8 +3468,26 @@ mod tests {
         for t in ["", "Đã xong, 8 test pass.", "I updated models.py and service.py.", "Kết quả:\n- ok", "See `foo.py` for details"] {
             assert!(!asks_or_pastes_instead_of_acting(t), "{t:?}");
         }
-        let n = no_approval_nudge();
-        assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("made no tool call and ends with a question") && n.contains("do not ask for approval"), "{n}");
+        let n = no_approval_nudge(&[]);
+        assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("edited and run nothing yet") && n.contains("do not ask for approval"), "{n}");
+        assert!(!n.contains("have not opened"), "no files, nothing to name");
+    }
+
+    #[test]
+    fn the_files_a_request_names_are_found_and_words_are_not_files() {
+        let req = "Thêm trường category cho Product. Cập nhật inventory/models.py, inventory/storage.py (vẫn đọc được file JSON cũ), \
+                   inventory/service.py và inventory/cli.py, sửa README.md; xem `tests/test_service.py`, config.toml. Chạy `python3 -m unittest discover` e.g. v1.2 hoặc example.com.";
+        assert_eq!(
+            files_named_in(req),
+            vec!["inventory/models.py", "inventory/storage.py", "inventory/service.py", "inventory/cli.py", "README.md", "tests/test_service.py"],
+            "capped at six, in order, no words"
+        );
+        assert!(files_named_in("fix the login bug, see src/a.rs:12 and src/a.rs").contains(&"src/a.rs".to_string()));
+        assert_eq!(files_named_in("fix the login bug, e.g. v1.2 on example.com or 3.14"), Vec::<String>::new());
+        assert_eq!(files_named_in(""), Vec::<String>::new());
+        let n = no_approval_nudge(&["a.py".to_string(), "b.py".to_string()]);
+        assert!(n.contains("The request names a.py, b.py, and you have not opened them."), "{n}");
+        assert!(no_approval_nudge(&["a.py".to_string()]).contains("and you have not opened it."));
     }
 
     #[test]
