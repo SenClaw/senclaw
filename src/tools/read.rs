@@ -95,6 +95,7 @@ impl Tool for ReadTool {
         if metadata.len() > MAX_READ_BYTES {
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({
+                    "path": path.to_string_lossy(),
                     "content": "",
                     "lines": 0,
                     "totalLines": 0,
@@ -121,6 +122,7 @@ impl Tool for ReadTool {
         if start >= lines.len() {
             return Ok(vec![ToolOutput::Result {
                 data: serde_json::json!({
+                    "path": path.to_string_lossy(),
                     "content": "",
                     "lines": 0,
                     "totalLines": total_lines,
@@ -147,8 +149,14 @@ impl Tool for ReadTool {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // Which file and which of its lines, so a client can say "Read main.rs
+        // (590–701)" instead of only "Read a file". The model never sees these:
+        // `result_for_assistant` is the numbered text below.
         Ok(vec![ToolOutput::Result {
             data: serde_json::json!({
+                "path": path.to_string_lossy(),
+                "lineStart": start + 1,
+                "lineEnd": start + selected.len(),
                 "content": output,
                 "lines": selected.len(),
                 "totalLines": total_lines,
@@ -227,6 +235,48 @@ mod tests {
         // "File not found: nope.py" hid the directory — which was the whole
         // problem, since the directory was the wrong one.
         assert!(err.contains(&wd), "{err}");
+    }
+
+    fn data(outs: &[ToolOutput]) -> Value {
+        match &outs[0] {
+            ToolOutput::Result { data, .. } => data.clone(),
+            _ => panic!("unexpected output"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_result_names_the_file_and_the_lines_it_read() {
+        let d = tempfile::tempdir().unwrap();
+        let body: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        std::fs::write(d.path().join("app.py"), body).unwrap();
+        let wd = d.path().to_string_lossy().to_string();
+
+        // A relative path comes back as the file that was actually read.
+        let input = serde_json::json!({"file_path": "app.py", "offset": 4, "limit": 3});
+        let got = data(&ReadTool.call(input, &ctx(&wd)).await.unwrap());
+        assert_eq!(
+            got["path"].as_str().unwrap(),
+            d.path().join("app.py").to_string_lossy()
+        );
+        assert_eq!(got["lineStart"], 4);
+        assert_eq!(got["lineEnd"], 6);
+        assert_eq!(got["totalLines"], 10);
+
+        // No offset: the whole file, 1 to its last line.
+        let input = serde_json::json!({"file_path": "app.py"});
+        let got = data(&ReadTool.call(input, &ctx(&wd)).await.unwrap());
+        assert_eq!((got["lineStart"].as_u64(), got["lineEnd"].as_u64()), (Some(1), Some(10)));
+    }
+
+    #[tokio::test]
+    async fn an_offset_past_the_end_still_names_the_file() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("app.py"), "one\n").unwrap();
+        let wd = d.path().to_string_lossy().to_string();
+        let input = serde_json::json!({"file_path": "app.py", "offset": 50});
+        let got = data(&ReadTool.call(input, &ctx(&wd)).await.unwrap());
+        assert!(got["path"].as_str().unwrap().ends_with("app.py"), "{got}");
+        assert!(got.get("lineStart").is_none(), "{got}");
     }
 
     #[tokio::test]
