@@ -125,9 +125,10 @@ Thứ tự khi model dừng ở phiên code (mỗi bước chỉ một lần, tr
 0. Câu trả lời **kết thúc bằng dấu hai chấm** mà không gọi công cụ nào ("Đây là nội dung cho file X:" rồi dừng) → nhắc "bạn mới chỉ mô tả, hãy gọi công cụ ngay",
    **tối đa 2 lần**. Chỉ xét dấu `:` (kể cả `：`, bỏ qua `*`/`_` cuối), không có danh sách cụm từ nên dùng được cho mọi ngôn ngữ. Đo trên e4b: dự án 7 file dừng sau 2 file;
    nhắc xong nó gọi `Write` ba lần liền.
-   Cùng ngân sách 2 lần áp cho một yêu cầu **chưa gọi công cụ nào** mà câu trả lời kết thúc bằng `?` hoặc bằng khối code (` ``` `): "Bạn đồng ý với kế hoạch này chứ?" hoặc
-   lệnh viết thành chữ trong khối code (`read_file "models.py"`). Nhắc: đừng hỏi xin duyệt, hãy gọi công cụ; chỉ khi thiếu thông tin thật sự thì nói thiếu gì trong một câu.
-   Sau khi đã gọi công cụ thì câu hỏi/khối code ở cuối là kết thúc bình thường và không bị nhắc.
+   Cùng ngân sách 2 lần áp cho một yêu cầu **chưa sửa file hay chạy lệnh nào** (chỉ đọc/`repo_map` không tính là đã làm) mà câu trả lời kết thúc bằng `?` hoặc khối code
+   (` ``` `), **hoặc** yêu cầu có nêu tên file mà chưa có lời gọi nào chạm tới file đó: "Bạn đồng ý với kế hoạch này chứ?", lệnh viết thành chữ (`read_file "models.py"`),
+   "Xin vui lòng xác nhận kế hoạch", hoặc một lần `repo_map` rồi dừng. Nhắc: đừng hỏi xin duyệt, hãy gọi công cụ (kèm danh sách file chưa mở); chỉ khi thiếu thông tin
+   thật sự thì nói thiếu gì trong một câu. Sau khi đã sửa/chạy thì câu hỏi/khối code ở cuối là kết thúc bình thường và không bị nhắc.
 1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc, **tối đa 2 lần**. Lần 1 nêu đúng lệnh và nói rằng các lần sửa nằm *sau* lần chạy
    cuối (model từng lập luận "yêu cầu trước đã chạy rồi" rồi báo test pass khi chưa chạy). Lần 2 chỉ bảo "gọi Bash ngay với `<lệnh>`". Model vẫn trả
    lời không chạy → câu trả lời cuối được gắn dòng `⚠️ Chưa kiểm chứng …` (tiếng Việt nếu yêu cầu có dấu tiếng Việt, ngược lại tiếng Anh), nêu lệnh nên chạy.
