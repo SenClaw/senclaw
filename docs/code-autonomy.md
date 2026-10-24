@@ -68,6 +68,12 @@ tường minh của họ không bị đoán lại.
 - **Kiểm tra cú pháp** (tree-sitter, 10 ngôn ngữ) sau `Edit`/`Write`: chỉ báo lỗi **do lần sửa này gây ra** (so với
   trước khi sửa), nên file vốn hỏng hay cú pháp mới hơn grammar không gây báo giả. Không revert — chỉ báo.
   SWE-agent đo: sau một lần sửa hỏng, lần sau thành công chỉ còn 57% (so với 90%).
+- **Phiên code không có `EnterPlanMode`** (người dùng vẫn tự chuyển sang Plan được): model nhỏ vào Plan mode cho mọi việc "đụng 3 file" và mất 100–500 giây lập kế hoạch,
+  rồi dừng ở thẻ duyệt `ExitPlanMode`.
+- **Model tự host (localhost, mạng LAN, `.local`) không bị cắt theo giờ như host công cộng**: e4b ở LAN chạy 7–10 token/giây nên ghi một file 100 dòng đã quá 2 phút. Ba giới hạn
+  cùng gây ra "Network error: operation timed out" hoặc "LLM request timed out" đều được nâng cho loại endpoint này: hạn tổng 120 giây mỗi request (bỏ), hạn 180 giây mỗi lượt
+  của vòng lặp (thành 900 giây như engine local), và hạn im lặng 120 giây (thành 900 giây; request không stream thì im lặng tới khi có cả câu trả lời). Host công cộng giữ nguyên.
+  Lưu ý: `LLM_TIMEOUT` làm pool **reset phiên** (mất ngữ cảnh), khác `NETWORK_ERROR` được giữ ngữ cảnh.
 - **Kiểm tra trước khi kết thúc**: model dừng sau khi sửa file nguồn mà chưa chạy build/test/lint nào → nhắc tối đa
   **hai lần**, nêu đúng lệnh cần chạy; vẫn bỏ qua thì câu trả lời cuối mang cảnh báo "chưa kiểm chứng". Không áp dụng cho subagent.
 
@@ -116,6 +122,9 @@ cầu và câu trả lời mất. Nén ngữ cảnh chủ động giờ lặp l�
 
 Thứ tự khi model dừng ở phiên code (mỗi bước chỉ một lần, trừ phán quan và PreStop):
 
+0. Câu trả lời **kết thúc bằng dấu hai chấm** mà không gọi công cụ nào ("Đây là nội dung cho file X:" rồi dừng) → nhắc "bạn mới chỉ mô tả, hãy gọi công cụ ngay",
+   **tối đa 2 lần**. Chỉ xét dấu `:` (kể cả `：`, bỏ qua `*`/`_` cuối), không có danh sách cụm từ nên dùng được cho mọi ngôn ngữ. Đo trên e4b: dự án 7 file dừng sau 2 file;
+   nhắc xong nó gọi `Write` ba lần liền.
 1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc, **tối đa 2 lần**. Lần 1 nêu đúng lệnh và nói rằng các lần sửa nằm *sau* lần chạy
    cuối (model từng lập luận "yêu cầu trước đã chạy rồi" rồi báo test pass khi chưa chạy). Lần 2 chỉ bảo "gọi Bash ngay với `<lệnh>`". Model vẫn trả
    lời không chạy → câu trả lời cuối được gắn dòng `⚠️ Chưa kiểm chứng …` (tiếng Việt nếu yêu cầu có dấu tiếng Việt, ngược lại tiếng Anh), nêu lệnh nên chạy.

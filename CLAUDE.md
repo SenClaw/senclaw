@@ -1586,6 +1586,13 @@ Rules for Claude:
   still skips it goes to the person with `unverified_warning` appended to the **reply** (`MessageComplete.content`), never to the message kept for the model. Never for
   subagents or forced-final answers. Source edits only. A model that ran a check in an earlier request argues that run still counts - 2026-10-24, e4b, it then reported a
   pass for tests that had never run; keep the "after your last check" sentence.
+- **A reply that ends on a colon with no tool call is sent back, twice at most** (`announces_without_acting`, `MAX_ANNOUNCE_NUDGES`): "Đây là nội dung cho file X:" and then
+  nothing was gemma-4-e4b's way of stopping a 7-file project after 2 files, twice in a row; told "you only described it" it called `Write` three times. The test is the colon,
+  not a phrase list, so it works in any language. It runs before the verify round and only in coding sessions.
+- **An endpoint the owner runs has no total deadline** (`query_llm::total_request_timeout`: loopback, RFC 1918, link-local, `.local` via `is_self_hosted_endpoint`; only a public
+  host keeps 120 s). Two more limits had the same effect and go too: the loop's per-turn cap (`LLM_TURN_TIMEOUT`, 180 s -> the 900 s the local engines get) and the 120 s silence limit, which on such an endpoint becomes 900 s (`needs_patient_client`): a subagent's non-streamed call to the LAN e4b died at exactly 120 s, and a streamed one is silent through prefill. A cut turn surfaces as `LLM_TIMEOUT`, which the pool treats as fatal and **resets the session** (context lost), unlike `NETWORK_ERROR` which preserves it - keep timeouts rare for slow models rather than relying on that.
+- **A coding session is never offered `EnterPlanMode`** (`tools_for_main_agent`): it advertises itself for "new project scaffolding or 3+ files", and a small model spent 100-500 s
+  planning, then hit the `ExitPlanMode` approval card. The person can still switch the session to Plan mode; only the model's way in is removed.
 - **A forced final answer must not be preceded by a `SessionError`.** The pool's wait loop ends the request on one (`ProcessEvent::Error`), and the forced-final
   call that was meant to explain the stop never reaches the user. The turn cap, the token budget (`maxRunTokens`) and the stuck stop log a warning and
   push the final nudge; only a forced final that itself fails emits `AGENT_LOOP_LIMIT`. (`TOOL_ERROR_LOOP` still emits first - check it before copying it.)
