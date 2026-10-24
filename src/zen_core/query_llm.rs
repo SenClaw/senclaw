@@ -29,22 +29,48 @@ pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// [`REQUEST_TIMEOUT`] exists to bound a remote provider that has stopped
 /// answering. But a total deadline is *also* a ceiling on how long a generation
-/// may legitimately take, and a local engine blows through it honestly:
+/// may legitimately take, and a model the owner runs blows through it honestly:
 /// `DEFAULT_MLX_MAX_NEW_TOKENS` is 8192, which at ~60 tok/s is over two minutes
-/// of steady output — before prefill, and before a cold weight load. Cutting
-/// that off looks exactly like the model dying mid-sentence.
+/// of steady output - before prefill, and before a cold weight load. A 4B model
+/// on another machine of the owner's network (LM Studio at 192.168.x.x, 7-10
+/// tok/s, a 26k-token prompt) needs two minutes for one 100-line `Write`. Cutting
+/// that off looks exactly like the model dying mid-sentence: "Network error:
+/// operation timed out", and the run ends.
 ///
-/// So a loopback endpoint gets no deadline. Nothing is lost: a local engine
+/// So an endpoint the owner runs - this machine or a box on their own network
+/// ([`is_self_hosted_endpoint`]) - gets no deadline. Nothing is lost: a server
 /// that hangs is caught by the client's `read_timeout`
-/// ([`STREAM_STALL_TIMEOUT`]), which resets on every byte — silence kills, a
-/// slow-but-moving stream does not. This covers Ollama and LM Studio as much as
-/// it covers a SenClaw local model.
+/// ([`STREAM_STALL_TIMEOUT`]), which resets on every byte - silence kills, a
+/// slow-but-moving stream does not. Only a public host keeps the total deadline.
 fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
-    if is_loopback_endpoint(&profile.base_url) {
+    if is_self_hosted_endpoint(&profile.base_url) {
         None
     } else {
         Some(REQUEST_TIMEOUT)
     }
+}
+
+/// How long a request to an endpoint the owner runs may stay silent. The 120 s
+/// [`STREAM_STALL_TIMEOUT`] is right for a provider on the internet, and wrong here in
+/// two ways. A request that is not streamed (a subagent's, the judge's) gets nothing
+/// back until the whole reply exists, so 120 s is a total deadline in disguise: a
+/// subagent's call to a LAN gemma-4-e4b (2,300 reasoning tokens at 7-10 tok/s) died at
+/// exactly 120 s. And a streamed one is silent through prefill and thinking: the
+/// first request after a cancelled one waits behind the server still finishing it.
+/// 15 minutes - the same budget a turn gets (`LLM_TURN_TIMEOUT_LOCAL`) - is a dead
+/// server, not a slow one; Stop still ends the read at once.
+const OWN_SERVER_SILENCE: Duration = Duration::from_secs(900);
+
+/// Whether a request goes out on the patient client (see [`OWN_SERVER_SILENCE`]).
+fn needs_patient_client(base_url: &str) -> bool {
+    is_self_hosted_endpoint(base_url)
+}
+
+fn patient_client() -> Option<&'static Client> {
+    static CLIENT: std::sync::OnceLock<Option<Client>> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| Client::builder().connect_timeout(CONNECT_TIMEOUT).read_timeout(OWN_SERVER_SILENCE).build().ok())
+        .as_ref()
 }
 
 /// The host a base URL names, lowercased, with scheme, userinfo, port and path
@@ -213,9 +239,11 @@ pub(crate) async fn post_authed(
 ) -> Result<reqwest::Response> {
     let mut token = profile.api_key.clone();
 
-    // No total deadline for a loopback engine — see `total_request_timeout`.
-    // The client's `read_timeout` is what catches a stall in that case.
+    // No total deadline for a server the owner runs - see `total_request_timeout`.
+    // The client's `read_timeout` is what catches a stall in that case, and a request
+    // goes out on the patient client - see `needs_patient_client`.
     let deadline = total_request_timeout(profile);
+    let client = if needs_patient_client(&profile.base_url) { patient_client().unwrap_or(client) } else { client };
 
     for attempt in 0..2 {
         let mut builder = client.post(url).json(body);
@@ -2165,7 +2193,7 @@ mod loopback_tests {
     }
 
     #[test]
-    fn a_loopback_profile_gets_no_total_deadline() {
+    fn a_self_hosted_profile_gets_no_total_deadline() {
         let mut p = super::tests::profile("openai", "gpt-4");
         p.base_url = "https://api.openai.com/v1".into();
         assert_eq!(total_request_timeout(&p), Some(REQUEST_TIMEOUT));
@@ -2174,6 +2202,27 @@ mod loopback_tests {
         // a total deadline would cut it mid-sentence.
         p.base_url = "http://127.0.0.1:11434/v1".into();
         assert_eq!(total_request_timeout(&p), None);
+
+        // LM Studio on another machine of the owner's network: 7-10 tok/s, so one
+        // long tool call takes over two minutes. It ended every run with
+        // "Network error: operation timed out".
+        for url in ["http://192.168.0.93:1234/v1", "http://10.1.2.3:11434/v1", "http://172.16.0.5:8080/v1", "http://my-mac.local:1234/v1", "http://[fd12:3456::1]:8080/v1"] {
+            p.base_url = url.into();
+            assert_eq!(total_request_timeout(&p), None, "{url}");
+        }
+
+        // Silent through prefill, thinking and (not streamed) the whole reply: only on a
+        // server the owner runs does a request get the patient client.
+        assert!(super::needs_patient_client("http://192.168.0.93:1234/v1"));
+        assert!(super::needs_patient_client("http://127.0.0.1:11434/v1"));
+        assert!(!super::needs_patient_client("https://api.deepseek.com"), "a public host keeps the short limit");
+        assert!(super::patient_client().is_some());
+
+        // Look-alikes of a private address are public hosts and keep the deadline.
+        for url in ["http://192.168.0.1.evil.com/v1", "http://10.0.0.1x/v1", "https://api.deepseek.com", ""] {
+            p.base_url = url.into();
+            assert_eq!(total_request_timeout(&p), Some(REQUEST_TIMEOUT), "{url}");
+        }
     }
 }
 
