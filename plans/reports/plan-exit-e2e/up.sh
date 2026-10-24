@@ -17,6 +17,7 @@ cat > $S/home/.senclaw/config.json <<JSON
 JSON
 cd $S/proj && git init -q && git config user.email e2e@example.com && git config user.name e2e
 printf '[package]\nname = "e2e"\nversion = "0.1.0"\n' > Cargo.toml
+printf 'P5-PROJECT-MARKER: use tabs, never edit generated/.\n' > AGENTS.md
 git add -A && git commit -q -m init
 cd $S/mock && nohup node $HERE/mock-llm.mjs --port $MOCK --out $S/mock > $S/log/mock.log 2>&1 &
 echo $! > $S/mock.pid

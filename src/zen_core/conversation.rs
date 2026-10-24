@@ -1325,6 +1325,33 @@ fn restart_prompt(request: &str, plan: &str) -> String {
     out
 }
 
+/// How the block `ZenEngine::collect_first_turn_context` puts at the head of a conversation's
+/// first user message opens: today's date, then the person's profile and the project's
+/// instructions. A test in `engine.rs` pins the two together.
+pub(crate) const FIRST_TURN_CONTEXT_PREFIX: &str = "<system-reminder>\nToday's date is ";
+
+/// The newest first-turn context block in `messages`, as it was written. It rides on a user
+/// message, so clearing the history takes it along; the restart puts it back so the run still
+/// knows the date, who it works for and the repository's rules. `None` when the history holds none
+/// (a chat that was compacted down to a summary, a hydrated session without one).
+fn first_turn_context(messages: &[Message]) -> Option<String> {
+    messages.iter().rev().filter(|m| is_real_user_message(m)).flat_map(|m| m.message.content.iter()).find_map(|b| match b {
+        ContentBlock::Text { text } if text.starts_with(FIRST_TURN_CONTEXT_PREFIX) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// The user message a cleared run starts from: the first-turn context of the history that is
+/// about to be dropped (when it has one), then [`restart_prompt`].
+fn restart_message(history: &[Message], request: &str, plan: &str) -> Message {
+    let mut blocks = Vec::with_capacity(2);
+    if let Some(context) = first_turn_context(history) {
+        blocks.push(ContentBlock::Text { text: context });
+    }
+    blocks.push(ContentBlock::Text { text: restart_prompt(request, plan) });
+    create_user_message(blocks)
+}
+
 /// Times an answer is sent back because a skill that works through tools was loaded and no tool
 /// was called afterwards.
 const MAX_SKILL_NUDGES: u8 = 2;
@@ -2460,14 +2487,14 @@ pub async fn query(
                 "[{}] received ClearContextAndStart control signal — clearing history",
                 config.agent_id
             );
+            // Built before the history goes: the first-turn context lives in it.
+            let restart = restart_message(&messages, &original_prompt, plan_content);
             messages.clear();
             skill_unused = None;
             if !config.chat_jid.is_empty() {
                 let _ = crate::zen_core::session_store::clear(&config.chat_jid);
             }
-            messages.push(create_user_message(vec![ContentBlock::Text {
-                text: restart_prompt(&original_prompt, plan_content),
-            }]));
+            messages.push(restart);
             // Trigger mode switch if needed (this matches TS behaviour)
             // The ZenEngine will handle PlanImplement event and set agent_mode
             // wait, but the event wasn't emitted here? Actually, the UI emits PlanExitResponse to engine,
@@ -3662,6 +3689,54 @@ mod tests {
         let long = "Ж".repeat(RESTART_REQUEST_MAX_CHARS * 2);
         let p = restart_prompt(&long, "plan");
         assert_eq!(p.matches('Ж').count(), RESTART_REQUEST_MAX_CHARS);
+    }
+
+    fn user_text(text: &str) -> Message {
+        create_user_message(vec![ContentBlock::Text { text: text.to_string() }])
+    }
+
+    #[test]
+    fn a_restart_brings_back_the_first_turn_context_and_only_that() {
+        let ctx = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-25.\n\nProject instructions (AGENTS.md):\nUse tabs.\n</system-reminder>\n\n");
+        let mut history = vec![
+            create_user_message(vec![
+                ContentBlock::Text { text: ctx.clone() },
+                ContentBlock::Text { text: "Reply in Vietnamese.".into() },
+                ContentBlock::Text { text: "make a todo app".into() },
+            ]),
+            user_text("keep the buttons small"),
+        ];
+        // An assistant message that happens to quote the block is not the context.
+        let mut quoted = user_text(&ctx.replace("2026-10-25", "1999-01-01"));
+        quoted.msg_type = "assistant".into();
+        quoted.message.role = "assistant".into();
+        history.push(quoted);
+
+        let m = restart_message(&history, "make a todo app", "1. scaffold");
+        assert_eq!(m.msg_type, "user");
+        assert_eq!(m.message.content.len(), 2, "the context, then the restart prompt: {:?}", m.message.content);
+        let texts: Vec<&str> = m.message.content.iter().map(|b| match b { ContentBlock::Text { text } => text.as_str(), _ => "" }).collect();
+        assert_eq!(texts[0], ctx, "as it was written, so the profile and the project rules come back verbatim");
+        assert!(texts[1].contains("make a todo app") && texts[1].contains("1. scaffold"));
+        assert!(!texts[1].contains("Today's date"), "the context is carried once, not copied into the prompt");
+    }
+
+    #[test]
+    fn the_newest_first_turn_context_wins() {
+        // An identity refresh later in a chat writes a newer block; that is the one to keep.
+        let old = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-01.\n</system-reminder>\n\n");
+        let new = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-20.\n</system-reminder>\n\n");
+        let history = vec![user_text(&old), user_text("hi"), user_text(&new), user_text("go on")];
+        assert_eq!(first_turn_context(&history).as_deref(), Some(new.as_str()));
+    }
+
+    #[test]
+    fn a_history_with_no_first_turn_context_restarts_with_the_prompt_alone() {
+        let history = vec![user_text("make a todo app"), user_text("<system-reminder>\nContext was compacted. Today's date is 2026-10-25.\n</system-reminder>")];
+        assert_eq!(first_turn_context(&history), None);
+        let m = restart_message(&history, "make a todo app", "");
+        assert_eq!(m.message.content.len(), 1);
+        assert_eq!(first_turn_context(&[]), None);
     }
 
     #[test]

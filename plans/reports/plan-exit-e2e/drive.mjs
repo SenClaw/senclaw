@@ -130,6 +130,23 @@ check('P4 sent back exactly twice', sawText('P4', 'You loaded the skill `web-res
 const r4 = lastReply.get(j4) ?? '';
 check('P4 the reply still carries the made-up text, and the warning', r4.includes('P4-FABRICATED') && r4.includes('⚠️ Not looked up') && r4.includes('`web-research`'), r4);
 
+// ---- P5: the restart brings the first-turn context back: the date and the project's instructions
+const j5 = await session('p5');
+await setMode(j5, 'Plan');
+planAnswer = 'clearContextAndStart';
+await say(j5, steps('P5', [
+  { t: '@text', a: { text: 'P5-TEXT: here is my plan, in prose.' } },
+  { t: 'ExitPlanMode', a: { plan: 'P5-PLAN: 1. write p5.txt' } },
+], { afterRestart: [{ t: 'Write', a: { file_path: `${PROJ}/p5.txt`, content: 'ok\n' } }] }));
+const first5 = reqs('P5')[0];
+const restart5 = reqs('P5').find((r) => r.restarted);
+const count = (text, needle) => text.split(needle).length - 1;
+check('P5 the first request of the chat carried the date and the project instructions', !!first5 && first5.lastText.includes("Today's date is") && first5.lastText.includes('P5-PROJECT-MARKER'), first5?.lastText?.slice(0, 300));
+check('P5 the restart message carries them again', !!restart5 && restart5.lastText.includes("Today's date is") && restart5.lastText.includes('P5-PROJECT-MARKER'), restart5?.lastText?.slice(0, 300));
+check('P5 once, and ahead of the request', !!restart5 && count(restart5.lastText, "Today's date is") === 1 && restart5.lastText.indexOf("Today's date is") < restart5.lastText.indexOf('run script P5'), restart5?.lastText?.slice(0, 300));
+check('P5 with the request and the plan after it', !!restart5 && restart5.lastText.includes('run script P5') && restart5.lastText.includes('P5-PLAN: 1. write p5.txt'));
+check('P5 and the run carried on: p5.txt was written', exists('p5.txt') && /MOCK-DONE P5/.test(lastReply.get(j5) ?? ''), lastReply.get(j5));
+
 log(`${LABEL}: ${pass} passed, ${fail} failed`);
 fs.writeFileSync(`${S}/result-${LABEL}.json`, JSON.stringify({ label: LABEL, pass, fail, planRequests, modeChanges, replies }, null, 1));
 ws.close();

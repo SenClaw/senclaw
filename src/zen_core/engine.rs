@@ -4642,12 +4642,15 @@ mod tests {
         let dir = d.path().to_string_lossy().to_string();
 
         let ctx = ZenEngine::collect_first_turn_context(&dir, true, "code:abc").unwrap();
+        // The restart after "clear context" finds this block by its opening.
+        assert!(ctx.starts_with(crate::zen_core::conversation::FIRST_TURN_CONTEXT_PREFIX), "{ctx}");
         assert!(ctx.contains("Project instructions (AGENTS.md)"), "{ctx}");
         assert!(ctx.contains("Never edit generated/"), "{ctx}");
         assert!(ctx.contains("<project_commands>") && ctx.contains("cargo test"), "{ctx}");
 
         // A chat that is not working on a project carries neither.
         let plain = ZenEngine::collect_first_turn_context(&dir, false, "web:abc").unwrap();
+        assert!(plain.starts_with(crate::zen_core::conversation::FIRST_TURN_CONTEXT_PREFIX), "{plain}");
         assert!(!plain.contains("Use tabs") && !plain.contains("<project_commands>"), "{plain}");
     }
 

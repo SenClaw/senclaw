@@ -175,7 +175,7 @@ http
           roles: messages.map((m) => `${m.role}:${textOf(m.content).slice(0, 60).replace(/\n/g, ' ')}`),
           restarted: messages.some((m) => m.role === 'user' && textOf(m.content).includes('cleared because they approved the plan')),
           lastRole: last.role,
-          lastText: textOf(last.content).slice(0, 1600),
+          lastText: textOf(last.content).slice(0, 20000),
           prevResults: results,
           answered: out.call ? { call: out.call.name, args: out.call.arguments } : { text: out.text },
         }) + '\n',
