@@ -23,6 +23,8 @@ async function api(p, init) {
 }
 
 const cards = []; // every permission:request the agent caused
+const lastReply = new Map(); // jid -> text of the newest agent:reply
+const replyLog = [];
 let answerWith = 'refuse';
 const ws = new WebSocket(WSURL);
 const idle = new Map();
@@ -36,6 +38,7 @@ ws.onmessage = (e) => {
   }
   if (m.type === 'question:request') ws.send(JSON.stringify({ type: 'question:response', requestId: m.requestId, answers: { 0: 0 } }));
   const jid = m.groupJid ?? m.jid ?? m.chatJid;
+  if (m.type === 'agent:reply' && jid) { lastReply.set(jid, m.text ?? m.content ?? ''); replyLog.push([jid, m.text ?? m.content ?? '']); }
   if (m.type === 'agent:state' && jid) {
     const s = JSON.stringify(m.state ?? '');
     if (/processing|thinking|running/i.test(s)) busy.add(jid);
@@ -50,6 +53,7 @@ async function say(jid, text, timeoutMs = 90000) {
 }
 const mockReqs = () => (fs.existsSync(`${S}/mock/requests.jsonl`) ? fs.readFileSync(`${S}/mock/requests.jsonl`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const results = (tag) => mockReqs().filter((r) => r.tag === tag).flatMap((r) => r.prevResults ?? []);
+const sawText = (tag, needle) => mockReqs().filter((r) => r.tag === tag).some((r) => (r.lastText ?? '').includes(needle));
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => { (ok ? pass++ : fail++); log(ok ? 'PASS' : 'FAIL', name, ok ? '' : detail); };
@@ -93,6 +97,7 @@ n0 = cards.length;
 await say(jid, steps('S3', [
   { t: 'Write', a: { file_path: `${PROJ}/bad.py`, content: 'def f(:\n    pass\n' } },
 ]));
+const reply3 = lastReply.get(jid) ?? '';
 const r3 = results('S3').join('\n');
 check('S3 syntax error is reported', /Syntax check: this edit leaves/.test(r3), r3.slice(0, 400));
 check('S3 and asked nothing', since(n0).length === 0);
@@ -102,11 +107,15 @@ await say(jid, steps('S4', [
   { t: 'Write', a: { file_path: `${PROJ}/t.py`, content: 'print("t")\n' } },
   { t: 'Bash', a: { command: 'python3 -m pytest -q t.py', description: 'e2e step' } },
 ]));
-const nudgeText = 'You edited source files but have not run anything that checks them';
+const nudgeText = 'You edited source files';
 const s4nudged = mockReqs().filter((r) => r.tag === 'S4').some((r) => (r.lastText ?? '').includes(nudgeText));
 check('S4 verified edit is not nudged', !s4nudged);
+check('S4 and its reply carries no warning', !/⚠️ Not verified/.test(lastReply.get(jid) ?? ''), lastReply.get(jid));
 const s3nudged = mockReqs().filter((r) => r.tag === 'S3').some((r) => (r.lastText ?? '').includes(nudgeText));
-check('S3 an edit that nothing ran was nudged once', s3nudged);
+check('S3 an edit that nothing ran was sent back', s3nudged);
+check('S3 the note names the check this conversation already ran (S1: python3 hello.py)', sawText('S3', 'Run `python3 hello.py` with the Bash tool'));
+check('S3 an answer that still skips it is sent back a second time, naming the call', sawText('S3', 'call the Bash tool now with `python3 hello.py`'));
+check('S3 and then ends with the warning on the reply', /⚠️ Not verified/.test(reply3) && reply3.includes('`python3 hello.py`') && reply3.includes('MOCK-DONE S3'), JSON.stringify(replyLog.filter(([j]) => j === jid).slice(-4)).slice(0, 700));
 const s1nudged = mockReqs().filter((r) => r.tag === 'S1').some((r) => (r.lastText ?? '').includes(nudgeText));
 check('S1 an edit followed by running the program is not nudged', !s1nudged);
 
@@ -150,7 +159,6 @@ const lastResults = (tag) => {
   const rs = mockReqs().filter((r) => r.tag === tag);
   return rs.length ? rs[rs.length - 1].prevResults ?? [] : [];
 };
-const sawText = (tag, needle) => mockReqs().filter((r) => r.tag === tag).some((r) => (r.lastText ?? '').includes(needle));
 const bash = (command) => ({ t: 'Bash', a: { command, description: 'e2e step' } });
 const setLimits = (o) => api('/api/agent-behavior', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o) });
 
