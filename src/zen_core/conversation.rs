@@ -889,7 +889,8 @@ async fn run_finish_judge(
     finish_check::parse_verdict(&text)
 }
 
-/// Times a coding request is sent back because its reply ended on a colon.
+/// Times a coding request is sent back because its reply stopped without acting: it ended on a
+/// colon, or - before any tool call - on a question or a block of code.
 const MAX_ANNOUNCE_NUDGES: u8 = 2;
 
 /// A reply that stops on a colon announces what comes next - "Đây là nội dung cho
@@ -909,6 +910,28 @@ fn announce_nudge() -> String {
         "{}Your reply ends with a colon: it announces something and then makes no tool call, so nothing happened. \
 Make the call now (Write, Edit or Bash) instead of describing it, and carry on until the whole request is done. \
 If everything is already done, answer again with the final result and no trailing colon.",
+        stuck::AUTOMATIC
+    )
+}
+
+/// A run that has called no tool yet and answers with a question or a block of code has
+/// done nothing: it asked the person to approve a plan the request already asked for
+/// ("Bạn đồng ý với kế hoạch này chứ?"), or wrote the calls it meant to make as text
+/// (```bash read_file "models.py"```). gemma-4-e4b did one of the two on both samples of
+/// a three-file edit, before any tool call, in 17 and 28 seconds. After the run has acted
+/// a question or a block of code is an ordinary end of an answer, so this is asked only
+/// of a run with no tool call so far.
+fn asks_or_pastes_instead_of_acting(text: &str) -> bool {
+    let t = text.trim_end_matches(|c: char| c.is_whitespace() || c == '*' || c == '_');
+    t.ends_with('?') || t.ends_with('？') || t.ends_with("```")
+}
+
+fn no_approval_nudge() -> String {
+    format!(
+        "{}Your answer made no tool call and ends with a question or a block of code, so nothing was done. \
+The person has already asked for this work: do not ask for approval or confirmation, and do not write commands out as text. \
+Call the tools now (Read the files first if you need to see them). Only if you cannot go on without information the request \
+does not contain, say in one sentence what is missing.",
         stuck::AUTOMATIC
     )
 }
@@ -1983,12 +2006,21 @@ pub async fn query(
             }
             if !config.is_subagent && !forcing_final {
                 // The reply announces the next step and stops there.
-                if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES && announces_without_acting(&text_content) {
-                    announce_nudges += 1;
-                    info!("[{}] reply ends on a colon with no tool call - sending the agent back ({announce_nudges}/{MAX_ANNOUNCE_NUDGES})", config.agent_id);
-                    messages.push(assistant_msg);
-                    messages.push(create_user_message(vec![ContentBlock::Text { text: announce_nudge() }]));
-                    continue;
+                if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES {
+                    let unfinished = if announces_without_acting(&text_content) {
+                        Some(("ends on a colon", announce_nudge()))
+                    } else if evidence.is_empty() && asks_or_pastes_instead_of_acting(&text_content) {
+                        Some(("asks or pastes commands before any tool call", no_approval_nudge()))
+                    } else {
+                        None
+                    };
+                    if let Some((why, text)) = unfinished {
+                        announce_nudges += 1;
+                        info!("[{}] reply {why}, no tool call - sending the agent back ({announce_nudges}/{MAX_ANNOUNCE_NUDGES})", config.agent_id);
+                        messages.push(assistant_msg);
+                        messages.push(create_user_message(vec![ContentBlock::Text { text }]));
+                        continue;
+                    }
                 }
                 // Edited source, ran nothing that checks it.
                 if config.coding_session && unverified_edit && verify_nudges < MAX_VERIFY_NUDGES {
@@ -3365,6 +3397,24 @@ mod tests {
         }
         let n = announce_nudge();
         assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("makes no tool call"), "{n}");
+    }
+
+    #[test]
+    fn a_question_or_a_block_of_code_with_no_tool_call_yet_is_asking_instead_of_acting() {
+        for t in [
+            "Bạn đồng ý với kế hoạch này chứ?",
+            "Shall I go ahead?  \n",
+            "Bạn muốn tôi bắt đầu không？",
+            "**Do you agree?**",
+            "Bước 1:\n```bash\nread_file \"inventory/models.py\"\n```",
+        ] {
+            assert!(asks_or_pastes_instead_of_acting(t), "{t:?}");
+        }
+        for t in ["", "Đã xong, 8 test pass.", "I updated models.py and service.py.", "Kết quả:\n- ok", "See `foo.py` for details"] {
+            assert!(!asks_or_pastes_instead_of_acting(t), "{t:?}");
+        }
+        let n = no_approval_nudge();
+        assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("made no tool call and ends with a question") && n.contains("do not ask for approval"), "{n}");
     }
 
     #[test]
