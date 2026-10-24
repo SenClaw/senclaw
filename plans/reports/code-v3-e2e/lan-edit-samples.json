@@ -1,0 +1,131 @@
+{
+ "model": "google/gemma-4-e4b @ 192.168.0.93:1234",
+ "task": "add a category field across models/storage/service/cli + tests in a 9-file baseline",
+ "note": "featureChecks = 8 independent checks (scratchpad category-check.py), not the model's own tests; samples 1-4 and 11-13 are earlier builds",
+ "samples": [
+  {
+   "sample": 1,
+   "build": "colon only",
+   "editFormat": "exact",
+   "toolCalls": 21,
+   "editsWith0Replacements": 0,
+   "reminders": [
+    "last check failed (python3 -m unittest discover) and nothing passed since - nudging once",
+    "stuck by results (`Edit: tests/test_inventory.py` failed with the same output 4 times) - nudging to change approach"
+   ],
+   "testsAtEnd": "FAILS or none ran: ---------------------------------------------------------------------- | Ran 17 tests in 0.001s |  | FAILED (errors=4)",
+   "featureChecks": "7/8"
+  },
+  {
+   "sample": 2,
+   "build": "colon only",
+   "editFormat": "exact",
+   "toolCalls": 16,
+   "editsWith0Replacements": 0,
+   "reminders": [],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 8 tests in 0.001s |  | OK",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 3,
+   "build": "colon+question-end",
+   "editFormat": "exact",
+   "toolCalls": 0,
+   "editsWith0Replacements": 0,
+   "reminders": [],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 8 tests in 0.001s |  | OK",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 4,
+   "build": "colon+question-end",
+   "editFormat": "exact",
+   "toolCalls": 0,
+   "editsWith0Replacements": 0,
+   "reminders": [],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 8 tests in 0.001s |  | OK",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 11,
+   "build": "+names-files, zero tool calls",
+   "editFormat": "exact",
+   "toolCalls": 21,
+   "editsWith0Replacements": 8,
+   "reminders": [
+    "last check failed (python3 -m unittest discover) and nothing passed since - nudging once"
+   ],
+   "testsAtEnd": "FAILS or none ran: ---------------------------------------------------------------------- | Ran 8 tests in 0.001s |  | FAILED (errors=1)",
+   "featureChecks": "7/8"
+  },
+  {
+   "sample": 12,
+   "build": "+names-files, zero tool calls",
+   "editFormat": "exact",
+   "toolCalls": 16,
+   "editsWith0Replacements": 8,
+   "reminders": [],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 8 tests in 0.001s |  | OK",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 13,
+   "build": "+names-files, zero tool calls",
+   "editFormat": "exact",
+   "toolCalls": 1,
+   "editsWith0Replacements": 0,
+   "reminders": [],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 8 tests in 0.001s |  | OK",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 21,
+   "build": "final",
+   "editFormat": "exact",
+   "toolCalls": 19,
+   "editsWith0Replacements": 5,
+   "reminders": [
+    "last check failed (cd tests && python3 -m unittest discover) and nothing passed since - nudging once"
+   ],
+   "testsAtEnd": "FAILS or none ran: ---------------------------------------------------------------------- | Ran 8 tests in 0.000s |  | FAILED (failures=2, e",
+   "featureChecks": "does not import"
+  },
+  {
+   "sample": 22,
+   "build": "final",
+   "editFormat": "exact",
+   "toolCalls": 14,
+   "editsWith0Replacements": 0,
+   "reminders": [
+    "reply stops short of a request that names files it has not opened, no tool call - sending the agent back (1/2)",
+    "last check failed (python3 -m unittest discover) and nothing passed since - nudging once"
+   ],
+   "testsAtEnd": "python3 -m unittest discover -> Ran 13 tests in 0.002s |  | OK",
+   "featureChecks": "8/8"
+  },
+  {
+   "sample": 24,
+   "build": "final",
+   "editFormat": "fuzzy",
+   "toolCalls": 25,
+   "editsWith0Replacements": 9,
+   "reminders": [
+    "last check failed (python3 -m unittest discover tests/) and nothing passed since - nudging once"
+   ],
+   "testsAtEnd": "FAILS or none ran: ---------------------------------------------------------------------- | Ran 9 tests in 0.001s |  | FAILED (failures=2, e",
+   "featureChecks": "2/8"
+  },
+  {
+   "sample": 25,
+   "build": "final",
+   "editFormat": "fuzzy",
+   "toolCalls": 9,
+   "editsWith0Replacements": 0,
+   "reminders": [
+    "edited source files, ran no check - sending the agent back (1/2, command: Some(\"cd tests && python3 -m unittest\"))"
+   ],
+   "testsAtEnd": "FAILS or none ran: ---------------------------------------------------------------------- | Ran 8 tests in 0.001s |  | FAILED (errors=1)",
+   "featureChecks": "3/8"
+  }
+ ]
+}
