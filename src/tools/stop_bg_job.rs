@@ -18,7 +18,7 @@ impl Tool for StopBgJobTool {
     }
 
     fn description(&self) -> &str {
-        "Stop a running background job started by Bash with background=true."
+        "Stop a running background job started by Bash with run_in_background=true, or left running by a Bash command (the result names its job id)."
     }
 
     fn input_schema(&self) -> Value {

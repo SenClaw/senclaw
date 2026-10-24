@@ -921,6 +921,39 @@ and in the `schedule_watch` tool description — the description is what actuall
 reaches a model mid-turn, so it carries the anti-patterns (`sleep`, "ask me
 later", in-turn polling loops) explicitly.
 
+## Background tasks: what an agent left running (`src/bg_tasks/`)
+
+A server started from a chat (`npm run dev`, `python -m http.server`) used to outlive its turn with nothing to list it and nothing to end it: `Bash` had no
+`run_in_background`, the sandbox shell is a `setsid` group leader that was only signalled on timeout, and a `cmd &` that kept the pipes made the call wait for
+its timeout and then SIGKILL the server it had just started. `BgJobManager` (`tools/bg_jobs.rs`, with `PeekBgJob` / `StopBgJob`) is the registry; `bg_tasks`
+fills it, `/api/bg-tasks` shows it (strip above the composer + Processes tab in web and desktop). Guide, REST table and limits: [docs/bg-tasks.md](docs/bg-tasks.md);
+plan: `plans/261024-0405-bg-tasks/`; end-to-end harness: `plans/reports/bg-tasks-e2e/`.
+
+Rules for Claude:
+
+- **A task is running while its process group has a live member, not while its shell lives.** `npm run dev &` ends its shell at once. A daemon-started shell is
+  finished by its own waiter only when the group is also empty (`child_exited` + the watcher, `may_finish`); every other task by the watcher alone.
+- **Signal a group, never a pid or a pattern, and never the daemon's own.** `proc::signal_group` refuses pgid ≤ 1 and `getpgrp()`. A recorded pgid is trusted by
+  continuity — the registry made the group (or listed its members), and the 1 s watcher ends the task the moment it is empty, far inside the time the pid counter
+  needs to wrap. An earlier version asked "is a recorded pid still in the group" before every stop and refused `sleep 60 &` right after it started (the list was
+  3 s stale). Only a **restored** entry (after a restart there is no continuity) must pass `still_ours` before it is listed. Never `lsof -t … | kill`.
+- **Only agent `Bash` opts into "the run ends when the shell does"** (`ExecSpec::keep_leftovers`, `wait_shell`). The REPL, scheduler scripts and the sandbox MCP keep
+  `wait_with_output` semantics (end at pipe EOF, killed at the timeout): a script that backgrounds something must not outlive its run. With the opt-in, a leftover
+  that still holds the pipes comes back as `Held` and its readers are attached to the job (`Capture::attach`), so the log keeps arriving and the server never gets
+  SIGPIPE. Closing the read ends instead kills dev servers on their next log line.
+- **Adoption waits `SETTLE` (300 ms) and needs the group still alive**, so `sleep 1 &` is not a task. `adopt` registers even when `ps` cannot be read
+  (`proc::members` is `None`, not an empty list — an empty answer would read as "nothing is running"). A daemon wrapped in `sandbox-exec` cannot exec `ps`/`lsof`
+  (macOS): adopted tasks then have no pids or ports. Run scratch daemons for this feature without that guard and grep the log for `18788` instead.
+- **A tool learns its chat through `bg_tasks::with_chat`**, a task-local set around `tool.call` in `run_tools` from `RunContext.chat_jid` — not a `ToolContext`
+  field (about 45 struct literals) and not a tool parameter (a caller-supplied chat could stop another chat's server).
+- **Graceful shutdown stops every task** (`shutdown_all`, in parallel with Space Apps; the desktop sends SIGKILL ~800 ms after SIGTERM) and writes an empty
+  `bg-tasks.json` (0600: commands may carry secrets). After a crash the file lists what survived and boot re-registers the entries that pass `still_ours`
+  (`Origin::Restored`, ids bumped past `BgJobManager::bump_counter_past`). Unregistering a chat stops its tasks.
+- **`/api/bg-tasks` takes `chatJid`** (`rename = "chatJid"`, snake_case alias) — the field name is the wire name, as for `/api/watches`. A second stop is a 409, not a
+  success; dismissing a running task is a 409. Finished tasks stay 6 h / 50 entries (`prune_finished`).
+- **Windows**: stop works through `taskkill /T`; adoption, groups and port listing are Unix-only, and `run_in_background` under the Windows sandbox is refused with a message.
+  Type-checked with `cargo check --lib --target x86_64-pc-windows-gnu` (mingw is installed), never run.
+
 ## DAG dispatch: finishing, and retrying what failed
 
 Three properties the dispatch bridge must keep, all of which failed silently

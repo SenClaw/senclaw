@@ -230,6 +230,34 @@ pub async fn exec(
     source: &str,
     argv: Option<Vec<String>>,
 ) -> Result<Run> {
+    exec_with_leftover(db, sb, script, timeout_ms, extra_env, kind, language, source, argv, false)
+        .await
+        .map(|(run, _)| run)
+}
+
+/// What a run that ended normally left behind: the shell's process group, and
+/// the pipes a process of it still holds. Both empty unless `keep_leftovers`.
+#[derive(Debug, Default)]
+pub struct Leftover {
+    pub group: Option<u32>,
+    pub held: Option<crate::bg_tasks::Held>,
+}
+
+/// [`exec`] for the agent's `Bash`: the run ends when the shell does, and what
+/// the shell started and left running comes back as a [`Leftover`] to register as
+/// a background task instead of being waited for until the timeout.
+pub async fn exec_with_leftover(
+    db: &Db,
+    sb: &Sandbox,
+    script: &str,
+    timeout_ms: Option<i64>,
+    extra_env: BTreeMap<String, String>,
+    kind: &str,
+    language: Option<&str>,
+    source: &str,
+    argv: Option<Vec<String>>,
+    keep_leftovers: bool,
+) -> Result<(Run, Leftover)> {
     let timeout_ms = timeout_ms
         .unwrap_or(sb.timeout_ms)
         .clamp(1_000, MAX_TIMEOUT_MS as i64) as u64;
@@ -286,6 +314,7 @@ pub async fn exec(
         timeout_ms,
         extra_env,
         argv,
+        keep_leftovers,
     };
 
     let outcome: Outcome = match sb.backend.as_str() {
@@ -310,6 +339,7 @@ pub async fn exec(
         other => return Err(anyhow!("invalid backend `{other}`")),
     };
 
+    let leftover = Leftover { group: outcome.group, held: outcome.held.clone() };
     let run = Run {
         id: db::new_id(),
         sandbox_id: sb.id.clone(),
@@ -350,7 +380,40 @@ pub async fn exec(
         let _ = db.insert_events(&sb.id, &run.id, &events);
     }
 
-    Ok(run)
+    Ok((run, leftover))
+}
+
+/// Start a script in the sandbox's direct backend and return the child at once
+/// (a background task), with what confines it. Not recorded as a run: nothing is
+/// known of its result until it ends, and the registry owns it from here.
+pub async fn spawn_direct(
+    db: &Db,
+    sb: &Sandbox,
+    script: &str,
+    argv: Option<Vec<String>>,
+) -> Result<(tokio::process::Child, String)> {
+    if sb.backend != "direct" {
+        return Err(anyhow!("background commands need the direct sandbox backend, not `{}`", sb.backend));
+    }
+    #[cfg(windows)]
+    {
+        let _ = (db, script, argv);
+        Err(anyhow!("background commands are not supported under the Windows sandbox yet"))
+    }
+    #[cfg(not(windows))]
+    {
+        let allow = crate::sandbox::settings::load(db).allowlist;
+        let kind = direct_kind().await;
+        let spec = ExecSpec {
+            script: script.to_string(),
+            timeout_ms: 0,
+            extra_env: BTreeMap::new(),
+            argv,
+            keep_leftovers: true,
+        };
+        let child = backend::direct::spawn(sb, &spec, kind, &allow).await.map_err(|e| anyhow!(e))?;
+        Ok((child, kind.as_str().to_string()))
+    }
 }
 
 /// Run a snippet in a named language.

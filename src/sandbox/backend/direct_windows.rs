@@ -489,6 +489,7 @@ fn spawn(
         timed_out,
         duration_ms: start.elapsed().as_millis() as i64,
         isolation: "appcontainer".into(),
+        ..Default::default()
     })
 }
 
@@ -521,6 +522,7 @@ fn failed(msg: String, start: Instant) -> Outcome {
         timed_out: false,
         duration_ms: start.elapsed().as_millis() as i64,
         isolation: "appcontainer".into(),
+        ..Default::default()
     }
 }
 

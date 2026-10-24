@@ -50,9 +50,12 @@ pub struct ExecSpec {
     /// `/bin/sh`, so it needs the program resolved up front — which also tells
     /// the AppContainer which interpreter directory to grant.
     pub argv: Option<Vec<String>>,
+    /// End the run when the shell exits, and hand back what it left holding the
+    /// pipes (agent `Bash`). Off: end when the pipes close, as before.
+    pub keep_leftovers: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {
     pub exit_code: Option<i32>,
@@ -64,6 +67,13 @@ pub struct Outcome {
     /// What actually confined this run — `seatbelt`, `bubblewrap`, `container`
     /// or `degraded`. Measured at run time, never copied from the sandbox row.
     pub isolation: String,
+    /// The shell's process group after a run that ended normally, so the caller
+    /// can look for what it left running. Direct backend only.
+    #[serde(skip)]
+    pub group: Option<u32>,
+    /// The pipes a leftover still holds (only with `ExecSpec::keep_leftovers`).
+    #[serde(skip)]
+    pub held: Option<crate::bg_tasks::Held>,
 }
 
 /// Truncate to `MAX_OUTPUT` **bytes without splitting a UTF-8 character**.

@@ -237,6 +237,7 @@ pub async fn exec(sb: &Sandbox, spec: &ExecSpec) -> Outcome {
                 timed_out: false,
                 duration_ms: start.elapsed().as_millis() as i64,
                 isolation: "container".into(),
+                ..Default::default()
             }
         }
         Ok(Err(e)) => failed(format!("error while waiting for docker exec: {e}"), start),
@@ -256,6 +257,7 @@ pub async fn exec(sb: &Sandbox, spec: &ExecSpec) -> Outcome {
                 timed_out: true,
                 duration_ms: start.elapsed().as_millis() as i64,
                 isolation: "container".into(),
+                ..Default::default()
             }
         }
     }
@@ -302,6 +304,7 @@ fn failed(msg: String, start: Instant) -> Outcome {
         timed_out: false,
         duration_ms: start.elapsed().as_millis() as i64,
         isolation: "container".into(),
+        ..Default::default()
     }
 }
 

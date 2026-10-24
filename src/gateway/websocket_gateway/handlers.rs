@@ -958,6 +958,12 @@ pub(crate) async fn handle_unregister_group(
     state
         .group_manager
         .unregister(&state.db, &state.config, &jid);
+    // What the chat's agent left running (a dev server) belongs to the chat and
+    // has no list to be found in once the chat is gone.
+    let chat = jid.clone();
+    tokio::spawn(async move {
+        crate::bg_tasks::stop_chat(&chat).await;
+    });
     broadcast_to_all_inner(
         clients,
         &serde_json::json!({"type": "group:unregistered", "jid": jid}),
