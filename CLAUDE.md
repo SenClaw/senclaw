@@ -1581,7 +1581,11 @@ Rules for Claude:
   walking up, plus `<project_commands>` read from the manifests (`repo_map::commands`). It used to be `fn instance_uses_workspace(_) -> bool { false }`.
 - **The syntax check reports only errors the edit introduced** (`repo_map::syntax::introduced_by_edit`, before vs after) and never reverts. A file that
   was already broken, or code newer than the bundled grammar, must stay silent.
-- **Verify-before-finish nudges once** (`QueryConfig::verify_edits`, `VERIFY_NUDGE`): never for subagents, never in a loop. Source edits only.
+- **Verify-before-finish sends the agent back at most twice** (`MAX_VERIFY_NUDGES`, `verify_nudge`): round 1 names the command (`suggested_check`: the last check the
+  model ran in this conversation, else the folder's own test command) and says the edits came *after* the last run; round 2 says "call Bash now with `<cmd>`". An answer that
+  still skips it goes to the person with `unverified_warning` appended to the **reply** (`MessageComplete.content`), never to the message kept for the model. Never for
+  subagents or forced-final answers. Source edits only. A model that ran a check in an earlier request argues that run still counts - 2026-10-24, e4b, it then reported a
+  pass for tests that had never run; keep the "after your last check" sentence.
 - **A forced final answer must not be preceded by a `SessionError`.** The pool's wait loop ends the request on one (`ProcessEvent::Error`), and the forced-final
   call that was meant to explain the stop never reaches the user. The turn cap, the token budget (`maxRunTokens`) and the stuck stop log a warning and
   push the final nudge; only a forced final that itself fails emits `AGENT_LOOP_LIMIT`. (`TOOL_ERROR_LOOP` still emits first - check it before copying it.)

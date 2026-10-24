@@ -68,8 +68,8 @@ tường minh của họ không bị đoán lại.
 - **Kiểm tra cú pháp** (tree-sitter, 10 ngôn ngữ) sau `Edit`/`Write`: chỉ báo lỗi **do lần sửa này gây ra** (so với
   trước khi sửa), nên file vốn hỏng hay cú pháp mới hơn grammar không gây báo giả. Không revert — chỉ báo.
   SWE-agent đo: sau một lần sửa hỏng, lần sau thành công chỉ còn 57% (so với 90%).
-- **Kiểm tra trước khi kết thúc**: model dừng sau khi sửa file nguồn mà chưa chạy build/test/lint nào → nhắc **một
-  lần**. Không lặp, không áp dụng cho subagent.
+- **Kiểm tra trước khi kết thúc**: model dừng sau khi sửa file nguồn mà chưa chạy build/test/lint nào → nhắc tối đa
+  **hai lần**, nêu đúng lệnh cần chạy; vẫn bỏ qua thì câu trả lời cuối mang cảnh báo "chưa kiểm chứng". Không áp dụng cho subagent.
 
 ## Vòng lặp không kẹt, sửa file an toàn, có trần, có kiểm chứng (round 2)
 
@@ -116,7 +116,12 @@ cầu và câu trả lời mất. Nén ngữ cảnh chủ động giờ lặp l�
 
 Thứ tự khi model dừng ở phiên code (mỗi bước chỉ một lần, trừ phán quan và PreStop):
 
-1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc.
+1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc, **tối đa 2 lần**. Lần 1 nêu đúng lệnh và nói rằng các lần sửa nằm *sau* lần chạy
+   cuối (model từng lập luận "yêu cầu trước đã chạy rồi" rồi báo test pass khi chưa chạy). Lần 2 chỉ bảo "gọi Bash ngay với `<lệnh>`". Model vẫn trả
+   lời không chạy → câu trả lời cuối được gắn dòng `⚠️ Chưa kiểm chứng …` (tiếng Việt nếu yêu cầu có dấu tiếng Việt, ngược lại tiếng Anh), nêu lệnh nên chạy.
+   Cảnh báo chỉ nằm ở tin gửi người dùng, không nằm trong lịch sử gửi lại cho model (model sẽ bắt chước). Lệnh được chọn theo thứ tự: lệnh kiểm tra
+   chính model đã chạy trong hội thoại → lệnh test của stack chứa file vừa sửa (`repo_map::commands`; thư mục chỉ có `test_*.py` đọc runner từ file:
+   `unittest` hoặc `pytest`) → không nêu lệnh nào.
 2. Lần build/test/lint cuối **thất bại** (`[exit code N]`) và chưa có lần nào pass sau đó → nhắc, không cho báo "xong".
 3. (tuỳ chọn, `finishJudge`) một lần gọi model chấm "xong chưa?" → `{complete, missing}`; thiếu thì gửi lại danh sách, tối đa 2 vòng. Lỗi hoặc JSON
    không đọc được = cho kết thúc (chỉ là tư vấn).

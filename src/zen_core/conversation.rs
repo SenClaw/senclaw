@@ -704,7 +704,7 @@ pub struct QueryConfig {
     pub agent_mode: AgentMode,
     /// A coding session (a code session, a git repository, a project chat).
     /// Turns on what a coding run needs and a chat does not: a check before
-    /// finishing ([`VERIFY_NUDGE`], a failed check, the optional judge), the
+    /// finishing ([`verify_nudge`], a failed check, the optional judge), the
     /// observation-aware stuck detector instead of the name-based stall guard.
     /// Never set for subagents or compaction.
     pub coding_session: bool,
@@ -872,20 +872,81 @@ async fn run_finish_judge(
     finish_check::parse_verdict(&text)
 }
 
-/// Sent once when a coding session stops after editing source files without
-/// having run anything that checks them. A small model's commonest failure is
-/// "done" on code it never compiled; OpenHands' goal judge and SWE-bench prompt
-/// both treat "claimed but unverified" as not done. One nudge, never a loop:
-/// a repository with nothing to run answers in a sentence and finishes.
+/// Times a coding session is sent back after editing source files without running
+/// anything that checks them. A small model's commonest failure is "done" on code
+/// it never ran; OpenHands' goal judge and SWE-bench prompt both treat "claimed but
+/// unverified" as not done. Two rounds, never a loop: the second names the exact
+/// call to make, and an answer that still skips it ends the run with
+/// [`unverified_warning`] attached.
+const MAX_VERIFY_NUDGES: u8 = 2;
+
+/// The note that sends the agent back to run a check. `command` is a call that
+/// works in this folder (see [`suggested_check`]); with none, the generic form.
 ///
 /// Worded for a model that reads every user-role message as the user speaking: a
 /// real run's final reply was "the user is reminding me that…" until the note said
-/// what it is and what the final answer should contain.
-const VERIFY_NUDGE: &str = "(Automatic check - not a message from the user; do not mention it in your answer.) \
-You edited source files but have not run anything that checks them. Run the narrowest build, test or \
-lint command that covers your change (the <project_commands> block lists them) and fix what it \
-reports. If nothing can be run here, say so in one sentence and why. Then write your final answer: \
-what you changed (path:line) and what you ran, with its result.";
+/// what it is and what the final answer should contain. And a model that ran a
+/// check in an earlier request argues that run still counts, so the note says the
+/// edits came after it.
+fn verify_nudge(round: u8, command: Option<&str>) -> String {
+    let auto = stuck::AUTOMATIC;
+    match (round, command) {
+        (1, Some(cmd)) => format!(
+            "{auto}You edited source files after your last check, so no result you have seen covers the files as they are now. \
+Run `{cmd}` with the Bash tool and fix what it reports. If it cannot be run here, say so in one sentence and why. \
+Then write your final answer: what you changed (path:line) and what you ran, with its result."
+        ),
+        (1, None) => format!(
+            "{auto}You edited source files but have not run anything that checks them. Run the narrowest build, test or \
+lint command that covers your change and fix what it reports. If nothing can be run here, say so in one sentence and why. \
+Then write your final answer: what you changed (path:line) and what you ran, with its result."
+        ),
+        (_, Some(cmd)) => format!(
+            "{auto}You answered without running a check, so what you claim is not confirmed. Do not write another answer yet: \
+call the Bash tool now with `{cmd}`, then report its real output."
+        ),
+        (_, None) => format!(
+            "{auto}You answered without running a check, so what you claim is not confirmed. Do not write another answer yet: \
+call the Bash tool now with the narrowest build, test or lint command that covers your change, then report its real output. \
+If nothing can be run here, say that in one sentence."
+        ),
+    }
+}
+
+/// What the person reads after an answer that edited source and never checked it,
+/// in the language of the request.
+fn unverified_warning(command: Option<&str>, vietnamese: bool) -> String {
+    match (vietnamese, command) {
+        (true, Some(c)) => format!("⚠️ Chưa kiểm chứng: đã sửa mã nguồn nhưng không có lệnh build/test/lint nào chạy sau đó, nên kết quả trên chưa được xác nhận. Hãy chạy `{c}` trước khi dùng."),
+        (true, None) => "⚠️ Chưa kiểm chứng: đã sửa mã nguồn nhưng không có lệnh build/test/lint nào chạy sau đó, nên kết quả trên chưa được xác nhận. Hãy tự chạy test hoặc build trước khi dùng.".to_string(),
+        (false, Some(c)) => format!("⚠️ Not verified: source files were edited and no build/test/lint command ran afterwards, so the result above is unconfirmed. Run `{c}` before relying on it."),
+        (false, None) => "⚠️ Not verified: source files were edited and no build/test/lint command ran afterwards, so the result above is unconfirmed. Run the tests or the build before relying on it.".to_string(),
+    }
+}
+
+/// The last build/test/lint the model itself ran in this conversation (earlier
+/// requests included): a call known to work in this folder.
+fn last_check_command(messages: &[Message]) -> Option<String> {
+    messages.iter().rev().flat_map(|m| m.message.content.iter().rev()).find_map(|b| match b {
+        ContentBlock::ToolUse { name, input, .. } if name == "Bash" => {
+            input.get("command").and_then(|v| v.as_str()).filter(|c| is_verification_command(c)).map(|c| c.trim().to_string())
+        }
+        _ => None,
+    })
+}
+
+/// The command to name when sending the agent back to check its edits: the last
+/// check it ran itself, else the test (or first) command the folder's files
+/// support, preferring the stack that holds the file it edited last.
+fn suggested_check(working_dir: &str, messages: &[Message], edited: Option<&str>) -> Option<String> {
+    if let Some(c) = last_check_command(messages) {
+        return Some(c);
+    }
+    let stacks = crate::repo_map::commands::detect(std::path::Path::new(working_dir));
+    let holds_edit = |s: &&crate::repo_map::commands::Stack| !s.dir.is_empty() && edited.map_or(false, |p| p.contains(&format!("/{}/", s.dir)));
+    let stack = stacks.iter().find(holds_edit).or_else(|| stacks.first())?;
+    stack.commands.iter().find(|(p, _)| *p == "test").or_else(|| stack.commands.first()).map(|(_, c)| c.clone())
+}
 
 /// Source files worth a build/test after an edit: not notes, not config.
 fn is_source_edit(tool: &str, input: &serde_json::Value) -> bool {
@@ -1289,7 +1350,8 @@ pub async fn query(
     // Verify-before-finish (coding sessions): set by a source-file edit,
     // cleared by a build/test/lint command that runs after it.
     let mut unverified_edit = false;
-    let mut verify_nudged = false;
+    let mut verify_nudges: u8 = 0;
+    let mut last_edit_path: Option<String> = None;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
     // Set once the model calls `EnterPlanMode` mid-turn. Upgrades the effective
@@ -1795,12 +1857,24 @@ pub async fn query(
             None
         };
 
+        // The answer that ends a coding run with edited source nobody checked, after the
+        // agent was sent back to check it: the reply carries the warning. It goes on the
+        // reply the person reads, not on the message kept for the model, which would copy it.
+        let reported = if tool_uses.is_empty() && config.coding_session && !config.is_subagent && !forcing_final && unverified_edit && verify_nudges >= MAX_VERIFY_NUDGES {
+            let command = suggested_check(&config.working_dir, &messages, last_edit_path.as_deref());
+            let vietnamese = crate::docs::has_vietnamese_diacritics(&original_prompt) || crate::docs::has_vietnamese_diacritics(&text_content);
+            warn!("[{}] finishing with edited source and no check run - warning attached to the answer", config.agent_id);
+            format!("{}\n\n{}", text_content.trim_end(), unverified_warning(command.as_deref(), vietnamese))
+        } else {
+            text_content.clone()
+        };
+
         config
             .event_bus
             .emit(EngineEvent::MessageComplete(MessageCompleteData {
                 agent_id: config.agent_id.to_string(),
                 reasoning,
-                content: text_content.clone(),
+                content: reported,
                 has_tool_calls: has_tool_calls,
                 tool_calls: tool_call_infos,
                 // Prefer real API usage; fall back to a char-based estimate of
@@ -1878,11 +1952,12 @@ pub async fn query(
             }
             if !config.is_subagent && !forcing_final {
                 // Edited source, ran nothing that checks it.
-                if config.coding_session && unverified_edit && !verify_nudged {
-                    verify_nudged = true;
-                    info!("[{}] edited source files, ran no check - nudging once before finishing", config.agent_id);
+                if config.coding_session && unverified_edit && verify_nudges < MAX_VERIFY_NUDGES {
+                    verify_nudges += 1;
+                    let command = suggested_check(&config.working_dir, &messages, last_edit_path.as_deref());
+                    info!("[{}] edited source files, ran no check - sending the agent back ({verify_nudges}/{MAX_VERIFY_NUDGES}, command: {command:?})", config.agent_id);
                     messages.push(assistant_msg);
-                    messages.push(create_user_message(vec![ContentBlock::Text { text: VERIFY_NUDGE.to_string() }]));
+                    messages.push(create_user_message(vec![ContentBlock::Text { text: verify_nudge(verify_nudges, command.as_deref()) }]));
                     continue;
                 }
                 // The last build/test/lint failed and nothing passed since: do not let "done" through.
@@ -2264,6 +2339,7 @@ pub async fn query(
                     if is_source_edit(name, input) {
                         if !failed {
                             unverified_edit = true;
+                            last_edit_path = input.get("file_path").or_else(|| input.get("notebook_path")).and_then(|v| v.as_str()).map(String::from);
                         }
                     } else if name == "Bash" {
                         if let Some(cmd) = input.get("command").and_then(|v| v.as_str()).filter(|c| is_verification_command(c)) {
@@ -3194,6 +3270,76 @@ mod tests {
         };
         assert!(text.contains("<system-reminder>"));
         assert!(text.contains("Today's date"));
+    }
+
+    fn history_with_bash(command: &str) -> Vec<Message> {
+        vec![
+            create_user_message(vec![ContentBlock::Text { text: "make it work".into() }]),
+            Message {
+                msg_type: "assistant".into(),
+                message: MessagePayload {
+                    role: "assistant".into(),
+                    content: vec![ContentBlock::ToolUse { id: "t1".into(), name: "Bash".into(), input: serde_json::json!({ "command": command }) }],
+                },
+                uuid: "u1".into(),
+                usage: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn the_verify_note_names_the_call_to_make_and_says_the_edits_came_after_the_last_run() {
+        let first = verify_nudge(1, Some("python3 -m unittest"));
+        assert!(first.starts_with(stuck::AUTOMATIC) && first.contains("`python3 -m unittest`"), "{first}");
+        assert!(first.contains("after your last check"), "a model that ran a check last request argues it still counts");
+        let second = verify_nudge(2, Some("python3 -m unittest"));
+        assert!(second.starts_with(stuck::AUTOMATIC) && second.contains("call the Bash tool now with `python3 -m unittest`"), "{second}");
+        // Nothing to name: still a complete note, and the second round still insists.
+        assert!(verify_nudge(1, None).contains("narrowest build, test or lint"));
+        assert!(verify_nudge(2, None).contains("call the Bash tool now"));
+        assert!(!verify_nudge(1, None).contains("<project_commands>"), "nothing was detected, so there is no such block");
+    }
+
+    #[test]
+    fn the_command_named_is_one_that_ran_in_this_folder_before_one_the_files_suggest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("test_a.py"), "import unittest\n").unwrap();
+        let wd = dir.path().to_str().unwrap();
+        // Earlier in the conversation (a previous request of the session): that exact call.
+        let history = history_with_bash("python3 -m unittest test_a.py");
+        assert_eq!(suggested_check(wd, &history, None).as_deref(), Some("python3 -m unittest test_a.py"));
+        // A Bash call that checks nothing is not a check.
+        let history = history_with_bash("ls -la");
+        assert_eq!(last_check_command(&history), None);
+        assert_eq!(suggested_check(wd, &history, None).as_deref(), Some("python3 -m unittest"), "falls back to what the folder's files support");
+        // Nothing in the folder says how to check: no name rather than a guess.
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(suggested_check(empty.path().to_str().unwrap(), &[], None), None);
+    }
+
+    #[test]
+    fn the_stack_that_holds_the_edited_file_is_the_one_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("server")).unwrap();
+        std::fs::create_dir_all(dir.path().join("web")).unwrap();
+        std::fs::write(dir.path().join("server/Cargo.toml"), "[package]\nname = \"s\"\n").unwrap();
+        std::fs::write(dir.path().join("web/package.json"), "{\"scripts\":{\"test\":\"vitest\"}}").unwrap();
+        let wd = dir.path().to_str().unwrap();
+        let edited = format!("{wd}/web/src/a.ts");
+        let named = suggested_check(wd, &[], Some(&edited)).unwrap();
+        assert!(named.contains("web") && named.contains("test"), "{named}");
+        let named = suggested_check(wd, &[], Some(&format!("{wd}/server/src/lib.rs"))).unwrap();
+        assert!(named.contains("server") && named.contains("cargo"), "{named}");
+    }
+
+    #[test]
+    fn the_warning_follows_the_language_of_the_request_and_names_the_check() {
+        let vi = unverified_warning(Some("python3 -m unittest"), true);
+        assert!(vi.starts_with("⚠️ Chưa kiểm chứng") && vi.contains("`python3 -m unittest`"), "{vi}");
+        let en = unverified_warning(Some("cargo test"), false);
+        assert!(en.starts_with("⚠️ Not verified") && en.contains("`cargo test`"), "{en}");
+        assert!(unverified_warning(None, false).contains("Run the tests or the build"));
+        assert!(unverified_warning(None, true).contains("tự chạy test"));
     }
 
     #[test]
