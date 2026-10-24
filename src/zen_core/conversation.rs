@@ -72,6 +72,23 @@ const LLM_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 ///   • total (release) ≈ 10–20 s
 const LLM_TURN_TIMEOUT_LOCAL: Duration = Duration::from_secs(900);
 
+/// How long one LLM turn may take before the loop gives up on it.
+///
+/// Local native inference (Candle CPU/Metal, MLX native) runs in-process and is much
+/// slower than cloud APIs - MLX with TurboQuant KV blows past 180 s in prefill alone.
+/// A Space-App provider (`app:<id>`) is a local engine behind the daemon's own loopback
+/// proxy and is the same class. So is a server on the owner's own machine or network
+/// (LM Studio on the LAN at 7-10 tok/s): a 100-line `Write` is over 180 s of steady
+/// output, and the cut came as "LLM request timed out", which resets the session and
+/// loses the work.
+fn turn_timeout_for(adapt: &str, provider: &str, base_url: &str) -> Duration {
+    if adapt.starts_with("local-") || provider.starts_with("app:") || query_llm::is_self_hosted_endpoint(base_url) {
+        LLM_TURN_TIMEOUT_LOCAL
+    } else {
+        LLM_TURN_TIMEOUT
+    }
+}
+
 /// Compact message history when context length is exceeded.
 /// Keeps the first user message (original task framing) and the most recent messages,
 /// dropping middle messages to reduce token count.
@@ -1545,22 +1562,11 @@ pub async fn query(
             config.stream,
             Some(&delta_sink),
         );
-        // Local native inference (Candle CPU/Metal, MLX native) runs in-process
-        // and is much slower than cloud APIs — especially MLX with TurboQuant
-        // KV (TQ4 prefill on long prompts blows past 180 s easily).
-        //
-        // Space-App providers (`provider == "app:<id>"`) are the same class:
-        // a local engine behind the daemon's own loopback proxy. A 26B
-        // SSD-streaming model's first agent turn (dozens of MCP tool schemas)
-        // exceeds the cloud budget in prefill alone, exactly like MLX above.
-        let adapt = config.profile.adapt.as_deref().unwrap_or("");
-        let turn_timeout = if adapt.starts_with("local-")
-            || config.profile.provider.starts_with("app:")
-        {
-            LLM_TURN_TIMEOUT_LOCAL
-        } else {
-            LLM_TURN_TIMEOUT
-        };
+        let turn_timeout = turn_timeout_for(
+            config.profile.adapt.as_deref().unwrap_or(""),
+            &config.profile.provider,
+            &config.profile.base_url,
+        );
         let assistant_msg = match tokio::time::timeout(turn_timeout, llm_call).await {
             Err(_) => {
                 let msg = format!(
@@ -3285,6 +3291,22 @@ mod tests {
                 usage: None,
             },
         ]
+    }
+
+    #[test]
+    fn a_model_the_owner_runs_gets_the_long_turn_budget_a_public_host_the_short_one() {
+        for (adapt, provider, url) in [
+            ("openai", "custom", "http://192.168.0.93:1234/v1"),
+            ("openai", "local", "http://127.0.0.1:18788/api/runtimes/models/m/v1"),
+            ("openai", "custom", "http://my-mac.local:1234/v1"),
+            ("local-mlx", "custom", "https://example.com"),
+            ("openai", "app:mlx", "https://example.com"),
+        ] {
+            assert_eq!(turn_timeout_for(adapt, provider, url), LLM_TURN_TIMEOUT_LOCAL, "{adapt} {provider} {url}");
+        }
+        for url in ["https://api.deepseek.com", "http://192.168.0.1.evil.com/v1", ""] {
+            assert_eq!(turn_timeout_for("openai", "custom", url), LLM_TURN_TIMEOUT, "{url}");
+        }
     }
 
     #[test]
