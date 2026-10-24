@@ -1593,6 +1593,11 @@ Rules for Claude:
   host keeps 120 s). Two more limits had the same effect and go too: the loop's per-turn cap (`LLM_TURN_TIMEOUT`, 180 s -> the 900 s the local engines get) and the 120 s silence limit, which on such an endpoint becomes 900 s (`needs_patient_client`): a subagent's non-streamed call to the LAN e4b died at exactly 120 s, and a streamed one is silent through prefill. A cut turn surfaces as `LLM_TIMEOUT`, which the pool treats as fatal and **resets the session** (context lost), unlike `NETWORK_ERROR` which preserves it - keep timeouts rare for slow models rather than relying on that.
 - **A coding session is never offered `EnterPlanMode`** (`tools_for_main_agent`): it advertises itself for "new project scaffolding or 3+ files", and a small model spent 100-500 s
   planning, then hit the `ExitPlanMode` approval card. The person can still switch the session to Plan mode; only the model's way in is removed.
+- **A file whose every `Edit`/`Write` of a request was refused is reported unchanged** (`EditTally`, `unapplied_edits_nudge` / `unapplied_edits_warning`, `MAX_UNAPPLIED_NUDGES`=2): when the
+  answer would end the run, the agent is sent back twice with the file named and the refusal quoted, then the reply carries `⚠️ No change was applied to: models.py`. Per file, not per
+  request: on gemma-4-e4b one run changed `service.py` and had 12 `Edit` calls on `models.py` answered 'old_string not found', then said it was done - the verify reminder needs a
+  successful edit, so it never spoke. A later successful `Write` of the same file clears it (paths are compared by suffix: `models.py`, `./models.py`, `/abs/models.py` are one file). The
+  warning goes on the reply, never on the message kept for the model.
 - **A forced final answer must not be preceded by a `SessionError`.** The pool's wait loop ends the request on one (`ProcessEvent::Error`), and the forced-final
   call that was meant to explain the stop never reaches the user. The turn cap, the token budget (`maxRunTokens`) and the stuck stop log a warning and
   push the final nudge; only a forced final that itself fails emits `AGENT_LOOP_LIMIT`. (`TOOL_ERROR_LOOP` still emits first - check it before copying it.)

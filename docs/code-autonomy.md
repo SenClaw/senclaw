@@ -129,6 +129,10 @@ Thứ tự khi model dừng ở phiên code (mỗi bước chỉ một lần, tr
    (` ``` `), **hoặc** yêu cầu có nêu tên file mà chưa có lời gọi nào chạm tới file đó: "Bạn đồng ý với kế hoạch này chứ?", lệnh viết thành chữ (`read_file "models.py"`),
    "Xin vui lòng xác nhận kế hoạch", hoặc một lần `repo_map` rồi dừng. Nhắc: đừng hỏi xin duyệt, hãy gọi công cụ (kèm danh sách file chưa mở); chỉ khi thiếu thông tin
    thật sự thì nói thiếu gì trong một câu. Sau khi đã sửa/chạy thì câu hỏi/khối code ở cuối là kết thúc bình thường và không bị nhắc.
+0b. File nào mà **mọi lần `Edit`/`Write` trong yêu cầu đều bị từ chối** ("Error: old_string not found") → nhắc **tối đa 2 lần** (nêu tên file và trích câu từ chối của công cụ: chép
+   `old_string` từ kết quả `Read`, hoặc ghi lại cả file bằng `Write`), nếu vẫn bỏ qua thì câu trả lời cuối có dòng `⚠️ Chưa áp dụng được thay đổi nào cho: models.py`. Tính theo
+   từng file, không theo cả yêu cầu: e4b từng sửa được `service.py` rồi gọi 12 lần `Edit` vào `models.py` đều bị từ chối và vẫn báo xong; nhắc "chưa kiểm chứng" cần một lần sửa
+   thành công nên không lên tiếng. Một lần `Write` thành công sau đó xóa cờ cho file ấy.
 1. Sửa mã nguồn nhưng chưa chạy build/test/lint nào → nhắc, **tối đa 2 lần**. Lần 1 nêu đúng lệnh và nói rằng các lần sửa nằm *sau* lần chạy
    cuối (model từng lập luận "yêu cầu trước đã chạy rồi" rồi báo test pass khi chưa chạy). Lần 2 chỉ bảo "gọi Bash ngay với `<lệnh>`". Model vẫn trả
    lời không chạy → câu trả lời cuối được gắn dòng `⚠️ Chưa kiểm chứng …` (tiếng Việt nếu yêu cầu có dấu tiếng Việt, ngược lại tiếng Anh), nêu lệnh nên chạy.
