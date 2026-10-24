@@ -889,6 +889,30 @@ async fn run_finish_judge(
     finish_check::parse_verdict(&text)
 }
 
+/// Times a coding request is sent back because its reply ended on a colon.
+const MAX_ANNOUNCE_NUDGES: u8 = 2;
+
+/// A reply that stops on a colon announces what comes next - "Đây là nội dung cho
+/// file `inventory/service.py`:" - and then nothing does: the model meant to call a
+/// tool, ended the turn first, and the loop read a turn with no tool call as the
+/// final answer. gemma-4-e4b did it on two requests in a row (a 7-file project
+/// stopped after 2 files); the same model called `Write` three times once told "you
+/// only described it". Language-free on purpose: no phrase list, just the colon (with
+/// markdown emphasis and a full-width colon allowed).
+fn announces_without_acting(text: &str) -> bool {
+    let t = text.trim_end_matches(|c: char| c.is_whitespace() || c == '*' || c == '_');
+    t.ends_with(':') || t.ends_with('：')
+}
+
+fn announce_nudge() -> String {
+    format!(
+        "{}Your reply ends with a colon: it announces something and then makes no tool call, so nothing happened. \
+Make the call now (Write, Edit or Bash) instead of describing it, and carry on until the whole request is done. \
+If everything is already done, answer again with the final result and no trailing colon.",
+        stuck::AUTOMATIC
+    )
+}
+
 /// Times a coding session is sent back after editing source files without running
 /// anything that checks them. A small model's commonest failure is "done" on code
 /// it never ran; OpenHands' goal judge and SWE-bench prompt both treat "claimed but
@@ -1368,6 +1392,7 @@ pub async fn query(
     // cleared by a build/test/lint command that runs after it.
     let mut unverified_edit = false;
     let mut verify_nudges: u8 = 0;
+    let mut announce_nudges: u8 = 0;
     let mut last_edit_path: Option<String> = None;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
@@ -1957,6 +1982,14 @@ pub async fn query(
                 }
             }
             if !config.is_subagent && !forcing_final {
+                // The reply announces the next step and stops there.
+                if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES && announces_without_acting(&text_content) {
+                    announce_nudges += 1;
+                    info!("[{}] reply ends on a colon with no tool call - sending the agent back ({announce_nudges}/{MAX_ANNOUNCE_NUDGES})", config.agent_id);
+                    messages.push(assistant_msg);
+                    messages.push(create_user_message(vec![ContentBlock::Text { text: announce_nudge() }]));
+                    continue;
+                }
                 // Edited source, ran nothing that checks it.
                 if config.coding_session && unverified_edit && verify_nudges < MAX_VERIFY_NUDGES {
                     verify_nudges += 1;
@@ -3307,6 +3340,31 @@ mod tests {
         for url in ["https://api.deepseek.com", "http://192.168.0.1.evil.com/v1", ""] {
             assert_eq!(turn_timeout_for("openai", "custom", url), LLM_TURN_TIMEOUT, "{url}");
         }
+    }
+
+    #[test]
+    fn a_reply_that_stops_on_a_colon_announced_something_and_did_nothing() {
+        for t in [
+            "Đây là nội dung cho file `inventory/service.py`:",
+            "Here is the file:\n\n",
+            "**Next, the service layer:**",
+            "Tiếp theo là phần cli：",
+            "Now I will write it _:_",
+        ] {
+            assert!(announces_without_acting(t), "{t:?}");
+        }
+        for t in [
+            "",
+            "Đã xong: tất cả 8 test pass.",
+            "All tests pass.",
+            "Did it work?",
+            "```python\nprint(1)\n```",
+            "Kết quả:\n- 8 test pass",
+        ] {
+            assert!(!announces_without_acting(t), "{t:?}");
+        }
+        let n = announce_nudge();
+        assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("makes no tool call"), "{n}");
     }
 
     #[test]
