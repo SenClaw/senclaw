@@ -261,6 +261,34 @@ check('S19 the last word is the model\'s own', (lastReply.get(jid) ?? '').starts
 check('S20 coding session roster has no EnterPlanMode', mockReqs().filter((r) => r.tag === 'S18').every((r) => r.planModeOffered === false));
 check('S20 plain chat roster keeps it', mockReqs().filter((r) => r.tag === 'S8').some((r) => r.planModeOffered === true));
 
+// ---- S21: before any tool call, a reply that asks for approval is sent back, and the run goes on
+n0 = cards.length;
+await say(jid, steps('S21', [
+  { t: '@text', a: { text: 'I will add part3.py and run it. Do you agree with this plan?' } },
+  { t: 'Write', a: { file_path: `${PROJ}/part3.py`, content: 'print(3)\n' } },
+  bash('python3 part3.py'),
+]));
+const asks = 'made no tool call and ends with a question';
+const s21 = mockReqs().filter((r) => r.tag === 'S21');
+check('S21 the approval question was sent back once', s21.filter((r) => (r.lastText ?? '').includes(asks)).length === 1, JSON.stringify(s21.map((r) => (r.lastText ?? '').slice(0, 60))));
+check('S21 and the run went on to write and run the file', fs.existsSync(`${PROJ}/part3.py`) && lastResults('S21').some((t) => t.trim() === '3') && since(n0).length === 0, JSON.stringify(lastResults('S21')));
+
+// ---- S22: commands written out as a code block before any tool call are sent back too
+await say(jid, steps('S22', [
+  { t: '@text', a: { text: 'Step 1:\n```bash\nread_file "hello.py"\n```' } },
+  { t: 'Read', a: { file_path: `${PROJ}/hello.py` } },
+]));
+const s22 = mockReqs().filter((r) => r.tag === 'S22');
+check('S22 the pasted commands were sent back once and a real Read followed', s22.filter((r) => (r.lastText ?? '').includes(asks)).length === 1 && s22.some((r) => r.stepName === 'Read'), JSON.stringify(s22.map((r) => r.stepName)));
+
+// ---- S23: once the run has acted, a question at the end of the answer is an ordinary answer
+await say(jid, steps('S23', [
+  { t: 'Write', a: { file_path: `${PROJ}/notes.txt`, content: 'done\n' } },
+  { t: '@text', a: { text: 'The note is written. Shall I add anything else?' } },
+]));
+const s23 = mockReqs().filter((r) => r.tag === 'S23');
+check('S23 a question after a tool call is not sent back', !s23.some((r) => (r.lastText ?? '').includes(asks)) && (lastReply.get(jid) ?? '').endsWith('anything else?'), (lastReply.get(jid) ?? '').slice(-80));
+
 check('S9 repo instructions reach the model', s1body.includes('AGENTS-MARKER'));
 check('S9 detected commands reach the model', s1body.includes('<project_commands>') && s1body.includes('cargo test'));
 const sysDir = `${S}/mock/sys`;

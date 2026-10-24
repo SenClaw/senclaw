@@ -21,7 +21,7 @@ await new Promise((res, rej) => { ws.onopen = () => { ws.send(JSON.stringify({ t
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data);
   if (m.type === 'permission:request') { cards.push({ tool: m.toolName, title: m.title }); log('CARD', m.toolName, '|', m.title); ws.send(JSON.stringify({ type: 'permission:response', requestId: m.requestId, optionKey: 'refuse' })); }
-  if (m.type === 'tool:execution') { turnTools.push(m.toolName); log('TOOL', m.toolName, '|', (m.title ?? '').slice(0, 100)); }
+  if (m.type === 'tool:execution') { turnTools.push(m.toolName); log('TOOL', m.toolName, '|', (m.title ?? '').slice(0, 100), '|', String(m.summary ?? m.result ?? m.output ?? '').replace(/\n/g, ' ').slice(0, 160)); }
   if (m.type === 'agent:reply') replies.push(m.text ?? m.content ?? '');
   if (m.type === 'agent:state') { const s = JSON.stringify(m.state ?? ''); if (/processing|thinking|running/i.test(s)) busy = true; if (/idle/i.test(s) && busy) { busy = false; idle?.(); } }
   if (m.type === 'session:error' || m.type === 'error') log('ERROR EVENT', JSON.stringify(m).slice(0, 200));
