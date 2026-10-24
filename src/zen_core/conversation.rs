@@ -1019,6 +1019,77 @@ fn unverified_warning(command: Option<&str>, vietnamese: bool) -> String {
     }
 }
 
+/// Times a coding request is sent back because an `Edit` / `Write` file it tried was never changed.
+const MAX_UNAPPLIED_NUDGES: u8 = 2;
+
+/// The edits a request tried, file by file. A model whose `old_string` keeps missing ('Error:
+/// old_string not found', 9 to 13 `Edit` calls of one run on gemma-4-e4b) answers as if the
+/// change were made. When all of its edits are refused there is nothing to check, so the verify
+/// reminder, which needs a successful edit, never speaks; when only some are, the files that were
+/// refused every time are exactly the ones the answer is wrong about (a run changed `service.py`
+/// and left `models.py`, `storage.py`, `cli.py` and the tests as they were).
+#[derive(Default)]
+struct EditTally {
+    /// (file as the call gave it, whether the call changed it)
+    files: Vec<(String, bool)>,
+    /// The start of the newest refusal, for the reminder: it says what to copy from.
+    last_refusal: String,
+}
+
+/// One file, whether it was given as `models.py`, `./models.py` or `/abs/path/models.py`.
+fn same_file(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_start_matches("./"), b.trim_start_matches("./"));
+    a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}"))
+}
+
+impl EditTally {
+    fn record(&mut self, path: &str, failed: bool, result: &str) {
+        self.files.push((path.to_string(), !failed));
+        if failed {
+            self.last_refusal = result.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
+        }
+    }
+
+    /// Files an edit was tried on and not one of those edits changed, in the order they were tried.
+    fn unchanged(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (path, _) in &self.files {
+            let applied = self.files.iter().any(|(p, ok)| *ok && same_file(p, path));
+            if !applied && !out.iter().any(|o| same_file(o, path)) {
+                out.push(path.clone());
+            }
+        }
+        out
+    }
+}
+
+/// `models.py` rather than `/long/path/to/models.py`, for a note a person reads.
+fn short_names(paths: &[String]) -> String {
+    paths.iter().map(|p| p.rsplit('/').next().unwrap_or(p).to_string()).collect::<Vec<_>>().join(", ")
+}
+
+fn unapplied_edits_nudge(unchanged: &[String], last_refusal: &str) -> String {
+    let why = if last_refusal.is_empty() { String::new() } else { format!(" The last refusal said: \"{last_refusal}\".") };
+    format!(
+        "{}Every Edit or Write you tried on {} was refused, so {} not changed - whatever you say you changed there is not there.{why} \
+Read the file again and copy `old_string` exactly from what Read returns (or replace the whole file with Write), then check the result. \
+If you cannot, say so plainly in your answer instead of describing the change as made.",
+        stuck::AUTOMATIC,
+        short_names(unchanged),
+        if unchanged.len() == 1 { "that file is" } else { "those files are" }
+    )
+}
+
+/// What the person reads after an answer that follows edits that were only ever refused.
+fn unapplied_edits_warning(unchanged: &[String], vietnamese: bool) -> String {
+    let files = short_names(unchanged);
+    if vietnamese {
+        format!("⚠️ Chưa áp dụng được thay đổi nào cho: {files}. Mọi lệnh Edit/Write vào các file này đều bị từ chối, nên chúng vẫn như cũ và câu trả lời trên không mô tả đúng code hiện tại.")
+    } else {
+        format!("⚠️ No change was applied to: {files}. Every Edit/Write on these files was refused, so they are unchanged and the answer above does not describe them.")
+    }
+}
+
 /// The last build/test/lint the model itself ran in this conversation (earlier
 /// requests included): a call known to work in this folder.
 fn last_check_command(messages: &[Message]) -> Option<String> {
@@ -1451,6 +1522,8 @@ pub async fn query(
     // its calls were given (a call label is cut at 80 characters, a path often is not shorter).
     let mut acted = false;
     let mut touched: Vec<String> = Vec::new();
+    let mut edits = EditTally::default();
+    let mut unapplied_nudges: u8 = 0;
     let mut last_edit_path: Option<String> = None;
     let mut exit_plan_mode_called: bool = false;
     let mut dispatch_executed: bool = false;
@@ -1954,6 +2027,11 @@ pub async fn query(
             let vietnamese = crate::docs::has_vietnamese_diacritics(&original_prompt) || crate::docs::has_vietnamese_diacritics(&text_content);
             warn!("[{}] finishing with edited source and no check run - warning attached to the answer", config.agent_id);
             format!("{}\n\n{}", text_content.trim_end(), unverified_warning(command.as_deref(), vietnamese))
+        } else if tool_uses.is_empty() && config.coding_session && !config.is_subagent && !forcing_final && unapplied_nudges >= MAX_UNAPPLIED_NUDGES && !edits.unchanged().is_empty() {
+            let vietnamese = crate::docs::has_vietnamese_diacritics(&original_prompt) || crate::docs::has_vietnamese_diacritics(&text_content);
+            let unchanged = edits.unchanged();
+            warn!("[{}] finishing with edits refused on {} - warning attached to the answer", config.agent_id, short_names(&unchanged));
+            format!("{}\n\n{}", text_content.trim_end(), unapplied_edits_warning(&unchanged, vietnamese))
         } else {
             text_content.clone()
         };
@@ -2068,6 +2146,17 @@ pub async fn query(
                         info!("[{}] reply {why}, no tool call - sending the agent back ({announce_nudges}/{MAX_ANNOUNCE_NUDGES})", config.agent_id);
                         messages.push(assistant_msg);
                         messages.push(create_user_message(vec![ContentBlock::Text { text }]));
+                        continue;
+                    }
+                }
+                // An edit was tried on a file and every try on it was refused: the file is as it was.
+                if config.coding_session && unapplied_nudges < MAX_UNAPPLIED_NUDGES {
+                    let unchanged = edits.unchanged();
+                    if !unchanged.is_empty() {
+                        unapplied_nudges += 1;
+                        info!("[{}] edits refused on {} - sending the agent back ({unapplied_nudges}/{MAX_UNAPPLIED_NUDGES})", config.agent_id, short_names(&unchanged));
+                        messages.push(assistant_msg);
+                        messages.push(create_user_message(vec![ContentBlock::Text { text: unapplied_edits_nudge(&unchanged, &edits.last_refusal) }]));
                         continue;
                     }
                 }
@@ -2458,6 +2547,10 @@ pub async fn query(
                 if config.coding_session {
                     if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
                         acted = true;
+                    }
+                    if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit") {
+                        let target = input.get("file_path").or_else(|| input.get("notebook_path")).and_then(|v| v.as_str()).unwrap_or("");
+                        edits.record(target, failed, content);
                     }
                     if touched.len() < 200 {
                         touched.push(input.to_string().chars().take(2000).collect());
@@ -3488,6 +3581,37 @@ mod tests {
         let n = no_approval_nudge(&["a.py".to_string(), "b.py".to_string()]);
         assert!(n.contains("The request names a.py, b.py, and you have not opened them."), "{n}");
         assert!(no_approval_nudge(&["a.py".to_string()]).contains("and you have not opened it."));
+    }
+
+    #[test]
+    fn a_file_whose_every_edit_was_refused_is_reported_unchanged_and_one_success_clears_it() {
+        let mut t = EditTally::default();
+        assert!(t.unchanged().is_empty(), "nothing tried, nothing unchanged");
+        t.record("/p/inventory/models.py", true, "Error: old_string not found in models.py.\n  The closest text is lines 3-5.");
+        t.record("inventory/models.py", true, "Error: old_string not found in models.py.");
+        t.record("/p/inventory/service.py", false, "Edited service.py");
+        t.record("/p/inventory/cli.py", true, "Error: old_string not found in cli.py.");
+        assert_eq!(t.unchanged(), vec!["/p/inventory/models.py", "/p/inventory/cli.py"], "service.py was changed; models.py is one file however it was spelled");
+        assert!(t.last_refusal.starts_with("Error: old_string not found in cli.py"), "{}", t.last_refusal);
+        // A later Write that replaces the file clears it, whichever way the path is spelled.
+        t.record("./inventory/models.py", false, "Wrote models.py");
+        assert_eq!(t.unchanged(), vec!["/p/inventory/cli.py"]);
+        t.record("/p/inventory/cli.py", false, "Edited cli.py");
+        assert!(t.unchanged().is_empty());
+
+        assert!(same_file("models.py", "/a/b/models.py") && same_file("./a/models.py", "/x/a/models.py"));
+        assert!(!same_file("models.py", "/a/b/xmodels.py") && !same_file("a/models.py", "b/models.py"));
+
+        let one = vec!["/p/inventory/models.py".to_string()];
+        let two = vec!["/p/inventory/models.py".to_string(), "cli.py".to_string()];
+        let n = unapplied_edits_nudge(&one, "Error: old_string not found");
+        assert!(n.starts_with(stuck::AUTOMATIC) && n.contains("tried on models.py was refused, so that file is not changed") && n.contains("The last refusal said: \"Error: old_string not found\""), "{n}");
+        assert!(unapplied_edits_nudge(&two, "").contains("on models.py, cli.py was refused, so those files are not changed") && !unapplied_edits_nudge(&two, "").contains("last refusal"));
+        assert!(unapplied_edits_warning(&two, true).starts_with("⚠️ Chưa áp dụng được thay đổi nào cho: models.py, cli.py."));
+        assert!(unapplied_edits_warning(&one, false).starts_with("⚠️ No change was applied to: models.py."));
+        let mut long = EditTally::default();
+        long.record("a.py", true, &"x ".repeat(500));
+        assert!(long.last_refusal.chars().count() <= 300);
     }
 
     #[test]
