@@ -61,6 +61,22 @@ impl Tool for ExitPlanModeTool {
             .unwrap_or("")
             .to_string();
 
+        // The plan is what the person reads and approves, and what a restarted run is carried
+        // out from. An empty one opened an approval card reading "No plan content" that a click
+        // approved, after which the run had nothing to do. Refuse it here, before anything is
+        // shown, and tell the model where the plan goes: a model that wrote its plan as an
+        // ordinary reply and then called this with `plan` empty is the usual way to get here.
+        if plan_content.trim().is_empty() {
+            tracing::warn!("[ExitPlanMode] agent={} called with an empty plan - refused", ctx.agent_id);
+            return Ok(vec![ToolOutput::Result {
+                data: serde_json::json!({"error": "empty_plan"}),
+                result_for_assistant: "Error: ExitPlanMode was called with an empty `plan`, so nothing was shown to the person. \
+                    The plan is what they read and approve and what the work is carried out from: put the whole plan, in Markdown, \
+                    in the `plan` argument (writing it as a normal reply does not count) and call ExitPlanMode again."
+                    .to_string(),
+            }]);
+        }
+
         tracing::info!(
             "[ExitPlanMode] agent={} plan_file={} plan_len={}",
             ctx.agent_id,
@@ -161,5 +177,56 @@ impl Tool for ExitPlanModeTool {
 
     fn gen_tool_permission(&self, _input: &Value) -> Option<ToolPermissionInfo> {
         None // approval flow is handled by the plan-exit event, not the permission gate.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::zen_core::{EventBus, ResponseRegistry};
+
+    fn ctx<'a>(bus: Option<&'a EventBus>, registry: Option<&'a ResponseRegistry>) -> ToolContext<'a> {
+        ToolContext {
+            agent_id: "main",
+            working_dir: "/tmp",
+            agent_data_dir: "/tmp",
+            abort: tokio_util::sync::CancellationToken::new(),
+            event_bus: bus,
+            response_registry: registry,
+            edit_format: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_empty_plan_is_refused_without_asking_the_person() {
+        let bus = EventBus::new();
+        let registry = ResponseRegistry::new();
+        let mut rx = bus.subscribe();
+        for plan in ["", "  \n\t "] {
+            let out = ExitPlanModeTool
+                .call(serde_json::json!({ "plan": plan }), &ctx(Some(&bus), Some(&registry)))
+                .await
+                .unwrap();
+            let ToolOutput::Result { data, result_for_assistant } = &out[0] else { panic!("a refusal is a plain result") };
+            assert_eq!(data["error"], "empty_plan");
+            assert!(result_for_assistant.starts_with("Error:"), "the loop reads a failed call by this prefix: {result_for_assistant}");
+            assert!(crate::zen_core::finish_check::result_failed("ExitPlanMode", result_for_assistant, false));
+            assert!(result_for_assistant.contains("`plan` argument"), "it must say where the plan goes: {result_for_assistant}");
+        }
+        assert!(rx.try_recv().is_err(), "no approval card for a plan nobody can read");
+    }
+
+    #[tokio::test]
+    async fn a_missing_plan_argument_is_refused_too() {
+        let out = ExitPlanModeTool.call(serde_json::json!({ "planFilePath": "/tmp/p.md" }), &ctx(None, None)).await.unwrap();
+        let ToolOutput::Result { data, .. } = &out[0] else { panic!() };
+        assert_eq!(data["error"], "empty_plan");
+    }
+
+    #[tokio::test]
+    async fn a_real_plan_without_an_event_bus_still_reports_no_approval_channel() {
+        let out = ExitPlanModeTool.call(serde_json::json!({ "plan": "1. Do the thing" }), &ctx(None, None)).await.unwrap();
+        let ToolOutput::Result { data, .. } = &out[0] else { panic!() };
+        assert_eq!(data["error"], "no_event_bus");
     }
 }

@@ -594,6 +594,18 @@ impl AgentPool {
             .respond_to_plan_exit(group_jid, agent_id, selected)
         {
             tracing::warn!("[AgentPool] resolve_plan_exit failed for {group_jid}/{agent_id}: {e}");
+            return;
+        }
+        // The engine flips itself back to Agent on approval, but `set_agent_mode` also keeps the
+        // mode in `pending_agent_modes` so it survives the engine being rebuilt. Left at "Plan",
+        // a rebuilt engine put the chat back into Plan mode with nothing on screen saying so.
+        // A cancel keeps Plan mode on both sides.
+        if matches!(selected, "startEditing" | "clearContextAndStart") {
+            self.state
+                .lock()
+                .unwrap()
+                .pending_agent_modes
+                .insert(group_jid.to_string(), "Agent".to_string());
         }
     }
 

@@ -1648,6 +1648,15 @@ Rules for Claude:
   guard only across synchronous code, never an `.await`).
 - The Bash tool requires a `description`; a scripted driver that omits it never reaches the permission layer (`Missing required field: description`).
 
+## Plan approval and skill loads (`zen_core/conversation.rs`, `tools/exit_plan_mode.rs`)
+
+Rules for Claude:
+
+- **"Clear context and start fresh" restarts from `restart_prompt(original_prompt, plan)`, never from the plan alone.** The history is wiped, so the person's request has to be in the one message left. It used to be a Chinese stub plus whatever `plan` held; with an empty plan the run had no task and a model with no task picks what its skills advertise ("giá vàng hôm nay" - `web-research`, `agent-browser` and the router dataset all use it). The wrapper is English and names no language; the request keeps the person's own words, so the reply follows them.
+- **`ExitPlanMode` with an empty `plan` is refused before any card is shown** (`Error: …`, so `finish_check::result_failed` reads it) and the loop un-marks `exit_plan_mode_called`, so Plan mode keeps nudging for the plan. A model that writes its plan as a normal reply and then calls the tool with `plan` empty is the usual way in.
+- **A plan approval also resets the stored mode.** `AgentPool::set_agent_mode` keeps the mode in `pending_agent_modes` so it survives an engine rebuild; the engine flips itself to Agent on approval, so `resolve_plan_exit` writes "Agent" there for `startEditing` / `clearContextAndStart` (a cancel keeps Plan).
+- **A skill that names tools, loaded, and then a text-only answer is sent back twice** (`track_skill_use`, `skill_unused_nudge`, `MAX_SKILL_NUDGES`), then the reply carries `skill_unused_warning`. "Names tools" = the skill's result holds an `mcp__server__tool` mention; `ToolSearch`, `Skill`, planning and asking calls (`NON_ACTING_TOOLS`) do not count as using it, a failed real call does. All chats, main agent only. A skill forced in before the turn (`#name`, router) is not covered: only the `Skill` tool call arms it.
+
 ## Context compression (`src/context_compress/`)
 
 Long tool results are shrunk **once, where they are created** (`run_tools`, right before the result becomes a `ContentBlock::ToolResult`), because the history re-sends them with every later call. Tier 1 prints an MCP result's envelope and JSON compactly (same data); tier 2 leaves rows of a long JSON array or lines of a long log out, saves the full text under the chat's workspace and says where in a footer. On by default; `contextCompression` in `config.json`, served by `/api/agent-behavior`, switch in Settings → Agent behavior (web + desktop). Guide, thresholds and measured sizes: [docs/context-compression.md](docs/context-compression.md); the Headroom research behind it: `plans/reports/research-261023-1209-headroom-context-compression.md`.
