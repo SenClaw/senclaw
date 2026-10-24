@@ -3,6 +3,7 @@
 # The project is a bare git repo (no manifest), like the folder a person starts a small module in; with a seed repo it starts as that repo's HEAD.
 set -u
 BIN=$1; BASE=$2; NAME=$3; SEED=${4:-}
+EDITFMT=${EDIT_FORMAT:+,\"editFormat\":\"$EDIT_FORMAT\"}   # optional: EDIT_FORMAT=fuzzy|udiff|whole
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$HERE/lan
 UI=48788; WS=48789
@@ -13,7 +14,7 @@ curl -s -m 5 "$BASE/models" >/dev/null || { echo "model server $BASE does not an
 rm -rf $S; mkdir -p $S/home/.senclaw $S/root $S/proj $S/log
 cp "$BIN" $S/senclaw-bin
 cat > $S/home/.senclaw/config.json <<JSON
-{"llmConfigs":[{"id":"lan","label":"lan","provider":"custom","baseURL":"$BASE","modelName":"$NAME","adapt":"openai","apiKey":"","maxTokens":8192,"contextLength":128000}],
+{"llmConfigs":[{"id":"lan","label":"lan","provider":"custom","baseURL":"$BASE","modelName":"$NAME","adapt":"openai","apiKey":"","maxTokens":8192,"contextLength":128000$EDITFMT}],
  "activeLlmConfigId":"lan","activeQuickLlmConfigId":"lan","activeCognitiveLlmConfigId":"lan"}
 JSON
 cd $S/proj && git init -q && git config user.email e2e@example.com && git config user.name e2e

@@ -268,7 +268,7 @@ await say(jid, steps('S21', [
   { t: 'Write', a: { file_path: `${PROJ}/part3.py`, content: 'print(3)\n' } },
   bash('python3 part3.py'),
 ]));
-const asks = 'made no tool call and ends with a question';
+const asks = 'edited and run nothing yet';
 const s21 = mockReqs().filter((r) => r.tag === 'S21');
 check('S21 the approval question was sent back once', s21.filter((r) => (r.lastText ?? '').includes(asks)).length === 1, JSON.stringify(s21.map((r) => (r.lastText ?? '').slice(0, 60))));
 check('S21 and the run went on to write and run the file', fs.existsSync(`${PROJ}/part3.py`) && lastResults('S21').some((t) => t.trim() === '3') && since(n0).length === 0, JSON.stringify(lastResults('S21')));
@@ -288,6 +288,21 @@ await say(jid, steps('S23', [
 ]));
 const s23 = mockReqs().filter((r) => r.tag === 'S23');
 check('S23 a question after a tool call is not sent back', !s23.some((r) => (r.lastText ?? '').includes(asks)) && (lastReply.get(jid) ?? '').endsWith('anything else?'), (lastReply.get(jid) ?? '').slice(-80));
+
+// ---- S24: a request that names files, answered with no tool call and no question mark, is sent back and the named file gets opened
+const s24directive = `Please update hello.py and tests/test_hello.py run script S24 §§STEPS${JSON.stringify({ tag: 'S24', steps: [{ t: '@text', a: { text: 'Understood. I will start by reviewing the current state, then change both files.' } }, { t: 'Read', a: { file_path: `${PROJ}/hello.py` } }] })}§§`;
+await say(jid, s24directive);
+const s24 = mockReqs().filter((r) => r.tag === 'S24');
+check('S24 sent back once, naming the files the request mentions', s24.filter((r) => (r.lastText ?? '').includes('The request names hello.py, tests/test_hello.py') && (r.lastText ?? '').includes('have not opened') ).length === 1, JSON.stringify(s24.map((r) => (r.lastText ?? '').slice(80, 200))));
+check('S24 and a real Read followed', s24.some((r) => r.stepName === 'Read'));
+
+// ---- S25: a read-only look around is not acting: a question after only a Read is still sent back
+await say(jid, steps('S25', [
+  { t: 'Read', a: { file_path: `${PROJ}/hello.py` } },
+  { t: '@text', a: { text: 'I have read it. Do you agree with this plan?' } },
+]));
+const s25 = mockReqs().filter((r) => r.tag === 'S25');
+check('S25 sent back once after a Read, then finished', s25.filter((r) => (r.lastText ?? '').includes(asks)).length === 1 && /MOCK-DONE S25/.test(lastReply.get(jid) ?? ''), JSON.stringify(s25.map((r) => r.stepName)));
 
 check('S9 repo instructions reach the model', s1body.includes('AGENTS-MARKER'));
 check('S9 detected commands reach the model', s1body.includes('<project_commands>') && s1body.includes('cargo test'));

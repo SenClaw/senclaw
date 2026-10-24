@@ -47,7 +47,7 @@ function plan(messages) {
     const m = messages[i];
     if (m.role === 'tool') results.push(textOf(m.content));
     if (m.role === 'assistant' && m.tool_calls) assistantCalls += m.tool_calls.length;
-    if (m.role === 'user' && (textOf(m.content).includes('announces something and then makes no tool call') || textOf(m.content).includes('made no tool call and ends with a question'))) nudges += 1;
+    if (m.role === 'user' && (textOf(m.content).includes('announces something and then makes no tool call') || textOf(m.content).includes('edited and run nothing yet'))) nudges += 1;
   }
   return { directive, done: assistantCalls, results, nudges };
 }
