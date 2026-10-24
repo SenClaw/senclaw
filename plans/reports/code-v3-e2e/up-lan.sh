@@ -1,8 +1,8 @@
 #!/bin/zsh
-# usage: up-lan.sh <senclaw binary> <base url> <model name> — isolated daemon on a model served elsewhere on the network (LM Studio etc.)
-# The project is a bare git repo (no manifest), like the folder a person starts a small module in.
+# usage: up-lan.sh <senclaw binary> <base url> <model name> [seed git repo] — isolated daemon on a model served elsewhere on the network (LM Studio etc.)
+# The project is a bare git repo (no manifest), like the folder a person starts a small module in; with a seed repo it starts as that repo's HEAD.
 set -u
-BIN=$1; BASE=$2; NAME=$3
+BIN=$1; BASE=$2; NAME=$3; SEED=${4:-}
 HERE=$(cd "$(dirname "$0")" && pwd)
 S=$HERE/lan
 UI=48788; WS=48789
@@ -17,6 +17,7 @@ cat > $S/home/.senclaw/config.json <<JSON
  "activeLlmConfigId":"lan","activeQuickLlmConfigId":"lan","activeCognitiveLlmConfigId":"lan"}
 JSON
 cd $S/proj && git init -q && git config user.email e2e@example.com && git config user.name e2e
+if [ -n "$SEED" ]; then git -C "$SEED" archive HEAD | tar -x -C $S/proj && git add -A && git commit -q -m baseline; fi
 # the guard denies a stray connect to the real daemon; the LAN stays reachable
 PROFILE='(version 1)(allow default)(deny network-outbound (remote tcp "localhost:18788"))(deny network-outbound (remote tcp "localhost:18789"))(deny network-outbound (remote tcp "localhost:18790"))'
 cd $S/root && env -u SENCLAW_BASE_URL -u SENCLAW_APP_TOKEN_MODE HOME=$S/home SENCLAW_HOME=$S/home/.senclaw SENCLAW_UI_PORT=$UI SENCLAW_WS_PORT=$WS RUST_LOG=info \

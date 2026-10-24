@@ -238,6 +238,29 @@ await setLimits({ finishJudge: false });
 // ---- S9: the prompt the model saw
 const bodies = fs.readdirSync(`${S}/mock/bodies`).map((f) => fs.readFileSync(`${S}/mock/bodies/${f}`, 'utf8'));
 const s1body = bodies.find((b) => b.includes('S1') && b.includes('AGENTS-MARKER')) ?? '';
+// ---- S18: a reply that ends on a colon with no tool call is sent back, and the run goes on
+n0 = cards.length;
+await say(jid, steps('S18', [
+  { t: 'Write', a: { file_path: `${PROJ}/part1.py`, content: 'def one():\n    return 1\n' } },
+  { t: '@text', a: { text: 'Here is the next file:' } },
+  { t: 'Write', a: { file_path: `${PROJ}/part2.py`, content: 'from part1 import one\nprint(one() + 1)\n' } },
+  bash('python3 part2.py'),
+]));
+const s18 = mockReqs().filter((r) => r.tag === 'S18');
+check('S18 the colon reply was sent back once', s18.filter((r) => (r.lastText ?? '').includes('announces something and then makes no tool call')).length === 1);
+check('S18 and the run went on to write the second file and check it', fs.existsSync(`${PROJ}/part2.py`) && lastResults('S18').some((t) => t.trim() === '2'), JSON.stringify(lastResults('S18')));
+check('S18 nothing was asked and the reply is the final one', since(n0).length === 0 && /MOCK-DONE S18/.test(lastReply.get(jid) ?? ''), lastReply.get(jid));
+
+// ---- S19: a model that keeps announcing is sent back twice, then let go (no endless loop)
+await say(jid, steps('S19', [{ t: '@text', a: { text: 'Here you go:', stubborn: true } }]));
+const s19 = mockReqs().filter((r) => r.tag === 'S19');
+check('S19 sent back exactly twice, then finished', s19.filter((r) => (r.lastText ?? '').includes('announces something and then makes no tool call')).length === 2 && s19.length === 3, `${s19.length} requests`);
+check('S19 the last word is the model\'s own', (lastReply.get(jid) ?? '').startsWith('Here you go:'), lastReply.get(jid));
+
+// ---- S20: a coding session is not offered Plan mode; an ordinary chat still is
+check('S20 coding session roster has no EnterPlanMode', mockReqs().filter((r) => r.tag === 'S18').every((r) => r.planModeOffered === false));
+check('S20 plain chat roster keeps it', mockReqs().filter((r) => r.tag === 'S8').some((r) => r.planModeOffered === true));
+
 check('S9 repo instructions reach the model', s1body.includes('AGENTS-MARKER'));
 check('S9 detected commands reach the model', s1body.includes('<project_commands>') && s1body.includes('cargo test'));
 const sysDir = `${S}/mock/sys`;

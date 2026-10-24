@@ -39,15 +39,34 @@ function plan(messages) {
       }
     }
   }
-  if (!directive) return { directive: null, done: 0, results: [] };
+  if (!directive) return { directive: null, done: 0, results: [], nudges: 0 };
   const results = [];
   let assistantCalls = 0;
+  let nudges = 0;
   for (let i = at + 1; i < messages.length; i++) {
     const m = messages[i];
     if (m.role === 'tool') results.push(textOf(m.content));
     if (m.role === 'assistant' && m.tool_calls) assistantCalls += m.tool_calls.length;
+    if (m.role === 'user' && textOf(m.content).includes('announces something and then makes no tool call')) nudges += 1;
   }
-  return { directive, done: assistantCalls, results };
+  return { directive, done: assistantCalls, results, nudges };
+}
+
+/** The step to answer with. A '@text' step is a reply with no tool call (an announcement); a nudge moves on past it unless it is stubborn. */
+function pick(directive, done, nudges) {
+  let tools = done;
+  let texts = 0;
+  for (let i = 0; i < directive.steps.length; i++) {
+    const s = directive.steps[i];
+    if (s.t === '@text') {
+      texts += 1;
+      if (!s.a?.stubborn && nudges >= texts) continue;
+      return s;
+    }
+    if (tools > 0) { tools -= 1; continue; }
+    return s;
+  }
+  return null;
 }
 
 function reply(res, stream, msg) {
@@ -97,7 +116,7 @@ http
       const sys = messages.filter((m) => m.role === 'system').map((m) => textOf(m.content)).join('\n----\n');
       fs.writeFileSync(path.join(OUT, 'sys', `${String(n).padStart(4, '0')}.txt`), sys);
       if (/§§STEPS|¶¶STEPS/.test(raw)) fs.writeFileSync(path.join(OUT, 'bodies', `${String(n).padStart(4, '0')}.json`), raw);
-      const { directive, done, results } = plan(messages);
+      const { directive, done, results, nudges } = plan(messages);
       const tools = (body.tools ?? []).map((t) => t.function?.name ?? t.name);
       if (directive && !fs.existsSync(path.join(OUT, 'tools.json'))) fs.writeFileSync(path.join(OUT, 'tools.json'), JSON.stringify(body.tools ?? [], null, 1));
       const last = messages[messages.length - 1] ?? {};
@@ -122,10 +141,10 @@ http
             ],
           }),
         };
-      } else if (directive && done < directive.steps.length) {
-        const s = directive.steps[done];
+      } else if (directive && pick(directive, done, nudges)) {
+        const s = pick(directive, done, nudges);
         stepName = s.t;
-        out = { call: { id: `call_${n}`, name: s.t, arguments: JSON.stringify(s.a ?? {}) } };
+        out = s.t === '@text' ? { text: s.a?.text ?? '' } : { call: { id: `call_${n}`, name: s.t, arguments: JSON.stringify(s.a ?? {}) } };
       } else if (directive) {
         out = { text: `MOCK-DONE ${directive.tag}` };
       } else {
@@ -143,6 +162,7 @@ http
           sysLen: sys.length,
           nMessages: messages.length,
           nTools: tools.length,
+          planModeOffered: tools.includes('EnterPlanMode'),
           tools: n <= 3 || process.env.LOG_TOOLS ? tools : undefined,
           extraction: isExtraction || undefined,
           judge: isJudge || undefined,
