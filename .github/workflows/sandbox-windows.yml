@@ -14,11 +14,13 @@ on:
       - "src/sandbox/**"
       - "Cargo.toml"
       - ".github/workflows/sandbox-windows.yml"
+      - ".github/scripts/annotate-test-failures.sh"
   push:
     branches: [main]
     paths:
       - "src/sandbox/**"
       - ".github/workflows/sandbox-windows.yml"
+      - ".github/scripts/annotate-test-failures.sh"
 
 permissions:
   contents: read
@@ -36,22 +38,35 @@ jobs:
       # a core with a neighbour.
       # Block scalars: an unquoted `backend:: --` holds `: `, which YAML reads as
       # a mapping, and GitHub rejected the whole file before creating any job.
+      # A failure is also written as annotations: the log needs a sign-in to
+      # read, the annotations on the run page do not.
       - name: Windows sandbox tests (real AppContainer)
         shell: bash
         run: |
-          cargo test --lib sandbox::backend:: -- --test-threads=1 --nocapture
+          cargo test --lib sandbox::backend:: -- --test-threads=1 --nocapture 2>&1 | tee backend-tests.log || {
+            status=$?
+            bash .github/scripts/annotate-test-failures.sh backend-tests.log error
+            exit $status
+          }
 
       # Everything else under src/sandbox, including the runner tests that start
       # Python inside the container (the step the research document calls
       # decisive). Informational for now: some of those tests were written for
       # Unix and may fail here for reasons that have nothing to do with the jail.
+      # It runs even when the step above failed, since what it finds is the point.
       - name: Rest of the sandbox suite (informational)
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
-          cargo test --lib sandbox:: -- --test-threads=1 --nocapture
+          cargo test --lib sandbox:: -- --test-threads=1 --nocapture 2>&1 | tee sandbox-tests.log || {
+            status=$?
+            bash .github/scripts/annotate-test-failures.sh sandbox-tests.log warning
+            exit $status
+          }
 
       # The same module type-checked as the shipped binary builds it.
       - name: Build the daemon
+        if: always()
         shell: bash
         run: cargo build --bin senclaw
