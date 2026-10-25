@@ -71,6 +71,14 @@ impl DaemonWs {
         Ok((Self { tx: out_tx }, in_rx))
     }
 
+    /// A client whose outgoing frames land on the returned receiver, with no
+    /// socket behind it.
+    #[cfg(test)]
+    pub(crate) fn detached() -> (Self, mpsc::UnboundedReceiver<Value>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self { tx }, rx)
+    }
+
     pub fn send(&self, v: Value) -> Result<()> {
         self.tx.send(v).map_err(|_| anyhow!("gateway connection closed"))
     }
