@@ -183,6 +183,7 @@ Job `release` trong `desktop.yml` sinh thêm một asset:
 
 - `sha256` là **bắt buộc**, không phải trang trí: bundle chưa ký, checksum là lớp bảo vệ toàn vẹn duy nhất giữa GitHub và ổ đĩa user. Verify trước khi giải nén, sai thì huỷ.
 - `minVersion`: bản cũ hơn mức này không update thẳng được (ví dụ đổi schema DB) → UI bảo user cài tay. Hiện chưa dùng nhưng để sẵn field còn hơn phải thêm sau.
+- `coreVersion` (tùy chọn): version của senclaw core đi kèm bundle, CI đọc bằng `--version` của daemon Linux vừa build. Settings → Updates ghi "It brings SenClaw core X" khi có bản mới; manifest cũ không có field này thì không ghi gì.
 - `releases/latest/download/` chỉ trỏ tới release **không phải prerelease** ⇒ kênh stable có sẵn, không cần code thêm. Tag `v0.3.0-beta.1` tự động vô hình với người dùng thường.
 - **Bẫy đã biết** (giống `senclaw web`): `latest.json` chỉ tồn tại từ tag ≥ lần đổi workflow này. Check gặp 404 ⇒ coi như "không có thông tin", im lặng, **không** hiện lỗi đỏ.
 
@@ -332,6 +333,7 @@ Future<void> applyAndRestart(File staged, String sha256) async {
 |---|---|
 | **Bundle không ghi được** (`/Applications` do admin khác cài) | Thử `File(target/.probe).create()` **trước khi tải**. Hỏng ⇒ báo "cần quyền admin, chạy `senclaw update` trong terminal", đừng tải xong mới chết. |
 | **Daemon adopted / dev** (`phase == adopted`) | `_quitApp()` giết theo port ⇒ vẫn đúng. Nhưng nếu `kIsDevBuild` thì đã tắt update từ đầu. |
+| **Daemon adopted khác bản core trong app** | App so `GET /api/system/version` (version + git hash; daemon cũ chỉ có `version` trong `/api/config`) với `senclaw --version` của binary trong bundle (`lib/core/daemon/core_version.dart`). Khác ⇒ banner trên mọi màn hình + thẻ SenClaw Core ở Settings → Updates, nút "Use bundled core" hỏi rồi mới `DaemonSupervisor.restart()` (giết tiến trình giữ cổng UI, chạy core trong bundle). Không bao giờ tự làm: daemon kia có thể do người dùng chạy có chủ ý. |
 | **Đang có agent chạy dở** | Hỏi xác nhận trước khi cài: "Đang có N phiên hoạt động, cài đặt sẽ dừng chúng." Lấy số từ `agentStatesProvider`. |
 | **Updater chết giữa chừng** | Lần khởi động sau, app thấy `<bundle>.old` còn sót ⇒ dọn. Thấy `<bundle>` mất mà `.old` còn ⇒ rollback. |
 | **App bị xoá lúc updater đang chạy (macOS)** | An toàn: updater đã được copy ra `~/.senclaw/tmp/`. |

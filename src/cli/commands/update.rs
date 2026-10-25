@@ -129,7 +129,7 @@ pub async fn run(opts: UpdateOptions) -> Result<()> {
     }
 
     let current_exe = current_exe()?;
-    if let Some(bundle) = desktop_bundle_of(&current_exe) {
+    if let Some(bundle) = crate::build_info::desktop_bundle_of(&current_exe) {
         bail!(
             "this senclaw is part of the desktop app at {} — update the app instead (its own updater, or \
              `senclaw install desktop --version {}`), so daemon and app stay one release",
@@ -351,19 +351,6 @@ fn current_exe() -> Result<PathBuf> {
     Ok(exe.canonicalize().unwrap_or(exe))
 }
 
-/// The desktop app bundle `exe` belongs to, if any: a macOS `.app` around it,
-/// or (Windows/Linux) the app's own executable beside it.
-fn desktop_bundle_of(exe: &Path) -> Option<PathBuf> {
-    if let Some(app) = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")) {
-        return Some(app.to_path_buf());
-    }
-    let dir = exe.parent()?;
-    ["senclaw_desktop", "senclaw_desktop.exe"]
-        .iter()
-        .any(|name| dir.join(name).is_file())
-        .then(|| dir.to_path_buf())
-}
-
 /// `sha256:<hex>` → `<hex>`.
 fn sha256_hex(digest: Option<&str>) -> Option<&str> {
     digest.and_then(|d| d.strip_prefix("sha256:"))
@@ -514,22 +501,6 @@ mod tests {
         assert!(describe(&cs[0], &v("0.1.1"), latest).contains("no build for this platform"));
         let line = describe(&cs[1], &v("0.1.1"), latest);
         assert!(line.contains("installed, latest"), "{line}");
-    }
-
-    #[test]
-    fn a_daemon_inside_the_desktop_app_is_recognised() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("SenClaw Desktop.app");
-        let mac = app.join("Contents").join("Resources").join("senclaw");
-        assert_eq!(desktop_bundle_of(&mac), Some(app));
-
-        let win = dir.path().join("SenClaw");
-        std::fs::create_dir_all(&win).unwrap();
-        std::fs::write(win.join("senclaw_desktop.exe"), b"").unwrap();
-        assert_eq!(desktop_bundle_of(&win.join("senclaw.exe")), Some(win.clone()));
-
-        let cli = dir.path().join(".senclaw").join("bin").join("senclaw");
-        assert_eq!(desktop_bundle_of(&cli), None);
     }
 
     #[test]
