@@ -7,8 +7,23 @@
 log=$1
 level=${2:-error}
 
+esc() { sed -e 's/%/%25/g' -e 's/\r//g'; }
+
 failed=$(grep -E '^test .+ \.\.\. FAILED' "$log" | sed -E 's/^test (.+) \.\.\. FAILED.*/\1/' | tr -d '\r' | paste -sd ' ' -)
 [ -n "$failed" ] && echo "::$level title=Failing tests::$failed"
+
+# Exit code 101 with no panic in the log: the tests did not compile, or the test
+# binary died (a stack overflow aborts it without a word from the harness).
+if ! grep -q 'panicked at' "$log"; then
+  compile=$(grep -m 3 -E '^error\[|^error: could not compile' "$log" | esc | paste -sd ' ' -)
+  [ -n "$compile" ] && echo "::$level title=Did not compile::$compile"
+  # One test thread: the last test that started and never reported is the one
+  # that was running when the binary died.
+  running=$(grep -E '^test .+ \.\.\. ' "$log" | tr -d '\r' | grep -vE ' \.\.\. (ok|FAILED|ignored)' | tail -1 | sed -E 's/^test (.+) \.\.\. .*/\1/')
+  [ -n "$running" ] && echo "::$level title=Running when the test binary died::$running"
+  tail_lines=$(grep -v '^[[:space:]]*$' "$log" | tail -4 | esc | paste -sd ' ' -)
+  echo "::$level title=End of the log::$tail_lines"
+fi
 
 # A panic is `thread 'name' (id) panicked at file:line:col:` and its message on
 # the next line. GitHub keeps ten annotations per step.
