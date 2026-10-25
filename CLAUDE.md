@@ -900,6 +900,13 @@ More rules for Claude:
   ends nothing. The fix is three layers, none enough alone: the tool description and skill say not to arm a watch
   for a lookup; the wake names `schedule_watch_stop` and the watch id and says an announcement does not end it; and
   the 10-wake cap ends it for a model that ignores both (the final turn says it is over, per "never end silently").
+- **What cannot be absorbed is refused at arming, while the model can still fix it.** `datagen_status` with no `job_id`
+  answers `{jobs: […], datasets: […], catalog: […]}` — no `state` for `state_field` to read (it looks at scalars and
+  one object down, never into a list), so a gemma-4-e4b watch armed with `args: {}` checked five times and never
+  resolved on an import that was done before the watch existed. Picking a job out of that listing is not an option:
+  the probe server is registered with no chat, so the list is every chat's jobs. `watch::missing_probe_arg` makes
+  `schedule_watch` refuse such a call and name the argument; add a tool to `NAMED_JOB_PROBES` when its answer
+  without an id is a listing.
 - **`watch_stop` is scoped by chat, not by id alone** — an id-only lookup would
   let one conversation cancel another's wait.
 - **Stopping must report whether a row actually changed.** `update_task_status`

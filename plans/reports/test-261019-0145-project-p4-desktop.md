@@ -1,15 +1,23 @@
 # Kiểm chứng P4 desktop: giao diện Project cho SenClaw Desktop (Flutter)
 
-Ngày 2026-10-19 · Nền desktop `3c70b29` · Nhánh `feat/project`, worktree `.worktrees/desktop-project` · **Chưa commit** · 15 file sửa (+613/−84 dòng) · 25 file mới: 11 trong `lib/` (≈3.200 dòng), 12 trong `test/` (≈2.700 dòng, gồm 3 file hỗ trợ), 1 trong `tool/live/` (564 dòng) — xem §3
+Ngày 2026-10-19 · Nền desktop `3c70b29` · Nhánh `feat/project`, worktree `.worktrees/desktop-project` · **Đã commit `47f1fd9` (không do phiên này; lúc tôi quay lại cây đã sạch)** · 15 file sửa (+613/−84 dòng) · 25 file mới: 11 trong `lib/` (≈3.200 dòng), 12 trong `test/` (≈2.700 dòng, gồm 3 file hỗ trợ), 1 trong `tool/live/` (564 dòng) — xem §3
 Phục vụ: [plan.md](../261018-1618-project-feature/plan.md) P4 (phần desktop) · [design.md](../261018-1618-project-feature/design.md) D7, D10, §5.2, §5.6, §6, §7 · API: daemon `feat/project` @ `e8b5264` (chỉ đọc)
-Bằng chứng: [project-p4-desktop-e2e/evidence/](project-p4-desktop-e2e/evidence/) (20 ảnh, `notes.txt`, khối `<project>` trong system prompt, log build/khởi chạy app).
+Bằng chứng: [project-p4-desktop-e2e/evidence/](project-p4-desktop-e2e/evidence/) — **30 ảnh từ cửa sổ app macOS thật** (`real-window-*.jpg`), 20 ảnh từ engine test (`NN-*.png`, ghi rõ ở §0), `notes.txt`, khối `<project>` trong system prompt, log.
 
-## 0. Cái GÌ CHƯA chạy thật — đọc trước
+## 0. Cái gì đã chạy thật, cái gì CHƯA — đọc trước
 
-- **Không lái được cửa sổ app macOS bằng chuột/phím.** Xin quyền computer-use cho bản test của app bị người dùng **từ chối** (`user_denied`); tôi không xin lại. Cái đã làm thay:
-  1. `flutter build macos --debug` của nhánh **build được**; bản sao ký lại bundle id riêng (`com.senclaw.senclawDesktop.p4e2e`, giữ entitlements) **khởi chạy** với `HOME` scratch, **kết nối WS vào daemon cô lập** (log daemon: client tự xác thực; stderr app chỉ có dòng "merged UI and platform thread"), rồi tôi tắt nó. Không có thao tác nào trong cửa sổ.
-  2. `tool/live/projects_live_test.dart`: **`ApiClient` + `WsClient` thật, widget thật, daemon cô lập thật** (binary `senclaw` feat/project @ `e8b5264`, sha256 `00f50dca…`), lái bằng `WidgetTester`. Cửa sổ là của engine test, **không phải** cửa sổ macOS; ảnh PNG do engine render (Roboto thay font hệ thống). Còn ô vuông ở nhãn một số nút và chữ trong `DropdownButton` là **giả tạo của engine test** (style không nêu font ⇒ Ahem), không phải lỗi app.
-- Chưa thử: native file picker (nút Browse chỉ thử với picker giả; plugin thật chưa bấm), làm mới khi cửa sổ lấy lại focus trên cửa sổ thật (`AppLifecycleState.resumed` chỉ test bằng invalidate), hai cửa sổ cùng mở, cửa sổ mini-chat (dùng chung `NewChatScreen`), Windows/Linux, LLM và extractor thật (mock; không đo gì về chất lượng), `/api/kanban/generate` thật (chỉ kiểm body gửi `project_id`), purge bank 20.000 fact (live: 1 fact, 277 ms; con số 22–23 s là của P2/web), timeout 5 phút của purge (kiểm bằng đồng hồ giả, chưa chờ thật).
+**Đã chạy thật trên cửa sổ app macOS** (lượt thứ hai, sau khi người dùng cấp quyền computer-use và quyền toàn màn hình): `flutter build macos --debug` từ commit `47f1fd9`, bản sao ký lại bundle id riêng `com.senclaw.senclawDesktop.p4e2e` (giữ entitlements), mở bằng `open -n --env HOME=<scratch>`, trỏ vào daemon cô lập (binary `senclaw` feat/project @ `e8b5264`, sha256 `00f50dca…`, Seatbelt chặn 18788/18789/18790, cổng 52788/52789/52931). Tôi **click và gõ phím thật** vào cửa sổ, 30 ảnh `real-window-*.jpg` (tiếng Anh trước, rồi chuyển Settings → Appearance sang Tiếng Việt):
+- Trang Projects trống → hộp tạo: root `/` bị từ chối "The top of the filesystem cannot be a project folder." (02), root hợp lệ "The folder can be used." (03) → tạo → Overview (04).
+- Context: soạn, đếm 54 / 8000, lưu (05, 06); tôi chen một PUT bằng `curl` từ "cửa sổ khác" → **hộp 409 với bản thật của daemon cạnh bản của tôi** (07) → "Overwrite with mine" → `curl` xác nhận daemon giữ đúng bản của tôi.
+- Facts: thêm tay ⇒ chip `typed`; khoá API giả `sk-ant-…` ⇒ "That text looks like it holds a secret (api_key), so it was not saved." (09).
+- Boards: hộp tạo từ trang project, project bị khoá, thư mục chỉ đọc + "Follows the project" (10); bảng mở ra với header **"Project: Alpha · Workspace: …/alpha"** (11); ở Kanban hộp tạo không project có ô folder, chọn Alpha thì folder thành chỉ đọc (12, 13); lọc "All projects / No project / Alpha" (14, 15), thẻ bảng có tên project.
+- New Session từ "New session here": project chọn sẵn, ổ khoá + đường dẫn root (16); gửi tin ⇒ phiên tạo trong project, icon project ở dòng (17); menu Group by Agent/Project/Date/None (18); nhóm theo Project với "ALPHA" và "NO PROJECT", thu gọn được (19–21). **Khối `<project name="Alpha">` với đúng context vừa sửa nằm trong system prompt của phiên đó** ([real-window-system-prompt-project-block.txt](project-p4-desktop-e2e/evidence/real-window-system-prompt-project-block.txt)).
+- Tiếng Việt (22–29): Tổng quan, tab Phiên/Bảng/Fact của dự án, lưu trữ (banner + chip "Đã lưu trữ", snackbar "Đã lưu trữ dự án"), khôi phục, **hộp "Xoá hẳn “Alpha”?" nêu 1 phiên, 1 bảng, 1 fact + cảnh báo 23 giây/20.000 fact** → xoá: snackbar "Đã xoá dự án — xoá 1 fact, tách 1 phiên.", danh sách trống, sidebar chuyển hai phiên vào "KHÔNG CÓ DỰ ÁN". Daemon sau đó: 0 project, bảng "Alpha roadmap" `project_id=null` và `workspace_dir` = root cũ.
+- Log: stderr app chỉ có "Running with merged UI and platform thread" và hai dòng `getApplicationProperty: called with invalid property` lúc tôi lấy quyền điều khiển (không liên quan Projects, không điều tra); daemon 0 dòng ERROR, 0 dòng nhắc cổng thật. Tiến trình tôi khởi động đã dừng, 3 cổng trống, `build/` và bản sao `.app` đã xoá.
+
+**Vẫn chạy bằng cách khác:** `tool/live/projects_live_test.dart` (client + widget thật trên daemon cô lập, ảnh do engine test render — còn ô vuông ở nhãn một số nút/dropdown là giả tạo của engine test) vẫn là bằng chứng cho các nhánh không bấm lại trên cửa sổ thật: đăng ký vào project đã lưu trữ bị từ chối rồi về form, `update:group` đổi project bị từ chối, bank `project:*` trong Knowledge → Facts và xoá fact qua route chung, root bị dùng bởi project khác.
+
+**Chưa thử:** native file picker (nút Browse chỉ thử với picker giả; plugin thật chưa bấm), Knowledge → Facts trong cửa sổ thật (không có mục nav tới màn Knowledge; chỉ có test), làm mới khi cửa sổ lấy lại focus trên cửa sổ thật (`AppLifecycleState.resumed`; chỉ test bằng invalidate), hai cửa sổ cùng mở, cửa sổ mini-chat (dùng chung `NewChatScreen`), Windows/Linux, LLM và extractor thật (mock; không đo gì về chất lượng), `/api/kanban/generate` thật (chỉ kiểm body gửi `project_id`), purge bank 20.000 fact (thật: 1 fact, tức thì; con số 22–23 s là của P2/web), timeout 5 phút của purge (kiểm bằng đồng hồ giả).
 
 ## 1. Kết quả theo hạng mục giao
 
@@ -36,9 +44,9 @@ Layout với **font thật**, en + vi (`projects_layout_test`, 28 test, 0 overfl
 - `flutter analyze`: **No issues found** (toàn repo, gồm `test/` và `tool/`).
 - `flutter test`: **504 passed, 1 skipped** (nền 379 + 1 skipped có sẵn ⇒ +125 test mới: màn hình 19, tab 25, session 13, danh sách session 9, kanban 14, facts panel 5, api_client 8, i18n 4, layout 28).
 - **Kiểm tra test có cắn**: 6 đột biến tạm thời, cả 6 bị bắt rồi khôi phục — bỏ tra zone timeout (`api_client_test` đỏ 2), xoá một khoá vi (`projects_i18n_test`), bỏ "Không project xuống cuối" (`session_list_test`), bỏ `projectId` khỏi `createChat` (`session_test` đỏ 2), bỏ nhánh 409 (`project_tabs_test` đỏ 4), bỏ debounce (`projects_screen_test`).
-- Live: 1 test, ~22 s, 20 ảnh + [notes.txt](project-p4-desktop-e2e/evidence/notes.txt). Mất ≈12 vòng mới xanh (kể cả lỗi biên dịch của chính script); các lần đỏ đều là **lỗi của chính driver** (chờ trang cũ, `pumpAndSettle` làm đồng hồ giả nhảy 10 phút khiến timeout 30 s của `ApiClient` nổ, bấm trúng snackbar, thiếu router/plugin ghi âm) — không lần nào lộ lỗi của app hay daemon.
-- Build `flutter build macos --debug`: ≈3 phút, `build/` ≈570 MB lúc đo; **đã xoá `build/`** và bản sao `.app`, binary daemon scratch. Đĩa lúc bắt đầu 9,6 GB, thấp nhất 8,4 GB, sau dọn 9,8 GB.
-- An toàn môi trường: daemon dưới Seatbelt chặn connect tới 18788/18789/18790, `HOME`, `SENCLAW_HOME`, cwd riêng, cổng 52788/52789/52931; log daemon 0 dòng nhắc cổng thật; script live từ chối cổng mặc định. Tiến trình tôi khởi động (daemon pid 96137, mock 96136, app 97625) đã dừng, 3 cổng trống; không đụng daemon thật (pid 14613) hay `~/.senclaw`. App test đọc `HOME` scratch nên không đọc `~/.senclaw/api_token` thật.
+- Live (engine test): 1 test, ~22 s, 20 ảnh + [notes.txt](project-p4-desktop-e2e/evidence/notes.txt). Mất ≈12 vòng mới xanh (kể cả lỗi biên dịch của chính script); các lần đỏ đều là **lỗi của chính driver** (chờ trang cũ, `pumpAndSettle` làm đồng hồ giả nhảy 10 phút khiến timeout 30 s của `ApiClient` nổ, bấm trúng snackbar, thiếu router/plugin ghi âm) — không lần nào lộ lỗi của app hay daemon.
+- Build `flutter build macos --debug`: hai lần, ≈3–6 phút mỗi lần; **đã xoá `build/`**, bản sao `.app`, binary daemon scratch sau mỗi lần. Đĩa tụt xuống 1,8 GB trong lúc chạy lượt thật (các session khác cũng ghi), sau dọn 5,1 GB.
+- An toàn môi trường: daemon dưới Seatbelt chặn connect tới 18788/18789/18790, `HOME`, `SENCLAW_HOME`, cwd riêng, cổng 52788/52789/52931; log daemon 0 dòng nhắc cổng thật; script live từ chối cổng mặc định. Tiến trình tôi khởi động (lượt 1: daemon 96137, mock 96136, app 97625; lượt 2: daemon 35917, mock 35916, app 37378) đã dừng, 3 cổng trống; không đụng daemon thật (pid 14613) hay `~/.senclaw`. App test đọc `HOME` scratch nên không đọc `~/.senclaw/api_token` thật.
 
 ## 3. Đã làm
 
@@ -69,7 +77,7 @@ Layout với **font thật**, en + vi (`projects_layout_test`, 28 test, 0 overfl
 
 ## 6. Hạn chế / cần theo dõi
 
-- Chưa có bằng chứng từ **cửa sổ app thật** (xem §0). Ảnh là từ engine test.
+- Cửa sổ app thật chỉ đi qua luồng chính (xem §0); các nhánh lỗi còn lại chỉ có test + engine test.
 - Làm mới khi lấy focus chỉ là observer vòng đời; nếu macOS không phát `resumed` khi cửa sổ lấy focus trong một số trường hợp (vd. nhiều cửa sổ), danh sách chỉ đổi ở lần làm mới tay / chuyển trang.
 - Phiên **đang chạy** giữ thư mục cũ sau khi sửa root hoặc xoá project (hạn chế P1) — trang Tổng quan nói rõ khi sửa root.
 - Fact cá nhân trong chat project ở lại bank project (R4) — tab Facts nói rõ; chưa đo.
@@ -89,13 +97,10 @@ LIVE_WORK_DIR=<thư mục có alpha/ beta/ gamma/> LIVE_EVIDENCE_DIR=<thư mục
 rm -rf build                                         # trả đĩa
 ```
 
-Gợi ý commit (khi người dùng yêu cầu): `feat(projects): projects page, project in new sessions, session list and kanban`.
-
 ## Câu hỏi chưa giải quyết
 
-1. Có cấp quyền computer-use để chạy lại các ảnh từ **cửa sổ macOS thật** (bản build đã chứng minh chạy được; script `tool/live` chỉ thay thế cho phần lái)?
-2. Nhóm session mặc định có nên chuyển sang "theo project" khi người dùng đã có phiên trong project (hiện: giữ agent để không đổi cài đặt cũ)?
-3. Nhãn trục cũ: desktop "Agent", web "Thư mục profile" — thống nhất một chữ?
-4. Daemon có thể thêm `code` cho lỗi `register:group` để client dịch được không (hiện lý do là tiếng Anh)?
-5. Giữ `tool/live/` trong repo hay chỉ giữ ảnh/bằng chứng?
-6. Cần gõ lại tên project để xác nhận xoá thật không?
+1. Nhóm session mặc định có nên chuyển sang "theo project" khi người dùng đã có phiên trong project (hiện: giữ agent để không đổi cài đặt cũ)?
+2. Nhãn trục cũ: desktop "Agent", web "Thư mục profile" — thống nhất một chữ?
+3. Daemon có thể thêm `code` cho lỗi `register:group` để client dịch được không (hiện lý do là tiếng Anh)?
+4. Giữ `tool/live/` trong repo hay chỉ giữ ảnh/bằng chứng?
+5. Cần gõ lại tên project để xác nhận xoá thật không?
