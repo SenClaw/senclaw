@@ -202,6 +202,18 @@ pub async fn stats(sb: &Sandbox) -> Stats {
         };
     }
 
+    // Windows has no `ps`; a run's processes are the members of its Job Object,
+    // which also caps each process's RAM — so the limit is real here.
+    #[cfg(windows)]
+    {
+        let id = sb.id.clone();
+        let procs = tokio::task::spawn_blocking(move || crate::sandbox::backend::direct_windows::processes(&id))
+            .await
+            .unwrap_or_default();
+        return finish(procs, "host", Some(sb.memory_mb), None);
+    }
+
+    #[allow(unreachable_code)]
     let g = groups(&sb.id);
     match sample_host(&g).await {
         // `direct` has no enforced RAM ceiling — reporting the configured
@@ -321,6 +333,18 @@ pub async fn kill_all(sb: &Sandbox) -> Result<usize> {
         crate::sandbox::backend::docker::restart(sb).await?;
         return Ok(1);
     }
+    // Each run is a named Job Object, so this reaches runs started by another
+    // process too (the daemon's, from the MCP server). Signalling a group is a
+    // no-op on Windows: this used to report the runs as stopped and stop none.
+    #[cfg(windows)]
+    {
+        let id = sb.id.clone();
+        with_live(|m| m.remove(&sb.id));
+        return tokio::task::spawn_blocking(move || crate::sandbox::backend::direct_windows::kill_all(&id))
+            .await
+            .map_err(|e| anyhow!("{e}"));
+    }
+    #[allow(unreachable_code)]
     let g = groups(&sb.id);
     for pgid in &g {
         signal_group(*pgid);
@@ -347,6 +371,23 @@ pub async fn kill_pid(sb: &Sandbox, pid: u32) -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(windows)]
+    {
+        let id = sb.id.clone();
+        let stopped = tokio::task::spawn_blocking(move || crate::sandbox::backend::direct_windows::kill_pid(&id, pid))
+            .await
+            .map_err(|e| anyhow!("{e}"))?
+            .map_err(|e| anyhow!(e))?;
+        if !stopped {
+            return Err(anyhow!(
+                "process {pid} does not belong to sandbox `{}` — refusing to kill it",
+                sb.name
+            ));
+        }
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
     let g = groups(&sb.id);
     let procs = sample_host(&g).await?;
     if !procs.iter().any(|p| p.pid == pid) {

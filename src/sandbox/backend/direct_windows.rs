@@ -60,30 +60,46 @@ use std::time::{Duration, Instant};
 
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, LocalFree, SetHandleInformation, ERROR_ALREADY_EXISTS, HANDLE, HANDLE_FLAGS,
-    HANDLE_FLAG_INHERIT, HLOCAL, WAIT_OBJECT_0,
+    CloseHandle, GetLastError, LocalFree, SetHandleInformation, ERROR_ALREADY_EXISTS, FILETIME, HANDLE,
+    HANDLE_FLAGS, HANDLE_FLAG_INHERIT, HLOCAL, WAIT_OBJECT_0,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::SystemInformation::{GetSystemTimeAsFileTime, GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, ACCESS_MODE, EXPLICIT_ACCESS_W,
-    GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    ConvertSidToStringSidW, GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, ACCESS_MODE,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
+    TRUSTEE_W,
 };
 use windows::Win32::Security::Isolation::{
     CreateAppContainerProfile, DeleteAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+    GetAppContainerFolderPath,
 };
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::Security::{
-    DeriveCapabilitySidsFromName, FreeSid, ACE_FLAGS, ACL, DACL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
+    AclSizeInformation, DeriveCapabilitySidsFromName, EqualSid, FreeSid, GetAce, GetAclInformation,
+    ACE_FLAGS, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList, OpenJobObjectW,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+    JobObjectExtendedLimitInformation, JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
 };
+
+// Job access rights, spelled out from the SDK header: the windows crate does not
+// export them under JobObjects.
+const JOB_OBJECT_QUERY: u32 = 0x0004;
+const JOB_OBJECT_TERMINATE: u32 = 0x0008;
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
-    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
+    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess, GetProcessTimes,
+    InitializeProcThreadAttributeList, OpenProcess, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
     WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
@@ -181,6 +197,21 @@ impl Container {
         }
     }
 
+    /// The profile's own storage folder (`…\AppData\Local\Packages\<moniker>\AC`):
+    /// writable by the container, short, and removed with the profile.
+    fn folder(&self) -> Option<String> {
+        unsafe {
+            let mut sid_text = PWSTR::null();
+            ConvertSidToStringSidW(self.sid, &mut sid_text).ok()?;
+            let folder = GetAppContainerFolderPath(PCWSTR(sid_text.0));
+            let _ = LocalFree(HLOCAL(sid_text.0 as *mut core::ffi::c_void));
+            let folder = folder.ok()?;
+            let path = folder.to_string().ok();
+            CoTaskMemFree(Some(folder.0 as *const core::ffi::c_void));
+            path
+        }
+    }
+
     /// Grant this container access to a path (and everything under it).
     ///
     /// This is the Windows counterpart of `SYSTEM_READ_ROOTS` on Unix, and the
@@ -197,6 +228,12 @@ impl Container {
         if !Path::new(&path_s).exists() {
             return Ok(()); // nothing to grant; not an error
         }
+        // Windows system dirs already grant ALL APPLICATION PACKAGES read/exec
+        // by default; modifying their DACL requires elevation and fails with
+        // 0x80070005.  Silently skip — the AppContainer can already reach them.
+        if winproc::is_windows_dir(&path_s, &|v| std::env::var(v).ok()) {
+            return Ok(());
+        }
         let key = format!("{}|{}|{}", self.moniker, write, winproc::path_key(&path_s));
         if granted().lock().map(|g| g.contains(&key)).unwrap_or(false) {
             return Ok(());
@@ -206,6 +243,22 @@ impl Container {
             .map_err(|e| format!("granting the sandbox access to `{path_s}` failed: {e}"))?;
         if let Ok(mut g) = granted().lock() {
             g.insert(key);
+        }
+        // A junction or symlink is checked as it is followed, so every link of a
+        // chain needs the ACE as well as the final target (nvm's `.nodejs` is a
+        // junction to `.link\nodejs`, a junction to the active version).
+        if let Ok(next) = std::fs::read_link(&path_s) {
+            let next = match Path::new(&path_s).parent() {
+                Some(parent) if next.is_relative() => parent.join(next),
+                _ => next,
+            };
+            self.grant(&next, write)?;
+        }
+        if let Ok(real) = std::fs::canonicalize(&path_s) {
+            let real_s = winproc::strip_verbatim(&real.to_string_lossy());
+            if winproc::path_key(&real_s) != winproc::path_key(&path_s) {
+                self.grant(Path::new(&real_s), write)?;
+            }
         }
         Ok(())
     }
@@ -217,6 +270,87 @@ impl Container {
             return Ok(());
         }
         edit_dacl(self.sid, &path_s, 0, REVOKE_ACCESS)
+    }
+}
+
+/// `path` followed through every junction or symlink to its target, the same
+/// hops [`Container::grant`] gives an ACE.
+fn link_chain(path: &str) -> Vec<String> {
+    let mut chain = vec![path.to_string()];
+    let mut cur = PathBuf::from(path);
+    for _ in 0..8 {
+        let Ok(next) = std::fs::read_link(&cur) else { break };
+        let next = match cur.parent() {
+            Some(parent) if next.is_relative() => parent.join(next),
+            _ => next,
+        };
+        let next_s = winproc::strip_verbatim(&next.to_string_lossy());
+        if chain.iter().any(|c| winproc::path_key(c) == winproc::path_key(&next_s)) {
+            break;
+        }
+        chain.push(next_s);
+        cur = next;
+    }
+    if let Ok(real) = std::fs::canonicalize(path) {
+        let real_s = winproc::strip_verbatim(&real.to_string_lossy());
+        if !chain.iter().any(|c| winproc::path_key(c) == winproc::path_key(&real_s)) {
+            chain.push(real_s);
+        }
+    }
+    chain
+}
+
+/// Does the DACL of `path` carry an ACE of its own (not inherited) for `sid`?
+/// Read before revoking, because writing a DACL back re-propagates it to every
+/// file under the folder — seconds on a `node_modules`.
+fn has_explicit_ace(sid: PSID, path: &str) -> bool {
+    let wide = HSTRING::from(path);
+    unsafe {
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        let read = GetNamedSecurityInfoW(
+            PCWSTR(wide.as_ptr()),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            Some(&mut dacl),
+            None,
+            &mut descriptor,
+        );
+        let mut found = false;
+        let mut info = ACL_SIZE_INFORMATION::default();
+        if read.is_ok()
+            && !dacl.is_null()
+            && GetAclInformation(
+                dacl,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                AclSizeInformation,
+            )
+            .is_ok()
+        {
+            for i in 0..info.AceCount {
+                let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+                if GetAce(dacl, i, &mut ace).is_err() {
+                    continue;
+                }
+                let header = &*(ace as *const ACE_HEADER);
+                // Allowed (0) and denied (1) ACEs keep the SID after the 4-byte
+                // header and the 4-byte mask. 0x10 is INHERITED_ACE.
+                if header.AceType <= 1
+                    && header.AceFlags & 0x10 == 0
+                    && EqualSid(sid, PSID((ace as *mut u8).add(8) as *mut core::ffi::c_void)).is_ok()
+                {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !descriptor.0.is_null() {
+            let _ = LocalFree(HLOCAL(descriptor.0));
+        }
+        found
     }
 }
 
@@ -323,11 +457,31 @@ fn capabilities(network: bool) -> Vec<SID_AND_ATTRIBUTES> {
 /// `KILL_ON_JOB_CLOSE` is the important flag: when the handle drops — including
 /// because this app crashed — the kernel terminates everything in the job. The
 /// Unix side has no equivalent guarantee.
-fn make_job(memory_mb: i64, pids: i64) -> Result<OwnedHandle, String> {
+///
+/// The job is named after the sandbox and the first free slot, so a process
+/// other than this one (the MCP server stopping a run the daemon started) can
+/// find it. With every slot taken the job is unnamed: the run still works, it
+/// is only out of reach of another process.
+fn make_job(sandbox_id: &str, memory_mb: i64, pids: i64) -> Result<OwnedHandle, String> {
     let (bytes, active) = winproc::job_limits(memory_mb, pids);
     unsafe {
-        let job = CreateJobObjectW(None, PCWSTR::null())
-            .map_err(|e| format!("creating the Job Object failed: {e}"))?;
+        let mut named = None;
+        for slot in 0..winproc::MAX_NAMED_RUNS {
+            let name = HSTRING::from(winproc::job_name(sandbox_id, slot));
+            let Ok(h) = CreateJobObjectW(None, PCWSTR(name.as_ptr())) else { continue };
+            if GetLastError() == ERROR_ALREADY_EXISTS {
+                // Another run holds this slot; this handle is to *its* job.
+                let _ = CloseHandle(h);
+                continue;
+            }
+            named = Some(h);
+            break;
+        }
+        let job = match named {
+            Some(h) => h,
+            None => CreateJobObjectW(None, PCWSTR::null())
+                .map_err(|e| format!("creating the Job Object failed: {e}"))?,
+        };
         // Owned from here, so an early return closes it.
         let owned = OwnedHandle::from_raw_handle(job.0 as _);
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -347,6 +501,143 @@ fn make_job(memory_mb: i64, pids: i64) -> Result<OwnedHandle, String> {
         .map_err(|e| format!("setting Job Object limits failed: {e}"))?;
         Ok(owned)
     }
+}
+
+/// The jobs of a sandbox's runs that are live right now, in this process or any
+/// other of this user's (opened by name).
+fn open_jobs(sandbox_id: &str) -> Vec<OwnedHandle> {
+    (0..winproc::MAX_NAMED_RUNS)
+        .filter_map(|slot| unsafe {
+            let name = HSTRING::from(winproc::job_name(sandbox_id, slot));
+            OpenJobObjectW(JOB_OBJECT_TERMINATE | JOB_OBJECT_QUERY, false, PCWSTR(name.as_ptr()))
+                .ok()
+                .map(|h| OwnedHandle::from_raw_handle(h.0 as _))
+        })
+        .collect()
+}
+
+/// The processes in a job.
+fn job_pids(job: &OwnedHandle) -> Vec<u32> {
+    const CAP: usize = 1024;
+    // Header (two u32) then the ids, each a ULONG_PTR; u64 words keep it aligned.
+    let mut buf = vec![0u64; 1 + CAP];
+    unsafe {
+        if QueryInformationJobObject(
+            HANDLE(job.as_raw_handle() as _),
+            JobObjectBasicProcessIdList,
+            buf.as_mut_ptr() as *mut core::ffi::c_void,
+            (buf.len() * 8) as u32,
+            None,
+        )
+        .is_err()
+        {
+            return Vec::new();
+        }
+        let list = &*(buf.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST);
+        let n = (list.NumberOfProcessIdsInList as usize).min(CAP);
+        std::slice::from_raw_parts(list.ProcessIdList.as_ptr(), n).iter().map(|p| *p as u32).collect()
+    }
+}
+
+/// Stop every run of a sandbox, whichever process started it. Returns how many
+/// runs were stopped.
+pub fn kill_all(sandbox_id: &str) -> usize {
+    open_jobs(sandbox_id)
+        .iter()
+        .filter(|job| unsafe { TerminateJobObject(HANDLE(job.as_raw_handle() as _), 1).is_ok() })
+        .count()
+}
+
+/// Stop one process — only one that is inside a run of this sandbox. `Ok(false)`
+/// means it is not, and nothing was touched.
+pub fn kill_pid(sandbox_id: &str, pid: u32) -> Result<bool, String> {
+    if !open_jobs(sandbox_id).iter().any(|job| job_pids(job).contains(&pid)) {
+        return Ok(false);
+    }
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE, false, pid).map_err(|e| format!("cannot open process {pid}: {e}"))?;
+        let done = TerminateProcess(h, 1).map_err(|e| format!("cannot stop process {pid}: {e}"));
+        let _ = CloseHandle(h);
+        done.map(|_| true)
+    }
+}
+
+fn filetime_100ns(t: FILETIME) -> u64 {
+    ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64
+}
+
+/// What a sandbox's runs are running: every process of every live job, with
+/// CPU measured over a short window. Blocks for that window.
+pub fn processes(sandbox_id: &str) -> Vec<crate::sandbox::monitor::Proc> {
+    let pids: Vec<u32> = open_jobs(sandbox_id).iter().flat_map(job_pids).collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+    // Parent and image name, from one snapshot of the process table.
+    let mut names: std::collections::HashMap<u32, (u32, String)> = std::collections::HashMap::new();
+    unsafe {
+        if let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+            let mut ok = Process32FirstW(snap, &mut e).is_ok();
+            while ok {
+                if pids.contains(&e.th32ProcessID) {
+                    let len = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+                    names.insert(e.th32ProcessID, (e.th32ParentProcessID, String::from_utf16_lossy(&e.szExeFile[..len])));
+                }
+                ok = Process32NextW(snap, &mut e).is_ok();
+            }
+            let _ = CloseHandle(snap);
+        }
+    }
+    let total_mem = unsafe {
+        let mut m = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+        if GlobalMemoryStatusEx(&mut m).is_ok() { m.ullTotalPhys } else { 0 }
+    };
+    let times = |h: HANDLE| unsafe {
+        let (mut c, mut x, mut k, mut u) = (FILETIME::default(), FILETIME::default(), FILETIME::default(), FILETIME::default());
+        GetProcessTimes(h, &mut c, &mut x, &mut k, &mut u)
+            .ok()
+            .map(|_| (filetime_100ns(c), filetime_100ns(k) + filetime_100ns(u)))
+    };
+    let handles: Vec<(u32, HANDLE)> = pids
+        .iter()
+        .filter_map(|pid| unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, *pid).ok().map(|h| (*pid, h)) })
+        .collect();
+    let before: Vec<Option<(u64, u64)>> = handles.iter().map(|(_, h)| times(*h)).collect();
+    let t0 = Instant::now();
+    std::thread::sleep(Duration::from_millis(250));
+    let window = t0.elapsed().as_nanos() as u64 / 100;
+    let now = unsafe { filetime_100ns(GetSystemTimeAsFileTime()) };
+    let mut out = Vec::new();
+    for ((pid, h), first) in handles.iter().zip(before) {
+        let second = times(*h);
+        let rss = unsafe {
+            let mut pmc = PROCESS_MEMORY_COUNTERS { cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32, ..Default::default() };
+            if K32GetProcessMemoryInfo(*h, &mut pmc, pmc.cb).as_bool() { pmc.WorkingSetSize as u64 } else { 0 }
+        };
+        unsafe {
+            let _ = CloseHandle(*h);
+        }
+        let (ppid, command) = names.get(pid).cloned().unwrap_or((0, String::new()));
+        let (cpu, elapsed) = match (first, second) {
+            (Some((created, a)), Some((_, b))) => (
+                winproc::cpu_percent(b.saturating_sub(a), window),
+                winproc::ps_elapsed(now.saturating_sub(created) / 10_000_000),
+            ),
+            _ => (0.0, String::new()),
+        };
+        out.push(crate::sandbox::monitor::Proc {
+            pid: *pid,
+            ppid,
+            pgid: 0,
+            cpu,
+            mem_percent: if total_mem > 0 { (rss as f64 / total_mem as f64 * 1000.0).round() / 10.0 } else { 0.0 },
+            rss_mb: (rss as f64 / 1_048_576.0 * 10.0).round() / 10.0,
+            elapsed,
+            command,
+        });
+    }
+    out
 }
 
 /// One anonymous pipe: the end this process keeps and the end the child gets.
@@ -409,6 +700,31 @@ fn grant_access(
             }
         }
     }
+    // A cmd.exe script may call any program on PATH (npm, node, git, …), so the
+    // PATH folders are granted too — except those a mount would be refused for:
+    // system folders are already readable, and credential trees (`.senclaw`,
+    // `AppData\Local\Microsoft`) must never be opened to a sandbox.
+    if interpreter
+        .file_name()
+        .map(|n| n.to_string_lossy().eq_ignore_ascii_case("cmd.exe"))
+        .unwrap_or(false)
+    {
+        let host = |v: &str| std::env::var(v).ok();
+        let mut seen: HashSet<String> = HashSet::new();
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let dir_s = winproc::strip_verbatim(&dir.to_string_lossy());
+                if dir_s.trim().is_empty()
+                    || winproc::forbidden_mount_reason(&dir_s, &host).is_some()
+                    || !seen.insert(winproc::path_key(&dir_s))
+                {
+                    continue;
+                }
+                read_roots.push(PathBuf::from(dir_s));
+            }
+        }
+    }
+
     if sb.fs_mode == FsMode::Allowlist {
         read_roots.extend(allowlist.iter().filter(|p| !p.trim().is_empty()).map(PathBuf::from));
     }
@@ -489,7 +805,7 @@ fn exec_blocking(sb: &Sandbox, spec: &ExecSpec, allowlist: &[String], confine: b
         None
     };
 
-    let job = match make_job(sb.memory_mb, sb.pids_limit) {
+    let job = match make_job(&sb.id, sb.memory_mb, sb.pids_limit) {
         Ok(j) => j,
         Err(e) => return failed(e, start, confine),
     };
@@ -570,11 +886,24 @@ fn spawn(
 
     let mut cmdline_w: Vec<u16> =
         winproc::command_line(argv).encode_utf16().chain(std::iter::once(0)).collect();
-    let env = winproc::env_block(&winproc::windows_env(
+    let mut vars = winproc::windows_env(
         build_env(sb, &spec.extra_env, workdir),
         workdir,
         &|name: &str| std::env::var(name).ok(),
-    ));
+    );
+    // Windows appends `\Packages\<moniker>\AC` to LOCALAPPDATA when it starts a
+    // process in the container, so the folder three levels above the container's
+    // own is what makes the child's LOCALAPPDATA that folder exactly.
+    let base = container
+        .and_then(|c| c.folder())
+        .and_then(|f| Path::new(&f).ancestors().nth(3).map(|p| p.to_string_lossy().into_owned()));
+    if let Some(base) = base {
+        winproc::shorten_local_appdata(&mut vars, &base);
+    }
+    if confine {
+        winproc::node_without_realpath(&mut vars);
+    }
+    let env = winproc::env_block(&vars);
     let cwd = HSTRING::from(workdir);
 
     // Exactly these three handles cross into the child. Without the list it
@@ -784,21 +1113,43 @@ fn failed(msg: String, start: Instant, confine: bool) -> Outcome {
 
 /// Drop what a sandbox left on this machine: its AppContainer profile (a folder
 /// under `%LOCALAPPDATA%\Packages` and a registry entry each) and the access it
-/// was granted on folders that outlive it — a mount's source, or the project an
-/// agent sandbox was pointed at. Best effort throughout; a workspace that is
-/// about to be deleted is not worth an ACL rewrite.
+/// was granted on folders that outlive it — the interpreter's folder, the PATH
+/// folders a `cmd.exe` run got, a mount's source, or the project an agent
+/// sandbox was pointed at. Best effort throughout; a workspace that is about to
+/// be deleted is not worth an ACL rewrite.
 pub fn forget(sb: &Sandbox) {
+    // A daemon restarted since the grants has no record of them. PATH is where a
+    // `cmd.exe` run got its read grants, and where interpreters usually live; an
+    // interpreter elsewhere is only known to the process that granted it.
+    let path_dirs: Vec<String> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).map(|d| winproc::strip_verbatim(&d.to_string_lossy())).collect())
+        .unwrap_or_default();
+    forget_with(sb, path_dirs);
+}
+
+fn forget_with(sb: &Sandbox, mut candidates: Vec<String>) {
     let prefix = format!("{}|", moniker(&sb.id));
     if let Ok(mut g) = granted().lock() {
+        candidates.extend(
+            g.iter()
+                .filter(|k| k.starts_with(&prefix))
+                .filter_map(|k| k.splitn(3, '|').nth(2).map(str::to_string)),
+        );
         g.retain(|k| !k.starts_with(&prefix));
     }
+    let workspaces = crate::sandbox::config::workspaces_dir();
+    if !Path::new(&sb.workdir).starts_with(&workspaces) {
+        candidates.push(sb.workdir.clone());
+    }
+    candidates.extend(sb.mounts.iter().map(|m| m.source.clone()));
     if let Ok(c) = Container::derive(&sb.id) {
-        let workspaces = crate::sandbox::config::workspaces_dir();
-        if !Path::new(&sb.workdir).starts_with(&workspaces) {
-            let _ = c.revoke(Path::new(&sb.workdir));
-        }
-        for m in &sb.mounts {
-            let _ = c.revoke(Path::new(&m.source));
+        let mut seen: HashSet<String> = HashSet::new();
+        for p in candidates.iter().filter(|p| !p.trim().is_empty()) {
+            for link in link_chain(p) {
+                if seen.insert(winproc::path_key(&link)) && has_explicit_ace(c.sid, &link) {
+                    let _ = c.revoke(Path::new(&link));
+                }
+            }
         }
     }
     let name = HSTRING::from(moniker(&sb.id));
@@ -888,6 +1239,190 @@ mod tests {
         assert_eq!(o.exit_code, Some(0), "stderr: {}", o.stderr);
         assert!(o.stdout.contains("hello from the container"), "stdout: {:?}", o.stdout);
         assert_eq!(o.isolation, "appcontainer");
+    }
+
+    #[test]
+    fn a_cmd_script_runs_in_the_container_the_way_the_runner_writes_it() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join(".runs")).unwrap();
+        std::fs::write(d.path().join(".runs").join("t.cmd"), winproc::cmd_script("echo from the script")).unwrap();
+        let sb = sandbox(d.path(), false);
+        let o = run(&sb, r".runs\t.cmd", 15_000, true);
+        forget(&sb);
+        assert!(!o.timed_out, "the script never finished: {o:?}");
+        assert!(o.stdout.contains("from the script"), "{o:?}");
+    }
+
+    #[test]
+    fn a_deep_sandbox_folder_does_not_hang_the_shell() {
+        // A `LOCALAPPDATA` of 209+ characters left every console program `cmd`
+        // started stuck at creation; a folder this deep produced one.
+        let base = tempfile::tempdir().unwrap();
+        let wd = base.path().join("w".repeat(220 - base.path().to_string_lossy().len() - 1));
+        std::fs::create_dir_all(wd.join(".runs")).unwrap();
+        std::fs::write(wd.join(".runs").join("t.cmd"), winproc::cmd_script("echo deep-ok\nset LOCALAPPDATA")).unwrap();
+        let sb = sandbox(&wd, false);
+        let o = run(&sb, r".runs\t.cmd", 10_000, true);
+        forget(&sb);
+        assert!(!o.timed_out, "the shell hung in a deep folder: {o:?}");
+        assert!(o.stdout.contains("deep-ok"), "{o:?}");
+        let local = o.stdout.lines().find(|l| l.starts_with("LOCALAPPDATA=")).unwrap_or_default();
+        assert!(local.trim_end().ends_with(r"\AC"), "{local}");
+        assert_eq!(local.matches(r"\Packages\").count(), 1, "the container's own folder, once: {local}");
+    }
+
+    #[test]
+    fn node_runs_a_script_and_npm_starts_in_the_container() {
+        // Node `lstat`s the drive root on every module load, which a container
+        // may not read; and nvm's node folder is a junction, whose target is
+        // what must be granted.
+        let Some(node) = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).map(|d| d.join("node.exe")).find(|n| n.exists()))
+            .flatten()
+        else {
+            eprintln!("SKIP: no node.exe on PATH");
+            return;
+        };
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("lib.js"), "module.exports = 'node-module-ok';").unwrap();
+        std::fs::write(d.path().join("main.js"), "console.log(require('./lib.js'))").unwrap();
+        let sb = sandbox(d.path(), false);
+        let node_s = node.to_string_lossy().to_string();
+        let run_node = |args: Vec<String>| {
+            let mut argv = vec![node_s.clone()];
+            argv.extend(args);
+            let spec = ExecSpec { script: String::new(), timeout_ms: 30_000, extra_env: BTreeMap::new(), argv: Some(argv), keep_leftovers: false };
+            exec_blocking(&sb, &spec, &[], true)
+        };
+        let script = run_node(vec!["main.js".into()]);
+        let npm_cli = node.parent().unwrap().join(r"node_modules\npm\bin\npm-cli.js");
+        let npm = npm_cli.exists().then(|| run_node(vec![npm_cli.to_string_lossy().into(), "--version".into()]));
+        forget(&sb);
+        assert_eq!(script.exit_code, Some(0), "{script:?}");
+        assert!(script.stdout.contains("node-module-ok"), "{script:?}");
+        if let Some(npm) = npm {
+            assert_eq!(npm.exit_code, Some(0), "{npm:?}");
+            assert!(!npm.stdout.trim().is_empty(), "{npm:?}");
+        }
+    }
+
+    /// first → second → real, the shape nvm-windows gives its node folder.
+    fn junction_chain(outside: &Path) -> [PathBuf; 3] {
+        let real = outside.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("tool.txt"), "through-the-chain").unwrap();
+        let (second, first) = (outside.join("second"), outside.join("first"));
+        for (link, target) in [(&second, &real), (&first, &second)] {
+            let ok = std::process::Command::new(comspec())
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            assert!(ok, "mklink /J failed for {}", link.display());
+        }
+        [first, second, real]
+    }
+
+    fn aces_left(sb: &Sandbox, paths: &[PathBuf]) -> Vec<String> {
+        let c = Container::derive(&sb.id).unwrap();
+        paths
+            .iter()
+            .filter(|p| has_explicit_ace(c.sid, &p.to_string_lossy()))
+            .map(|p| p.display().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn forget_takes_back_every_grant_along_a_junction_chain() {
+        let outside = tempfile::tempdir().unwrap();
+        let chain = junction_chain(outside.path());
+        let d = tempfile::tempdir().unwrap();
+        let sb = sandbox(d.path(), false);
+        Container::open(&sb.id).unwrap().grant(&chain[0], false).unwrap();
+        assert_eq!(aces_left(&sb, &chain).len(), 3, "every hop is granted");
+        forget_with(&sb, Vec::new());
+        assert!(aces_left(&sb, &chain).is_empty(), "left behind: {:?}", aces_left(&sb, &chain));
+    }
+
+    #[test]
+    fn forget_finds_grants_a_restarted_daemon_has_no_record_of() {
+        let outside = tempfile::tempdir().unwrap();
+        let chain = junction_chain(outside.path());
+        let d = tempfile::tempdir().unwrap();
+        let sb = sandbox(d.path(), false);
+        Container::open(&sb.id).unwrap().grant(&chain[0], false).unwrap();
+        let prefix = format!("{}|", moniker(&sb.id));
+        granted().lock().unwrap().retain(|k| !k.starts_with(&prefix));
+        forget_with(&sb, vec![chain[0].to_string_lossy().into_owned()]);
+        assert!(aces_left(&sb, &chain).is_empty(), "left behind: {:?}", aces_left(&sb, &chain));
+    }
+
+    #[test]
+    fn a_grant_reaches_through_a_chain_of_junctions() {
+        let outside = tempfile::tempdir().unwrap();
+        let [first, _, _] = junction_chain(outside.path());
+        let d = tempfile::tempdir().unwrap();
+        let line = format!("type \"{}\"", first.join("tool.txt").display());
+        std::fs::write(d.path().join("read.cmd"), winproc::cmd_script(&line)).unwrap();
+        let sb = sandbox(d.path(), false);
+        Container::open(&sb.id).unwrap().grant(&first, false).unwrap();
+        let o = run(&sb, "read.cmd", 15_000, true);
+        forget(&sb);
+        assert!(o.stdout.contains("through-the-chain"), "{o:?}");
+    }
+
+    const BUSY: &str = "for /l %i in (1,1,2000000000) do @rem";
+
+    /// Wait until the sandbox has a live run another process could open.
+    fn wait_for_run(sb: &Sandbox) {
+        let t = Instant::now();
+        while open_jobs(&sb.id).is_empty() {
+            assert!(t.elapsed() < Duration::from_secs(10), "the run never showed up");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn stopping_a_sandbox_ends_its_run_even_from_another_process() {
+        // The job is found by name, the way the MCP server finds a run the
+        // daemon started; signalling a process group was a no-op on Windows.
+        let d = tempfile::tempdir().unwrap();
+        let sb = sandbox(d.path(), false);
+        let t = Instant::now();
+        let o = std::thread::scope(|s| {
+            let run = s.spawn(|| run(&sb, BUSY, 30_000, true));
+            wait_for_run(&sb);
+            assert_eq!(kill_all(&sb.id), 1);
+            run.join().unwrap()
+        });
+        forget(&sb);
+        assert!(!o.timed_out, "the run went on until its deadline: {o:?}");
+        assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
+        assert!(open_jobs(&sb.id).is_empty(), "nothing is left to find");
+    }
+
+    #[test]
+    fn stats_list_a_run_and_a_pid_outside_the_sandbox_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let sb = sandbox(d.path(), false);
+        let (procs, refused, stopped, o) = std::thread::scope(|s| {
+            let run = s.spawn(|| run(&sb, BUSY, 30_000, true));
+            wait_for_run(&sb);
+            let procs = processes(&sb.id);
+            let refused = kill_pid(&sb.id, std::process::id());
+            let shell = procs.iter().find(|p| p.command.eq_ignore_ascii_case("cmd.exe")).map(|p| p.pid);
+            let stopped = shell.map(|pid| kill_pid(&sb.id, pid));
+            (procs, refused, stopped, run.join().unwrap())
+        });
+        forget(&sb);
+        let shell = procs.iter().find(|p| p.command.eq_ignore_ascii_case("cmd.exe"));
+        assert!(shell.is_some(), "{procs:?}");
+        assert!(shell.unwrap().rss_mb > 0.0 && !shell.unwrap().elapsed.is_empty(), "{procs:?}");
+        assert_eq!(refused, Ok(false), "a process outside the sandbox must not be stoppable");
+        assert_eq!(stopped, Some(Ok(true)));
+        assert!(!o.timed_out, "stopping the shell ends the run: {o:?}");
     }
 
     #[test]

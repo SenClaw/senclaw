@@ -172,6 +172,266 @@ pub fn windows_env(
     env
 }
 
+/// Longest `LOCALAPPDATA` handed to an AppContainer child.
+///
+/// Windows appends `\Packages\<moniker>\AC` (~47 characters) to it when the
+/// container's first process starts. Measured on Windows 11: from 209 characters
+/// on, a console program that `cmd.exe` then starts never gets past creation
+/// (its thread stays suspended and `cmd` spins), so every shell command of a
+/// sandbox ~195 characters deep timed out. The limit keeps a margin below that.
+pub const MAX_LOCAL_APPDATA: usize = 180;
+
+/// Point `LOCALAPPDATA` at `fallback` when it is longer than
+/// [`MAX_LOCAL_APPDATA`]. Returns whether it changed.
+pub fn shorten_local_appdata(env: &mut [(String, String)], fallback: &str) -> bool {
+    match env.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("LOCALAPPDATA")) {
+        Some((_, v)) if v.len() > MAX_LOCAL_APPDATA => {
+            *v = fallback.to_string();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Let Node.js run inside an AppContainer.
+///
+/// Node resolves every module through a JavaScript `realpath` that `lstat`s the
+/// drive root, and an AppContainer may not read `C:\` — so no script ran, `npm`
+/// included (`EPERM: operation not permitted, lstat 'C:\'`). Preserving symlinks
+/// skips that walk. The cost: packages that are symlinks (`pnpm`'s layout,
+/// `npm link`) resolve by their link path. A value the sandbox already set wins.
+pub fn node_without_realpath(env: &mut Vec<(String, String)>) {
+    if !has(env, "NODE_PRESERVE_SYMLINKS") {
+        env.push(("NODE_PRESERVE_SYMLINKS".into(), "1".into()));
+    }
+    match env.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("NODE_OPTIONS")) {
+        Some((_, v)) if !v.contains("--preserve-symlinks-main") => {
+            *v = format!("{} --preserve-symlinks-main", v.trim()).trim_start().to_string();
+        }
+        Some(_) => {}
+        None => env.push(("NODE_OPTIONS".into(), "--preserve-symlinks-main".into())),
+    }
+}
+
+/// How many runs of one sandbox can be found and stopped from another process.
+pub const MAX_NAMED_RUNS: u32 = 32;
+
+/// The name of a run's Job Object, so another process of this user — the MCP
+/// server, when the run belongs to the daemon — can open it and stop it.
+/// `slot` is the first one free when the run starts.
+pub fn job_name(sandbox_id: &str, slot: u32) -> String {
+    let id: String = sandbox_id.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    format!(r"Local\SenClawSbxJob-{id}-{slot}")
+}
+
+/// A duration as `ps` writes `etime`: `MM:SS`, `HH:MM:SS`, `D-HH:MM:SS`.
+pub fn ps_elapsed(secs: u64) -> String {
+    let (d, h, m, s) = (secs / 86_400, secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    if d > 0 {
+        format!("{d}-{h:02}:{m:02}:{s:02}")
+    } else if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+/// CPU percent over a sampling window, as `ps` reports it (one full core is 100).
+pub fn cpu_percent(cpu_100ns: u64, window_100ns: u64) -> f64 {
+    if window_100ns == 0 {
+        return 0.0;
+    }
+    (cpu_100ns as f64 / window_100ns as f64 * 1000.0).round() / 10.0
+}
+
+/// `cmd.exe`'s own commands: always run before anything on PATH of that name.
+const CMD_INTERNAL: &[&str] = &[
+    "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo",
+    "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path",
+    "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal",
+    "shift", "start", "time", "title", "type", "ver", "verify", "vol",
+];
+
+/// Does `token`, the first word of a command, start another batch file the way
+/// `cmd.exe` would look it up: its own commands first, then the current folder
+/// and each PATH folder in turn, trying every `PATHEXT` extension in a folder
+/// before moving on to the next?
+pub fn runs_a_batch_file(
+    token: &str,
+    cwd: &str,
+    path: &str,
+    pathext: &str,
+    exists: &dyn Fn(&str) -> bool,
+) -> bool {
+    let token = token.trim_matches('"');
+    if token.is_empty() || token.contains(['*', '?']) {
+        return false;
+    }
+    let lower = token.to_ascii_lowercase();
+    if CMD_INTERNAL.contains(&lower.as_str()) {
+        return false;
+    }
+    let is_batch = |name: &str| {
+        let n = name.to_ascii_lowercase();
+        n.ends_with(".cmd") || n.ends_with(".bat")
+    };
+    let file_name = lower.rsplit(['\\', '/']).next().unwrap_or(&lower);
+    if file_name.contains('.') {
+        // An extension of its own: decided by it, whether or not it exists yet.
+        return is_batch(file_name);
+    }
+    let exts: Vec<&str> = pathext.split(';').map(str::trim).filter(|e| !e.is_empty()).collect();
+    let has_dir = token.contains(['\\', '/', ':']);
+    let dirs: Vec<String> = if has_dir {
+        vec![String::new()]
+    } else {
+        std::iter::once(cwd.to_string())
+            .chain(path.split(';').map(str::trim).filter(|d| !d.is_empty()).map(str::to_string))
+            .collect()
+    };
+    for dir in dirs {
+        let base = if dir.is_empty() {
+            if is_absolute(token) { token.to_string() } else { under(cwd, token) }
+        } else {
+            under(&dir, token)
+        };
+        for ext in &exts {
+            let candidate = format!("{base}{ext}");
+            if exists(&candidate) {
+                return is_batch(&candidate);
+            }
+        }
+    }
+    false
+}
+
+fn is_absolute(p: &str) -> bool {
+    let b = p.as_bytes();
+    p.starts_with(r"\\") || (b.len() > 2 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+}
+
+/// Put `call` before every command of a script that starts another batch file.
+///
+/// A batch file that names another one without `call` hands control to it for
+/// good: `npm.cmd` is a batch file, so in a script of several lines nothing
+/// after the first `npm …` ran. A command counts where `cmd.exe` starts one: at
+/// the start of a line, after `&&`, `||`, `&` and `|`, inside an `if (…)`
+/// block, after a `for … do` and after `else`. Quoted text and `^`-escaped
+/// characters are left alone. A command after an `if` condition without
+/// parentheses is not recognised.
+pub fn call_batch_commands(script: &str, is_batch: &dyn Fn(&str) -> bool) -> String {
+    script
+        .split('\n')
+        .map(|line| call_in_line(line.strip_suffix('\r').unwrap_or(line), is_batch))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn call_in_line(line: &str, is_batch: &dyn Fn(&str) -> bool) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut out = String::with_capacity(line.len() + 8);
+    let mut i = 0;
+    let mut at_start = true;
+    let mut first_word = String::new();
+    let mut saw_if = false;
+    // Inside a parenthesized block every line starts a command; a line that is
+    // only `)` or `) else (` is handled by the same rules.
+    while i < len {
+        if at_start {
+            while i < len && (chars[i].is_whitespace() || chars[i] == '@' || chars[i] == '(' || chars[i] == ')') {
+                out.push(chars[i]);
+                i += 1;
+            }
+            if i >= len {
+                break;
+            }
+            let end = token_end(&chars, i);
+            let token: String = chars[i..end].iter().collect();
+            first_word = token.to_ascii_lowercase();
+            saw_if |= first_word == "if";
+            if first_word == "else" {
+                out.push_str(&token);
+                i = end;
+                continue;
+            }
+            if first_word != "call" && is_batch(&token) {
+                out.push_str("call ");
+            }
+            out.push_str(&token);
+            i = end;
+            at_start = false;
+            continue;
+        }
+        let c = chars[i];
+        match c {
+            '^' => {
+                out.push(c);
+                if i + 1 < len {
+                    out.push(chars[i + 1]);
+                }
+                i += 2;
+            }
+            '"' => {
+                out.push(c);
+                i += 1;
+                while i < len {
+                    out.push(chars[i]);
+                    i += 1;
+                    if chars[i - 1] == '"' {
+                        break;
+                    }
+                }
+            }
+            '&' | '|' => {
+                out.push(c);
+                i += 1;
+                if i < len && chars[i] == c {
+                    out.push(c);
+                    i += 1;
+                }
+                at_start = true;
+            }
+            '(' if first_word == "if" => {
+                out.push(c);
+                i += 1;
+                at_start = true;
+            }
+            _ if (c == 'd' || c == 'D' || c == 'e' || c == 'E') && i > 0 && (chars[i - 1].is_whitespace() || chars[i - 1] == ')') => {
+                let end = token_end(&chars, i);
+                let word: String = chars[i..end].iter().collect::<String>().to_ascii_lowercase();
+                let starts_command = (word == "do" && first_word == "for") || (word == "else" && saw_if);
+                out.extend(&chars[i..end]);
+                i = end;
+                if starts_command {
+                    at_start = true;
+                }
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Where the word starting at `i` ends: a quoted run, or up to whitespace or an
+/// operator.
+fn token_end(chars: &[char], mut i: usize) -> usize {
+    if chars.get(i) == Some(&'"') {
+        i += 1;
+        while i < chars.len() && chars[i] != '"' {
+            i += 1;
+        }
+        return (i + 1).min(chars.len());
+    }
+    while i < chars.len() && !chars[i].is_whitespace() && !matches!(chars[i], '&' | '|' | '<' | '>' | '(' | ')') {
+        i += 1;
+    }
+    i
+}
+
 /// The text of the `.cmd` file a shell command is written to.
 ///
 /// `chcp 65001` first: `cmd.exe` writes its own output in the console's OEM code
@@ -220,6 +480,24 @@ pub fn path_key(path: &str) -> String {
 pub fn is_within(path: &str, root: &str) -> bool {
     let (p, r) = (path_key(path), path_key(root));
     !r.is_empty() && (p == r || p.starts_with(&format!("{r}\\")))
+}
+
+/// `path` is inside a Windows system directory (`%SystemRoot%`, `%windir%`,
+/// i.e. `C:\Windows` and everything under it).
+///
+/// Trying to modify the DACL of a system directory requires elevation; the
+/// `ALL APPLICATION PACKAGES` SID already grants AppContainers read/execute
+/// there, so the grant can be silently skipped.
+pub fn is_windows_dir(path: &str, host: &dyn Fn(&str) -> Option<String>) -> bool {
+    for var in ["SystemRoot", "windir"] {
+        if let Some(v) = host(var).filter(|v| !v.is_empty()) {
+            if is_within(path, &v) {
+                return true;
+            }
+        }
+    }
+    // Fallback when neither env var is readable (tests, cross-compilation).
+    is_within(path, r"C:\Windows")
 }
 
 /// A drive root (`C:\`) or a bare UNC share root.
@@ -652,5 +930,130 @@ mod tests {
         assert_eq!(job_limits(512, 256), (512 * 1024 * 1024, 256));
         assert_eq!(job_limits(1, 1), (64 * 1024 * 1024, 16));
         assert_eq!(job_limits(512, 1_000_000).1, 8192);
+    }
+
+    #[test]
+    fn run_jobs_are_named_per_sandbox_and_slot() {
+        assert_eq!(job_name("8acba418-fd25-4980", 0), r"Local\SenClawSbxJob-8acba418fd254980-0");
+        assert_ne!(job_name("a", 1), job_name("a", 2));
+        assert_ne!(job_name("a", 1), job_name("b", 1));
+    }
+
+    #[test]
+    fn elapsed_and_cpu_read_like_ps() {
+        assert_eq!(ps_elapsed(5), "00:05");
+        assert_eq!(ps_elapsed(3_725), "01:02:05");
+        assert_eq!(ps_elapsed(90_061), "1-01:01:01");
+        assert_eq!(cpu_percent(1_000_000, 2_000_000), 50.0);
+        assert_eq!(cpu_percent(4_000_000, 2_000_000), 200.0, "two cores busy");
+        assert_eq!(cpu_percent(1, 0), 0.0);
+    }
+
+    fn npm_like(t: &str) -> bool {
+        matches!(t.trim_matches('"').to_ascii_lowercase().as_str(), "npm" | "npx" | "yarn")
+    }
+
+    #[test]
+    fn each_line_that_runs_a_batch_file_gets_call() {
+        assert_eq!(
+            call_batch_commands("echo a\r\nnpm install\nnpm test\nnode -v", &npm_like),
+            "echo a\ncall npm install\ncall npm test\nnode -v"
+        );
+        assert_eq!(
+            call_batch_commands("cd app && npm install && echo ok || npx tsc & yarn", &npm_like),
+            "cd app && call npm install && echo ok || call npx tsc & call yarn"
+        );
+        assert_eq!(call_batch_commands("@npm ci", &npm_like), "@call npm ci");
+        assert_eq!(call_batch_commands("call npm install", &npm_like), "call npm install", "not twice");
+    }
+
+    #[test]
+    fn quoted_escaped_and_argument_words_are_left_alone() {
+        let s = r#"echo "npm & npm" ^& npm do npm"#;
+        assert_eq!(call_batch_commands(s, &npm_like), s);
+        assert_eq!(call_batch_commands("echo do npm", &npm_like), "echo do npm");
+        let s = "for /f %i in ('npm ls') do @echo %i";
+        assert_eq!(call_batch_commands(s, &npm_like), s);
+    }
+
+    #[test]
+    fn blocks_for_loops_and_else_start_commands() {
+        assert_eq!(
+            call_batch_commands("if exist package.json (npm i) else (npm init -y)", &npm_like),
+            "if exist package.json (call npm i) else (call npm init -y)"
+        );
+        assert_eq!(
+            call_batch_commands("if exist package.json (\n  npm install\n) else (\n  npm init -y\n)", &npm_like),
+            "if exist package.json (\n  call npm install\n) else (\n  call npm init -y\n)"
+        );
+        assert_eq!(
+            call_batch_commands("for %i in (a b) do npm run %i", &npm_like),
+            "for %i in (a b) do call npm run %i"
+        );
+    }
+
+    fn fake_fs(files: &'static [&'static str]) -> impl Fn(&str) -> bool {
+        move |p: &str| files.iter().any(|f| f.eq_ignore_ascii_case(p))
+    }
+
+    #[test]
+    fn a_command_is_looked_up_the_way_cmd_does() {
+        const EXT: &str = ".COM;.EXE;.BAT;.CMD";
+        let path = r"C:\a;C:\b";
+        let fs = fake_fs(&[r"C:\b\npm.cmd", r"C:\a\tool.exe", r"C:\b\tool.cmd", r"C:\a\both.exe", r"C:\a\both.cmd", r"C:\w\build.bat", r"C:\w\echo.cmd", r"C:\w\scripts\go.cmd"]);
+        assert!(runs_a_batch_file("npm", r"C:\w", path, EXT, &fs));
+        assert!(!runs_a_batch_file("tool", r"C:\w", path, EXT, &fs), "an .exe in an earlier PATH folder wins");
+        assert!(!runs_a_batch_file("both", r"C:\w", path, EXT, &fs), ".EXE comes before .CMD in PATHEXT");
+        assert!(runs_a_batch_file("build", r"C:\w", path, EXT, &fs), "the current folder is searched first");
+        assert!(!runs_a_batch_file("echo", r"C:\w", path, EXT, &fs), "cmd's own command wins");
+        assert!(runs_a_batch_file(r"scripts\go", r"C:\w", path, EXT, &fs));
+        assert!(runs_a_batch_file("setup.CMD", r"C:\w", path, EXT, &fs));
+        assert!(!runs_a_batch_file("node.exe", r"C:\w", path, EXT, &fs));
+        assert!(!runs_a_batch_file("missing", r"C:\w", path, EXT, &fs));
+        assert!(runs_a_batch_file(r#""C:\b\npm""#, r"C:\w", path, EXT, &fs));
+    }
+
+    #[test]
+    fn node_is_told_not_to_walk_up_to_the_drive_root() {
+        let mut env = Vec::new();
+        node_without_realpath(&mut env);
+        assert_eq!(get(&env, "NODE_PRESERVE_SYMLINKS"), Some("1"));
+        assert_eq!(get(&env, "NODE_OPTIONS"), Some("--preserve-symlinks-main"));
+
+        let mut env = vec![("NODE_OPTIONS".to_string(), "--max-old-space-size=512".to_string())];
+        node_without_realpath(&mut env);
+        assert_eq!(get(&env, "NODE_OPTIONS"), Some("--max-old-space-size=512 --preserve-symlinks-main"));
+        node_without_realpath(&mut env);
+        assert_eq!(get(&env, "NODE_OPTIONS"), Some("--max-old-space-size=512 --preserve-symlinks-main"), "not added twice");
+
+        let mut env = vec![("NODE_PRESERVE_SYMLINKS".to_string(), "0".to_string())];
+        node_without_realpath(&mut env);
+        assert_eq!(get(&env, "NODE_PRESERVE_SYMLINKS"), Some("0"), "the sandbox's own choice wins");
+    }
+
+    #[test]
+    fn a_too_long_local_appdata_is_replaced_and_a_short_one_kept() {
+        let deep = format!(r"C:\{}", "d".repeat(200));
+        let mut env = windows_env(Vec::new(), &deep, &host(HOST));
+        assert!(shorten_local_appdata(&mut env, r"C:\Users\jane\AppData\Local\Packages\x\AC"));
+        assert_eq!(get(&env, "LOCALAPPDATA"), Some(r"C:\Users\jane\AppData\Local\Packages\x\AC"));
+        assert_eq!(get(&env, "APPDATA"), Some(format!(r"{deep}\AppData\Roaming").as_str()), "only LOCALAPPDATA moves");
+
+        let mut env = windows_env(Vec::new(), r"C:\sb\one", &host(HOST));
+        assert!(!shorten_local_appdata(&mut env, r"C:\other"));
+        assert_eq!(get(&env, "LOCALAPPDATA"), Some(r"C:\sb\one\AppData\Local"));
+    }
+
+    #[test]
+    fn windows_dir_is_detected_by_systemroot_or_the_fallback() {
+        let h = host(HOST); // HOST has SystemRoot = C:\Windows
+        assert!(is_windows_dir(r"C:\Windows", &h));
+        assert!(is_windows_dir(r"C:\Windows\System32", &h));
+        assert!(is_windows_dir(r"C:\WINDOWS\SysWOW64\cmd.exe", &h));
+        assert!(!is_windows_dir(r"C:\Program Files\nodejs", &h));
+        assert!(!is_windows_dir(r"C:\Users\jane\projects", &h));
+        // When no env var is present the fallback (C:\Windows) still works.
+        assert!(is_windows_dir(r"C:\Windows\System32", &|_| None));
+        assert!(!is_windows_dir(r"C:\Program Files", &|_| None));
     }
 }

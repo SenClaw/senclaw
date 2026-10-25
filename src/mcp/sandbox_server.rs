@@ -116,6 +116,7 @@ struct CreateParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ExecParams {
+    /// ID of the sandbox to run in — call `sbx_list` for an existing one or `sbx_create` for a new one.
     sandbox_id: String,
     /// Shell command; may span several lines. It reaches the shell on stdin,
     /// so quotes inside it survive untouched.
@@ -142,6 +143,7 @@ struct RunInParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct InstallParams {
+    /// ID of the sandbox — call `sbx_list` for an existing one or `sbx_create` for a new one.
     sandbox_id: String,
     /// `pip`, `npm` or `apt`.
     manager: String,
@@ -209,6 +211,7 @@ struct StatsParams {
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct KillParams {
+    /// ID of the sandbox — call `sbx_list` for an existing one or `sbx_create` for a new one.
     sandbox_id: String,
     /// Omit to stop everything. Take a pid from sbx_stats.
     #[serde(default)]
@@ -442,7 +445,7 @@ impl McpSandboxServer {
     }
 
     #[rmcp::tool(
-        description = "Run a shell command in an existing sandbox. The command reaches the shell on stdin, so quotes inside it survive untouched."
+        description = "Run a shell command in an existing sandbox. Requires `sandboxId` — call `sbx_list` to get an existing sandbox's id, or `sbx_create` to make one; for a one-off command you can also use `sbx_run`. The command reaches the shell on stdin, so quotes inside it survive untouched."
     )]
     async fn sbx_exec(
         &self,
@@ -656,7 +659,7 @@ impl McpSandboxServer {
     }
 
     #[rmcp::tool(
-        description = "Stop processes in a sandbox. Omit `pid` to stop EVERYTHING it is running. Only processes belonging to that sandbox can be stopped — nothing else on the machine."
+        description = "Stop processes in a sandbox. Requires `sandboxId` — call `sbx_list` to get an existing sandbox's id. Omit `pid` to stop EVERYTHING it is running. Only processes belonging to that sandbox can be stopped — nothing else on the machine."
     )]
     async fn sbx_kill(
         &self,

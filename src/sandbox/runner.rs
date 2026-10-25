@@ -313,10 +313,24 @@ pub async fn exec_with_leftover(
         Some(a) => Some(a),
         None if cfg!(windows) && sb.backend == "direct" => {
             let rel = format!(".runs/{}.cmd", db::new_id());
+            // The PATH the shell will search: the sandbox's own, else the one
+            // `build_env` hands down from this process.
+            let sandbox_path = sb
+                .env
+                .as_object()
+                .and_then(|o| o.iter().find(|(k, _)| k.eq_ignore_ascii_case("PATH")))
+                .and_then(|(_, v)| v.as_str().map(str::to_string));
+            let path = sandbox_path.unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+            let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+            let body = backend::winproc::call_batch_commands(script, &|token| {
+                backend::winproc::runs_a_batch_file(token, &sb.workdir, &path, &pathext, &|p| {
+                    std::path::Path::new(p).is_file()
+                })
+            });
             crate::sandbox::files::write(
                 &crate::sandbox::files::Scope::of(sb),
                 &rel,
-                &backend::winproc::cmd_script(script),
+                &backend::winproc::cmd_script(&body),
             )
             .map_err(|e| anyhow!("cannot write the script: {e}"))?;
             let cmd_exe = std::env::var("COMSPEC")
@@ -760,6 +774,44 @@ mod tests {
         assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
         assert!(run.stdout.contains("unconfined"), "stdout: {}", run.stdout);
         assert_eq!(run.isolation, "none", "an unconfined run must never claim a jail");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_shell_command_runs_confined_through_the_cmd_script() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        let Some(sb) = enforced_sandbox(&db).await else { return };
+        let run = exec(
+            &db, &sb, "echo via-runner", Some(20_000), BTreeMap::new(), "exec", None, "echo via-runner",
+            shell_argv(&sb),
+        )
+        .await
+        .unwrap();
+        // Removes the AppContainer profile too; a profile left behind keeps its
+        // ACEs on every folder it was granted.
+        let _ = delete(&db, &sb, true).await;
+        assert!(!run.timed_out, "the shell never finished: {run:?}");
+        assert!(run.stdout.contains("via-runner"), "{run:?}");
+        assert_eq!(run.isolation, "appcontainer");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_line_after_a_batch_file_still_runs() {
+        // `npm` is `npm.cmd`: named without `call` in a script, it took control
+        // for good and every later line was skipped.
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        let Some(sb) = enforced_sandbox(&db).await else { return };
+        std::fs::write(std::path::Path::new(&sb.workdir).join("helper.cmd"), "@echo from-helper\r\n").unwrap();
+        let script = "helper\necho after-helper";
+        let run = exec(&db, &sb, script, Some(20_000), BTreeMap::new(), "exec", None, script, shell_argv(&sb))
+            .await
+            .unwrap();
+        let _ = delete(&db, &sb, true).await;
+        assert!(run.stdout.contains("from-helper"), "{run:?}");
+        assert!(run.stdout.contains("after-helper"), "the line after the batch file never ran: {run:?}");
     }
 
     #[tokio::test]
