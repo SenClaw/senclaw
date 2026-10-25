@@ -1,0 +1,107 @@
+{
+ "label": "after",
+ "pass": 25,
+ "fail": 0,
+ "planRequests": [
+  {
+   "jid": "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "plan": "P1-PLAN: 1. write todo.py"
+  },
+  {
+   "jid": "code:dbef9322-b5fa-413f-80d8-b1d58966d92e",
+   "plan": "P2-PLAN: write p2.txt"
+  },
+  {
+   "jid": "code:81930094-aea7-46ba-8258-3ef9fb2e5dc5",
+   "plan": "P5-PLAN: 1. write p5.txt"
+  }
+ ],
+ "modeChanges": [
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "Plan"
+  ],
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "Agent"
+  ],
+  [
+   "code:dbef9322-b5fa-413f-80d8-b1d58966d92e",
+   "Plan"
+  ],
+  [
+   "code:dbef9322-b5fa-413f-80d8-b1d58966d92e",
+   "Agent"
+  ],
+  [
+   "code:b5896a92-6c93-4a64-8e82-37293f613e60",
+   "Agent"
+  ],
+  [
+   "code:2111b09a-c32e-4fdf-bbb2-7d817c8628b7",
+   "Agent"
+  ],
+  [
+   "code:81930094-aea7-46ba-8258-3ef9fb2e5dc5",
+   "Plan"
+  ],
+  [
+   "code:81930094-aea7-46ba-8258-3ef9fb2e5dc5",
+   "Agent"
+  ]
+ ],
+ "replies": [
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "P1-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "MOCK-DONE P1"
+  ],
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "MOCK-DONE P1"
+  ],
+  [
+   "code:769ff8b7-759c-4a2c-8533-ac81fa82835e",
+   "MOCK-DONE P1\n\n⚠️ Not verified: source files were edited and no build/test/lint command ran afterwards, so the result above is unconfirmed. Run `cargo test` before relying on it."
+  ],
+  [
+   "code:dbef9322-b5fa-413f-80d8-b1d58966d92e",
+   "P2-TEXT the plan is above."
+  ],
+  [
+   "code:dbef9322-b5fa-413f-80d8-b1d58966d92e",
+   "MOCK-DONE P2"
+  ],
+  [
+   "code:b5896a92-6c93-4a64-8e82-37293f613e60",
+   "P3-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:b5896a92-6c93-4a64-8e82-37293f613e60",
+   "MOCK-DONE P3"
+  ],
+  [
+   "code:2111b09a-c32e-4fdf-bbb2-7d817c8628b7",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:2111b09a-c32e-4fdf-bbb2-7d817c8628b7",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:2111b09a-c32e-4fdf-bbb2-7d817c8628b7",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up).\n\n⚠️ Not looked up: the skill `web-research` was loaded but no tool was called afterwards, so the figures, dates and links above do not come from a live source. Do not rely on them."
+  ],
+  [
+   "code:81930094-aea7-46ba-8258-3ef9fb2e5dc5",
+   "P5-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:81930094-aea7-46ba-8258-3ef9fb2e5dc5",
+   "MOCK-DONE P5"
+  ]
+ ]
+}

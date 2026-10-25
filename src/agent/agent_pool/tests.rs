@@ -39,6 +39,29 @@ fn agent_pool_send_reply_no_callback_does_not_panic() {
 }
 
 #[test]
+fn approving_a_plan_resets_the_stored_mode_and_cancelling_keeps_it() {
+    // With no engine yet the stored mode is what `get_agent_mode` answers (and what a rebuilt
+    // engine starts in), so it is the thing that must not stay "Plan" after an approval.
+    for selected in ["startEditing", "clearContextAndStart"] {
+        let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
+        pool.set_agent_mode("web:plan-1", "Plan");
+        assert_eq!(pool.get_agent_mode("web:plan-1").as_deref(), Some("Plan"));
+        pool.resolve_plan_exit("web:plan-1", "main", selected);
+        assert_eq!(pool.get_agent_mode("web:plan-1").as_deref(), Some("Agent"), "{selected}");
+    }
+
+    let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
+    pool.set_agent_mode("web:plan-2", "Plan");
+    pool.resolve_plan_exit("web:plan-2", "main", "cancelled");
+    assert_eq!(pool.get_agent_mode("web:plan-2").as_deref(), Some("Plan"), "a rejected plan stays in Plan mode");
+
+    // Another chat's mode is untouched.
+    pool.set_agent_mode("web:plan-3", "Plan");
+    pool.resolve_plan_exit("web:plan-2", "main", "startEditing");
+    assert_eq!(pool.get_agent_mode("web:plan-3").as_deref(), Some("Plan"));
+}
+
+#[test]
 fn permissions_config_round_trips() {
     let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
     pool.set_permissions_config(PermissionsConfig {

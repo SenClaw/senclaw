@@ -1297,6 +1297,118 @@ fn is_dag_lead_tool(tool: &dyn Tool) -> bool {
     ORCH_ALLOW.contains(&name)
 }
 
+/// Most of the person's request carried across a "clear context and start fresh" restart.
+const RESTART_REQUEST_MAX_CHARS: usize = 8000;
+
+/// The one message a run starts from after the person approved a plan with "clear context and
+/// start fresh". The history is gone, so this message has to carry the request itself: a run that
+/// starts from the plan alone (or, when the model left `plan` empty, from nothing) has no task,
+/// and a model with no task reaches for whatever its skills advertise. The request goes in as the
+/// person wrote it, so the reply follows their language - the wrapper is English like the other
+/// automatic messages and names no language of its own.
+fn restart_prompt(request: &str, plan: &str) -> String {
+    let request = request.trim();
+    let plan = plan.trim();
+    let mut out = String::from(
+        "(Automatic message - not typed by the person. The conversation so far was cleared because they approved the plan with \"clear context and start fresh\"; their request and the plan are below.)\n\n",
+    );
+    if !request.is_empty() {
+        let request: String = request.chars().take(RESTART_REQUEST_MAX_CHARS).collect();
+        out.push_str(&format!("The person's request:\n{request}\n\n"));
+    }
+    if plan.is_empty() {
+        out.push_str("The approved plan: none was written down. The request above is the task - work out the steps yourself.\n\n");
+    } else {
+        out.push_str(&format!("The approved plan:\n{plan}\n\n"));
+    }
+    out.push_str("Carry it out now with your tools, and answer in the language of the request.");
+    out
+}
+
+/// How the block `ZenEngine::collect_first_turn_context` puts at the head of a conversation's
+/// first user message opens: today's date, then the person's profile and the project's
+/// instructions. A test in `engine.rs` pins the two together.
+pub(crate) const FIRST_TURN_CONTEXT_PREFIX: &str = "<system-reminder>\nToday's date is ";
+
+/// The newest first-turn context block in `messages`, as it was written. It rides on a user
+/// message, so clearing the history takes it along; the restart puts it back so the run still
+/// knows the date, who it works for and the repository's rules. `None` when the history holds none
+/// (a chat that was compacted down to a summary, a hydrated session without one).
+fn first_turn_context(messages: &[Message]) -> Option<String> {
+    messages.iter().rev().filter(|m| is_real_user_message(m)).flat_map(|m| m.message.content.iter()).find_map(|b| match b {
+        ContentBlock::Text { text } if text.starts_with(FIRST_TURN_CONTEXT_PREFIX) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+/// The user message a cleared run starts from: the first-turn context of the history that is
+/// about to be dropped (when it has one), then [`restart_prompt`].
+fn restart_message(history: &[Message], request: &str, plan: &str) -> Message {
+    let mut blocks = Vec::with_capacity(2);
+    if let Some(context) = first_turn_context(history) {
+        blocks.push(ContentBlock::Text { text: context });
+    }
+    blocks.push(ContentBlock::Text { text: restart_prompt(request, plan) });
+    create_user_message(blocks)
+}
+
+/// Times an answer is sent back because a skill that works through tools was loaded and no tool
+/// was called afterwards.
+const MAX_SKILL_NUDGES: u8 = 2;
+
+/// Calls that load, plan or ask but fetch, change and run nothing: a skill is still unused while
+/// these are all that has been called since it loaded.
+const NON_ACTING_TOOLS: &[&str] = &[
+    "Skill",
+    "ToolSearch",
+    "TodoWrite",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "AskUser",
+    "AskUserQuestion",
+    "FormUI",
+    "PersonaUpdate",
+    "task_done",
+];
+
+/// What `skill_unused` becomes after one fresh call and its result: loading a skill that names
+/// tools arms it, any call that fetches or runs something disarms it, and the rest (loading
+/// another skill without tools, `ToolSearch`, planning) leave it as it was.
+fn track_skill_use(current: Option<String>, tool: &str, input: &serde_json::Value, result: &str, failed: bool) -> Option<String> {
+    if tool == "Skill" {
+        if !failed && !crate::tools::tool_search::mcp_mentions(result).is_empty() {
+            return Some(input.get("skill").and_then(|v| v.as_str()).unwrap_or("").to_string());
+        }
+        return current;
+    }
+    if NON_ACTING_TOOLS.contains(&tool) {
+        current
+    } else {
+        None
+    }
+}
+
+/// A skill that tells the model to call tools, loaded, and then an answer with no tool call in
+/// between: the answer's figures, dates and links come from the model's memory. Loading a skill
+/// performs nothing, and a small model answers straight after it anyway - one asked for today's
+/// gold price loaded `web-research` and answered with invented prices and sources.
+fn skill_unused_nudge(skill: &str) -> String {
+    format!(
+        "{}You loaded the skill `{skill}`, which does its work through tools, and have called none since: nothing in your answer comes from a live source, so every figure, date and link in it is from memory. \
+Call the tools the skill names now (search, then read the pages) and answer from what they return. If they cannot be used here, say that in one sentence instead of giving figures.",
+        stuck::AUTOMATIC
+    )
+}
+
+/// What the person reads after such an answer that was sent back and still skipped the tools.
+fn skill_unused_warning(skill: &str, vietnamese: bool) -> String {
+    if vietnamese {
+        format!("⚠️ Chưa tra cứu thật: skill `{skill}` đã được nạp nhưng không có công cụ nào được gọi sau đó, nên số liệu, ngày tháng và đường dẫn ở trên không lấy từ nguồn trực tiếp. Đừng dựa vào chúng.")
+    } else {
+        format!("⚠️ Not looked up: the skill `{skill}` was loaded but no tool was called afterwards, so the figures, dates and links above do not come from a live source. Do not rely on them.")
+    }
+}
+
 fn completion_nudge_for(
     mode: AgentMode,
     exit_plan_mode_called: bool,
@@ -1518,6 +1630,9 @@ pub async fn query(
     let mut unverified_edit = false;
     let mut verify_nudges: u8 = 0;
     let mut announce_nudges: u8 = 0;
+    // The skill loaded this request that works through tools, until a tool is called after it.
+    let mut skill_unused: Option<String> = None;
+    let mut skill_nudges: u8 = 0;
     // Set once the run has edited a file or run a command (whether or not it worked), and what
     // its calls were given (a call label is cut at 80 characters, a path often is not shorter).
     let mut acted = false;
@@ -2032,6 +2147,10 @@ pub async fn query(
             let unchanged = edits.unchanged();
             warn!("[{}] finishing with edits refused on {} - warning attached to the answer", config.agent_id, short_names(&unchanged));
             format!("{}\n\n{}", text_content.trim_end(), unapplied_edits_warning(&unchanged, vietnamese))
+        } else if let Some(skill) = skill_unused.as_ref().filter(|_| tool_uses.is_empty() && !config.is_subagent && !forcing_final && skill_nudges >= MAX_SKILL_NUDGES) {
+            let vietnamese = crate::docs::has_vietnamese_diacritics(&original_prompt) || crate::docs::has_vietnamese_diacritics(&text_content);
+            warn!("[{}] finishing after loading skill {skill} with no tool called - warning attached to the answer", config.agent_id);
+            format!("{}\n\n{}", text_content.trim_end(), skill_unused_warning(skill, vietnamese))
         } else {
             text_content.clone()
         };
@@ -2118,6 +2237,16 @@ pub async fn query(
                 }
             }
             if !config.is_subagent && !forcing_final {
+                // A skill that works through tools was loaded and nothing was called after it.
+                if skill_nudges < MAX_SKILL_NUDGES {
+                    if let Some(skill) = skill_unused.clone() {
+                        skill_nudges += 1;
+                        info!("[{}] answered right after loading skill {skill}, no tool called - sending the agent back ({skill_nudges}/{MAX_SKILL_NUDGES})", config.agent_id);
+                        messages.push(assistant_msg);
+                        messages.push(create_user_message(vec![ContentBlock::Text { text: skill_unused_nudge(&skill) }]));
+                        continue;
+                    }
+                }
                 // The reply announces the next step and stops there.
                 if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES {
                     let unfinished = if announces_without_acting(&text_content) {
@@ -2358,13 +2487,14 @@ pub async fn query(
                 "[{}] received ClearContextAndStart control signal — clearing history",
                 config.agent_id
             );
+            // Built before the history goes: the first-turn context lives in it.
+            let restart = restart_message(&messages, &original_prompt, plan_content);
             messages.clear();
+            skill_unused = None;
             if !config.chat_jid.is_empty() {
                 let _ = crate::zen_core::session_store::clear(&config.chat_jid);
             }
-            messages.push(create_user_message(vec![ContentBlock::Text {
-                text: format!("按照以下计划进行实现：\n\n{}", plan_content),
-            }]));
+            messages.push(restart);
             // Trigger mode switch if needed (this matches TS behaviour)
             // The ZenEngine will handle PlanImplement event and set agent_mode
             // wait, but the event wasn't emitted here? Actually, the UI emits PlanExitResponse to engine,
@@ -2545,6 +2675,12 @@ pub async fn query(
                     detector.record(stuck::Call { sig, result: stuck::fingerprint(content), failed, label: label.clone() });
                 }
                 evidence.add(&label, failed);
+                // A refused ExitPlanMode (an empty plan) asked nobody: Plan mode is not finished,
+                // so a text-only reply after it is still sent back for the plan.
+                if name == EXIT_PLAN_MODE_TOOL && failed {
+                    exit_plan_mode_called = false;
+                }
+                skill_unused = track_skill_use(skill_unused.take(), name, input, content, failed);
                 if config.coding_session {
                     if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
                         acted = true;
@@ -3521,6 +3657,125 @@ mod tests {
         for url in ["https://api.deepseek.com", "http://192.168.0.1.evil.com/v1", ""] {
             assert_eq!(turn_timeout_for("openai", "custom", url), LLM_TURN_TIMEOUT, "{url}");
         }
+    }
+
+    #[test]
+    fn a_restart_after_clear_context_carries_the_request_and_the_plan() {
+        let p = restart_prompt("Phát triển app ToDo bằng react typescript và ant-design", "1. Tạo dự án Vite\n2. Thêm antd");
+        assert!(p.contains("Phát triển app ToDo bằng react typescript và ant-design"), "the request, as written: {p}");
+        assert!(p.contains("1. Tạo dự án Vite") && p.contains("2. Thêm antd"));
+        assert!(p.starts_with("(Automatic message"), "a small model must not read the wrapper as the person's words");
+        assert!(p.contains("language of the request"));
+        assert!(!p.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)), "no Chinese stub in a Vietnamese chat: {p}");
+    }
+
+    #[test]
+    fn a_restart_with_an_empty_plan_still_has_a_task() {
+        // The case that sent a ToDo request off to look up gold prices: the plan was empty and the
+        // restart message held nothing else.
+        let p = restart_prompt("Make a todo app", "  \n ");
+        assert!(p.contains("Make a todo app"));
+        assert!(p.contains("none was written down"), "{p}");
+        assert!(p.contains("is the task"));
+        // No request either: the wrapper alone, never a half-built section.
+        let bare = restart_prompt("", "Step 1");
+        assert!(!bare.contains("The person's request"));
+        assert!(bare.contains("Step 1"));
+    }
+
+    #[test]
+    fn a_restart_keeps_a_long_request_bounded() {
+        // A character the wrapper text never uses, so the count is the request's alone.
+        let long = "Ж".repeat(RESTART_REQUEST_MAX_CHARS * 2);
+        let p = restart_prompt(&long, "plan");
+        assert_eq!(p.matches('Ж').count(), RESTART_REQUEST_MAX_CHARS);
+    }
+
+    fn user_text(text: &str) -> Message {
+        create_user_message(vec![ContentBlock::Text { text: text.to_string() }])
+    }
+
+    #[test]
+    fn a_restart_brings_back_the_first_turn_context_and_only_that() {
+        let ctx = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-25.\n\nProject instructions (AGENTS.md):\nUse tabs.\n</system-reminder>\n\n");
+        let mut history = vec![
+            create_user_message(vec![
+                ContentBlock::Text { text: ctx.clone() },
+                ContentBlock::Text { text: "Reply in Vietnamese.".into() },
+                ContentBlock::Text { text: "make a todo app".into() },
+            ]),
+            user_text("keep the buttons small"),
+        ];
+        // An assistant message that happens to quote the block is not the context.
+        let mut quoted = user_text(&ctx.replace("2026-10-25", "1999-01-01"));
+        quoted.msg_type = "assistant".into();
+        quoted.message.role = "assistant".into();
+        history.push(quoted);
+
+        let m = restart_message(&history, "make a todo app", "1. scaffold");
+        assert_eq!(m.msg_type, "user");
+        assert_eq!(m.message.content.len(), 2, "the context, then the restart prompt: {:?}", m.message.content);
+        let texts: Vec<&str> = m.message.content.iter().map(|b| match b { ContentBlock::Text { text } => text.as_str(), _ => "" }).collect();
+        assert_eq!(texts[0], ctx, "as it was written, so the profile and the project rules come back verbatim");
+        assert!(texts[1].contains("make a todo app") && texts[1].contains("1. scaffold"));
+        assert!(!texts[1].contains("Today's date"), "the context is carried once, not copied into the prompt");
+    }
+
+    #[test]
+    fn the_newest_first_turn_context_wins() {
+        // An identity refresh later in a chat writes a newer block; that is the one to keep.
+        let old = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-01.\n</system-reminder>\n\n");
+        let new = format!("{FIRST_TURN_CONTEXT_PREFIX}2026-10-20.\n</system-reminder>\n\n");
+        let history = vec![user_text(&old), user_text("hi"), user_text(&new), user_text("go on")];
+        assert_eq!(first_turn_context(&history).as_deref(), Some(new.as_str()));
+    }
+
+    #[test]
+    fn a_history_with_no_first_turn_context_restarts_with_the_prompt_alone() {
+        let history = vec![user_text("make a todo app"), user_text("<system-reminder>\nContext was compacted. Today's date is 2026-10-25.\n</system-reminder>")];
+        assert_eq!(first_turn_context(&history), None);
+        let m = restart_message(&history, "make a todo app", "");
+        assert_eq!(m.message.content.len(), 1);
+        assert_eq!(first_turn_context(&[]), None);
+    }
+
+    #[test]
+    fn a_skill_that_names_tools_is_unused_until_a_tool_is_called() {
+        let skill_text = "# Skill Activated: web-research\nCall mcp__browser__search { \"query\": \"...\" } then read the pages.";
+        let load = serde_json::json!({ "skill": "web-research" });
+        // Loading it arms the check.
+        let armed = track_skill_use(None, "Skill", &load, skill_text, false);
+        assert_eq!(armed.as_deref(), Some("web-research"));
+        // Looking tools up, planning and asking do not count as using it.
+        for meta in ["ToolSearch", "TodoWrite", "AskUserQuestion", "ExitPlanMode"] {
+            assert_eq!(track_skill_use(armed.clone(), meta, &serde_json::json!({}), "ok", false).as_deref(), Some("web-research"), "{meta}");
+        }
+        // A real call - even one that failed - ends it.
+        assert_eq!(track_skill_use(armed.clone(), "mcp__core__browser_search", &serde_json::json!({}), "[]", false), None);
+        assert_eq!(track_skill_use(armed.clone(), "mcp__core__browser_search", &serde_json::json!({}), "Error: no browser", true), None);
+        assert_eq!(track_skill_use(armed, "Bash", &serde_json::json!({}), "", false), None);
+    }
+
+    #[test]
+    fn a_skill_with_no_tools_in_it_arms_nothing() {
+        // A skill that is only instructions (a writing style) has its answer as its work.
+        let load = serde_json::json!({ "skill": "tone-of-voice" });
+        assert_eq!(track_skill_use(None, "Skill", &load, "# Skill Activated: tone-of-voice\nWrite short sentences.", false), None);
+        // A load that failed arms nothing and leaves an earlier one alone.
+        let text = "mcp__browser__search";
+        assert_eq!(track_skill_use(None, "Skill", &load, text, true), None);
+        assert_eq!(track_skill_use(Some("web-research".into()), "Skill", &load, "no tools here", false).as_deref(), Some("web-research"));
+    }
+
+    #[test]
+    fn the_skill_check_says_what_happened_in_the_language_of_the_request() {
+        let nudge = skill_unused_nudge("web-research");
+        assert!(nudge.starts_with("(Automatic check - not a message from the user"), "{nudge}");
+        assert!(nudge.contains("`web-research`") && nudge.contains("from memory"));
+        let vi = skill_unused_warning("web-research", true);
+        let en = skill_unused_warning("web-research", false);
+        assert!(vi.contains("Chưa tra cứu thật") && vi.contains("web-research"));
+        assert!(en.contains("Not looked up") && en.contains("web-research"));
     }
 
     #[test]

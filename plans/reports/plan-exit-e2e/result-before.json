@@ -1,0 +1,111 @@
+{
+ "label": "before",
+ "pass": 6,
+ "fail": 19,
+ "planRequests": [
+  {
+   "jid": "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "plan": "P1-PLAN: 1. write todo.py"
+  },
+  {
+   "jid": "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "plan": ""
+  },
+  {
+   "jid": "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "plan": "P2-PLAN: write p2.txt"
+  },
+  {
+   "jid": "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "plan": "P5-PLAN: 1. write p5.txt"
+  }
+ ],
+ "modeChanges": [
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "Plan"
+  ],
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "Agent"
+  ],
+  [
+   "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "Plan"
+  ],
+  [
+   "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "Agent"
+  ],
+  [
+   "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "Agent"
+  ],
+  [
+   "code:d8040657-3454-44a7-910c-babb87efedfa",
+   "Agent"
+  ],
+  [
+   "code:4879c33a-f06c-45c0-a119-2e34293c5c42",
+   "Agent"
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "Plan"
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "Agent"
+  ]
+ ],
+ "replies": [
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "P1-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "[]"
+  ],
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "[]"
+  ],
+  [
+   "code:6a726411-ec33-4f9f-85a5-ab0bf3d35a34",
+   "[]"
+  ],
+  [
+   "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "P2-TEXT the plan is above."
+  ],
+  [
+   "code:d035be4e-5c57-4ac3-93cd-bd0a53575c11",
+   "MOCK-DONE P2"
+  ],
+  [
+   "code:d8040657-3454-44a7-910c-babb87efedfa",
+   "P3-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:4879c33a-f06c-45c0-a119-2e34293c5c42",
+   "P4-FABRICATED: gold is 1 019 000 dong per luong (made up)."
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "P5-TEXT: here is my plan, in prose."
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "[]"
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "[]"
+  ],
+  [
+   "code:186970ce-beed-48f2-8e8b-e16f903d86a0",
+   "[]"
+  ]
+ ]
+}
