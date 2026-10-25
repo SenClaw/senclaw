@@ -1,0 +1,223 @@
+{
+ "summary": {
+  "model": "google/gemma-4-e4b",
+  "cards": 8,
+  "closedByWorkerWithSummary": 1,
+  "closedByWorkerEmptySummary": 0,
+  "blockedByWorker": 0,
+  "closedByDispatcher": 6,
+  "notFinished": 0,
+  "taskDone": 5,
+  "factsInTheBank": 1,
+  "retainRequests": 1,
+  "cardsToldAMemoryBlock": 1
+ },
+ "rows": [
+  {
+   "tag": "W1",
+   "id": 1,
+   "title": "Create the notes file",
+   "ended": "done",
+   "secs": 60,
+   "workerRequests": 10,
+   "toolCalls": [
+    "Write",
+    "Write",
+    "Task",
+    "ToolSearch",
+    "ToolSearch",
+    "ToolSearch",
+    "Write",
+    "Write",
+    "ToolSearch"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": true,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  },
+  {
+   "tag": "W2",
+   "id": 2,
+   "title": "Read the project version",
+   "ended": "done",
+   "secs": 16,
+   "workerRequests": 2,
+   "toolCalls": [
+    "Read"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": true,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  },
+  {
+   "tag": "W3",
+   "id": 3,
+   "title": "Count the orders",
+   "ended": "done",
+   "secs": 54,
+   "workerRequests": 5,
+   "toolCalls": [
+    "Bash",
+    "Bash",
+    "Write",
+    "Bash"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": false,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  },
+  {
+   "tag": "W4",
+   "id": 4,
+   "title": "Write the greet function",
+   "ended": "done",
+   "secs": 18,
+   "workerRequests": 2,
+   "toolCalls": [
+    "Write"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": true,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  },
+  {
+   "tag": "W5",
+   "id": 5,
+   "title": "Find parse_config",
+   "ended": "done",
+   "secs": 40,
+   "workerRequests": 4,
+   "toolCalls": [
+    "find_symbol",
+    "Grep",
+    "Grep"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": true,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  },
+  {
+   "tag": "W6",
+   "id": 6,
+   "title": "What is the project version",
+   "ended": "done",
+   "secs": 100,
+   "workerRequests": 7,
+   "toolCalls": [
+    "ToolSearch",
+    "Glob",
+    "mcp__kanban__list",
+    "mcp__kanban__link",
+    "mcp__kanban__list",
+    "mcp__kanban__list",
+    "mcp__kanban__complete"
+   ],
+   "howItEnded": "kanban_complete+summary",
+   "summary": "Blocked waiting for Project Version. Please provide the current version number of Sao Kim so I can complete this task and move the card to Done.",
+   "blockReason": null,
+   "taskDone": false,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": false,
+   "retainAsked": true,
+   "retainReply": "",
+   "factsAdded": 0
+  },
+  {
+   "tag": "W7",
+   "id": 7,
+   "title": "Deploy to production",
+   "ended": "blocked",
+   "secs": 483,
+   "workerRequests": 1,
+   "toolCalls": [
+    "AskUserQuestion"
+   ],
+   "howItEnded": "unclear",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": true,
+   "handedMemoryBlock": false,
+   "memoryBlock": null,
+   "knowsMarker": null,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 1
+  },
+  {
+   "tag": "W8",
+   "id": 8,
+   "title": "Which port does the backend use",
+   "ended": "done",
+   "secs": 52,
+   "workerRequests": 4,
+   "toolCalls": [
+    "CogSearch",
+    "Grep",
+    "Glob"
+   ],
+   "howItEnded": "dispatcher closed it (worker called neither)",
+   "summary": "",
+   "blockReason": null,
+   "taskDone": false,
+   "handedMemoryBlock": true,
+   "memoryBlock": "<memory_context>\nMemory relevant to this request (point-in-time — verify before asserting):\n\n[1] (fact) noted 2026-10-19\nNgười dùng cần số phiên bản hiện tại của Sao Kim để hoàn thành nhiệm vụ Kanban có tên \"What is the project version\".\n</memory_context>",
+   "knowsMarker": false,
+   "retainAsked": false,
+   "retainReply": null,
+   "factsAdded": 0
+  }
+ ],
+ "facts": [
+  {
+   "text": "Người dùng cần số phiên bản hiện tại của Sao Kim để hoàn thành nhiệm vụ Kanban có tên \"What is the project version\".",
+   "source": "kanban",
+   "origin": "",
+   "kind": "world"
+  }
+ ],
+ "modelCalls": 48,
+ "failedModelCalls": 6,
+ "failures": [
+  "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}",
+  "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}",
+  "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}",
+  "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}",
+  "{\"error\":\"'response_format.type' must be 'json_schema' or 'text'\"}"
+ ]
+}

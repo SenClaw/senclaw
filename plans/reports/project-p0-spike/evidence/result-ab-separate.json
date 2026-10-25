@@ -1,0 +1,193 @@
+{
+ "label": "p0c",
+ "mode": "separate",
+ "turns": [
+  {
+   "who": "A",
+   "tag": "A1",
+   "stateFileBefore": "(no file: ENOENT)",
+   "stateFileAfter": "proj/A",
+   "bashPwd": "proj/A",
+   "workspaceInfo": "Error: No such tool available: mcp__workspace__workspace_info. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "writeRel": "Wrote rel-A1.txt (2 bytes)\n--- a/proj/A/rel-A1.",
+   "datagen": "Error: No such tool available: mcp__datagen__datagen_start. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "doc": "{\"created\":true,\"createdDocsDirectory\":true,\"index\":\"proj/A/docs/README.md\",\"note\":\"Tell the user this path. The document is written but NOT commit",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "marker-B.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "(no dataset)"
+  },
+  {
+   "who": "B",
+   "tag": "B1",
+   "stateFileBefore": "proj/A",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/B",
+   "workspaceInfo": "Error: No such tool available: mcp__workspace__workspace_info. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "writeRel": "Wrote rel-B1.txt (2 bytes)\n--- a/proj/B/rel-B1.",
+   "datagen": "Error: No such tool available: mcp__datagen__datagen_start. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "doc": "{\"created\":true,\"createdDocsDirectory\":true,\"index\":\"proj/B/docs/README.md\",\"note\":\"Tell the user this path. The document is written but NOT commit",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "docs/README.md",
+    "docs/p0-B1.md",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "(no dataset)"
+  },
+  {
+   "who": "A",
+   "tag": "A2",
+   "stateFileBefore": "proj/B",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/A",
+   "workspaceInfo": "Error: No such tool available: mcp__workspace__workspace_info. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "writeRel": "Wrote rel-A2.txt (2 bytes)\n--- a/proj/A/rel-A2.",
+   "datagen": "Error: No such tool available: mcp__datagen__datagen_start. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "doc": "{\"created\":true,\"createdDocsDirectory\":false,\"index\":\"proj/B/docs/README.md\",\"note\":\"Tell the user this path. The document is written but NOT commi",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "docs/README.md",
+    "docs/p0-A2.md",
+    "docs/p0-B1.md",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "(no dataset)"
+  },
+  {
+   "who": "B",
+   "tag": "B2",
+   "stateFileBefore": "proj/B",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/B",
+   "workspaceInfo": "Error: No such tool available: mcp__workspace__workspace_info. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "writeRel": "Wrote rel-B2.txt (2 bytes)\n--- a/proj/B/rel-B2.",
+   "datagen": "Error: No such tool available: mcp__datagen__datagen_start. Please use the ToolSearch tool to find and load the correct tool before retrying.",
+   "doc": "{\"created\":true,\"createdDocsDirectory\":false,\"index\":\"proj/B/docs/README.md\",\"note\":\"Tell the user this path. The document is written but NOT commi",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "docs/README.md",
+    "docs/p0-A2.md",
+    "docs/p0-B1.md",
+    "docs/p0-B2.md",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "(no dataset)"
+  },
+  {
+   "who": "A",
+   "tag": "A3",
+   "kind": "dag",
+   "stateFile": "proj/B",
+   "workers": [
+    {
+     "tag": "W-A3-1",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-A3-1.txt (4 bytes)\n--- a/proj/B/dag-A3-1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    },
+    {
+     "tag": "W-A3-2",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-A3-2.txt (4 bytes)\n--- a/proj/B/dag-A3-2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    }
+   ],
+   "dagResult": "{ \"content\": [ { \"text\": \"Parent task created: p-20261018-0001\\nStatus: ACTIVE (starting immediately)\\nTasks:\\n - \\\"w1\\\" (agent: persona:p0-worker, no deps)\\n - \\\"w2\\\" (agent: persona:p0-worker, no deps)\\n\\nIMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\\n• **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{\\\"parentId\\\":\\\"",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "dag-A3-1.txt",
+    "dag-A3-2.txt",
+    "docs/README.md",
+    "docs/p0-A2.md",
+    "docs/p0-B1.md",
+    "docs/p0-B2.md",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ]
+  },
+  {
+   "who": "B",
+   "tag": "B3",
+   "kind": "dag",
+   "stateFile": "proj/B",
+   "workers": [
+    {
+     "tag": "W-B3-2",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-B3-2.txt (4 bytes)\n--- a/proj/B/dag-B3-2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    },
+    {
+     "tag": "W-B3-1",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-B3-1.txt (4 bytes)\n--- a/proj/B/dag-B3-1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    }
+   ],
+   "dagResult": "{ \"content\": [ { \"text\": \"Parent task created: p-20261018-0004\\nStatus: ACTIVE (starting immediately)\\nTasks:\\n - \\\"w1\\\" (agent: persona:p0-worker, no deps)\\n - \\\"w2\\\" (agent: persona:p0-worker, no deps)\\n\\nIMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\\n• **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{\\\"parentId\\\":\\\"",
+   "dirA": [
+    "docs/README.md",
+    "docs/p0-A1.md",
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "dag-A3-1.txt",
+    "dag-A3-2.txt",
+    "dag-B3-1.txt",
+    "dag-B3-2.txt",
+    "docs/README.md",
+    "docs/p0-A2.md",
+    "docs/p0-B1.md",
+    "docs/p0-B2.md",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ]
+  }
+ ]
+}

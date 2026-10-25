@@ -1,0 +1,1661 @@
+[
+ {
+  "function": {
+   "description": "Ask the user questions and wait for their responses",
+   "name": "AskUser",
+   "parameters": {
+    "properties": {
+     "questions": {
+      "description": "1-4 related questions to ask in a single turn",
+      "items": {
+       "properties": {
+        "header": {
+         "description": "Short label displayed as a chip/tag (max 500 chars)",
+         "maxLength": 500,
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "description": "Allow multiple selections",
+         "type": "boolean"
+        },
+        "options": {
+         "items": {
+          "properties": {
+           "description": {
+            "description": "One-sentence explanation of what this option means",
+            "type": "string"
+           },
+           "label": {
+            "description": "Short selectable label (1-5 words)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "description": "The complete question to ask the user",
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Ask the user questions with options and wait for their responses",
+   "name": "AskUserQuestion",
+   "parameters": {
+    "properties": {
+     "answers": {
+      "description": "User answers collected by the system. Do NOT set this yourself.",
+      "type": "object"
+     },
+     "metadata": {
+      "properties": {
+       "source": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "questions": {
+      "description": "Questions to ask the user (1-4 questions)",
+      "items": {
+       "properties": {
+        "header": {
+         "maxLength": 500,
+         "type": "string"
+        },
+        "multiSelect": {
+         "default": false,
+         "type": "boolean"
+        },
+        "options": {
+         "items": {
+          "properties": {
+           "description": {
+            "type": "string"
+           },
+           "label": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "description"
+          ],
+          "type": "object"
+         },
+         "maxItems": 4,
+         "minItems": 2,
+         "type": "array"
+        },
+        "question": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "question",
+        "header",
+        "options",
+        "multiSelect"
+       ],
+       "type": "object"
+      },
+      "maxItems": 4,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "questions"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Execute a bash command in a persistent shell session with optional timeout",
+   "name": "Bash",
+   "parameters": {
+    "properties": {
+     "command": {
+      "description": "The command to execute",
+      "type": "string"
+     },
+     "description": {
+      "description": "Clear, concise description of what this command does in 5-10 words",
+      "type": "string"
+     },
+     "timeout": {
+      "description": "Optional timeout in milliseconds (max 180000ms)",
+      "type": "number"
+     }
+    },
+    "required": [
+     "command",
+     "description"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Save a fact or statement into cognitive memory (knowledge graph). The text is chunked, embedded, and run through an LLM-driven triplet extractor that turns sentences into (subject, predicate, object) edges. Use this whenever the user tells you something worth remembering across sessions — names, preferences, ongoing projects, decisions, relationships, dates. Idempotent: re-saving the same text strengthens existing edges via Hebbian learning instead of duplicating them. Skip pure questions and one-word acknowledgements — those have no facts to extract.",
+   "name": "CogAdd",
+   "parameters": {
+    "properties": {
+     "tags": {
+      "description": "Optional category tags scoped to this agent (e.g. ['preferences','work']). Empty = default_memory.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "text": {
+      "description": "The fact or sentence to remember. Can be multilingual.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Permanently delete a memory node and all its edges from the knowledge graph. The `node_id` is the UUID returned by CogAdd or surfaced in CogSearch / CogRecall hits. Use sparingly — Hebbian decay handles weakly-used memories automatically. Prefer Forget only when the user explicitly asks to be forgotten or the fact is wrong.",
+   "name": "CogForget",
+   "parameters": {
+    "properties": {
+     "node_id": {
+      "description": "UUID of the node to delete.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "node_id"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Recall what's known about a topic from cognitive memory using SpreadingActivation. Like CogSearch with mode=spreading: the query embeds to seed nodes, then BFS expands k hops while STRENGTHENING the traversed edges (Hebbian write-back). Use this for the common case 'what do I know about X' — over time, frequently-recalled topics become easier to find. Returns only facts that are still current; pass `as_of` for what was true at an earlier moment. For pure read-only lookups prefer CogSearch with mode='graph'.",
+   "name": "CogRecall",
+   "parameters": {
+    "properties": {
+     "as_of": {
+      "description": "Recall what was true at this moment instead of now: \"2026-07-31\" or unix seconds.",
+      "type": "string"
+     },
+     "hops": {
+      "default": 2,
+      "maximum": 5,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "limit": {
+      "default": 8,
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "query": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Search cognitive memory across four modes:\n• chunks — dense-vector text retrieval (best for keyword/topic lookup)\n• triplet — return entities + their outgoing edges (best for 'who knows X?')\n• graph — k-hop subgraph expansion from semantic seeds (default, best for context)\n• spreading — like graph but ALSO strengthens edges via Hebbian write-back (use when the query represents real recall the user should remember more easily next time)\n• temporal — facts as they stood at `as_of`, ranked by closeness to that moment\nEvery mode answers with CURRENT facts by default: a value that a later one replaced (an old price, a previous job) is excluded. Pass `as_of` to ask what was true then instead — 'giá vàng ngày 31/07' → as_of='2026-07-31'.\nPrefer CogRecall for everyday 'what do I know about X' questions — it picks spreading automatically and includes write-back.",
+   "name": "CogSearch",
+   "parameters": {
+    "properties": {
+     "as_of": {
+      "description": "Answer as of this moment instead of now: \"2026-07-31\", \"2026-07-31T09:00:00Z\" or unix seconds. Omit for current facts.",
+      "type": "string"
+     },
+     "hops": {
+      "default": 2,
+      "description": "Hops for graph/spreading modes.",
+      "maximum": 5,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "limit": {
+      "default": 8,
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "mode": {
+      "default": "graph",
+      "description": "Retrieval strategy. Default: graph.",
+      "enum": [
+       "chunks",
+       "triplet",
+       "graph",
+       "spreading",
+       "temporal"
+      ],
+      "type": "string"
+     },
+     "query": {
+      "description": "Natural-language query.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Return current cognitive memory statistics: total nodes, edges, and per-kind counts. Use to answer 'how much do you remember?' or to verify a save worked.",
+   "name": "CogStats",
+   "parameters": {
+    "properties": {},
+    "required": [],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Perform exact string replacements in an existing file. Alternatively pass `patch` (unified-diff hunks; line numbers are ignored, hunks are located by content) instead of old_string/new_string.",
+   "name": "Edit",
+   "parameters": {
+    "properties": {
+     "file_path": {
+      "description": "Path to the file. Absolute, or relative to the working directory.",
+      "type": "string"
+     },
+     "new_string": {
+      "description": "The text to replace it with (must be different from old_string)",
+      "type": "string"
+     },
+     "old_string": {
+      "description": "The text to replace",
+      "type": "string"
+     },
+     "patch": {
+      "description": "Unified diff to apply instead of old_string/new_string: hunks of lines prefixed ' ' (context), '-' (remove), '+' (add). @@ headers optional; each hunk is matched by its content.",
+      "type": "string"
+     },
+     "replace_all": {
+      "description": "Replace all occurrences of old_string (default false)",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Switch the session into Plan mode. While in Plan mode, you must NOT edit source files — only write the plan markdown to the workspace's plans/ directory. End the plan by calling `ExitPlanMode` to request user approval. Use Plan mode for new project scaffolding, multi-file refactors, or any task spanning 3+ files.",
+   "name": "EnterPlanMode",
+   "parameters": {
+    "properties": {
+     "reason": {
+      "description": "One-line rationale shown in logs (e.g. 'multi-file React scaffold').",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Use this tool when you are in plan mode and have finished presenting your plan and are ready to code. Prompts the user to approve the plan.",
+   "name": "ExitPlanMode",
+   "parameters": {
+    "properties": {
+     "plan": {
+      "description": "Markdown plan content to present to the user for approval.",
+      "type": "string"
+     },
+     "planFilePath": {
+      "description": "Absolute path of the plan file you wrote. Optional but recommended.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "plan"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "# Interactive form tool\nRender a rich form for the user to fill in, then receive structured values back.\nUse when you need multiple typed inputs at once (text, numbers, sliders, selects,\nmulti-select, checkboxes, dates, an editable table) — richer than AskUserQuestion's\noption buttons.\n\nUsage notes:\n- surface:'inline' for short forms (renders as a chat card); 'dock' for large forms\n  (renders in the right-side workbench panel). Both block until the user submits.\n- Every field needs a unique `key`; the returned `values` object is keyed by it.\n- Pre-fill from conversation context via each field's `default` — the form shows up\n  already filled, and the user edits/confirms.\n- Mark fields `required: true` to block submission until they are filled.\n- Prefer AskUserQuestion when you only need a single multiple-choice decision.",
+   "name": "FormUI",
+   "parameters": {
+    "properties": {
+     "fields": {
+      "description": "Ordered list of form fields, rendered top to bottom.",
+      "items": {
+       "oneOf": [
+        {
+         "properties": {
+          "default": {
+           "type": "string"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "maxLength": {
+           "minimum": 1,
+           "type": "integer"
+          },
+          "placeholder": {
+           "type": "string"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "text"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "string"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "maxLength": {
+           "minimum": 1,
+           "type": "integer"
+          },
+          "placeholder": {
+           "type": "string"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "rows": {
+           "default": 4,
+           "maximum": 20,
+           "minimum": 2,
+           "type": "integer"
+          },
+          "type": {
+           "const": "textarea"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "number"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "max": {
+           "type": "number"
+          },
+          "min": {
+           "type": "number"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "step": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "type": {
+           "const": "number"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "number"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "max": {
+           "type": "number"
+          },
+          "min": {
+           "type": "number"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "step": {
+           "default": 1,
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "type": {
+           "const": "slider"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label",
+          "min",
+          "max"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "string"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "properties": {
+             "label": {
+              "type": "string"
+             },
+             "value": {
+              "description": "The value returned when this option is chosen.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "label",
+             "value"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "select"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label",
+          "options"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "string"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "properties": {
+             "label": {
+              "type": "string"
+             },
+             "value": {
+              "description": "The value returned when this option is chosen.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "label",
+             "value"
+            ],
+            "type": "object"
+           },
+           "minItems": 2,
+           "type": "array"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "radio"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label",
+          "options"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "properties": {
+             "label": {
+              "type": "string"
+             },
+             "value": {
+              "description": "The value returned when this option is chosen.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "label",
+             "value"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "multiselect"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label",
+          "options"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "default": false,
+           "type": "boolean"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "checkbox"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label"
+         ]
+        },
+        {
+         "properties": {
+          "default": {
+           "type": "string"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "max": {
+           "type": "string"
+          },
+          "min": {
+           "type": "string"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "type": {
+           "const": "date"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label"
+         ]
+        },
+        {
+         "properties": {
+          "text": {
+           "type": "string"
+          },
+          "type": {
+           "const": "static_text"
+          },
+          "variant": {
+           "default": "body",
+           "enum": [
+            "heading",
+            "body",
+            "divider"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "text"
+         ]
+        },
+        {
+         "properties": {
+          "allowAddRow": {
+           "default": true,
+           "type": "boolean"
+          },
+          "columns": {
+           "items": {
+            "properties": {
+             "key": {
+              "type": "string"
+             },
+             "label": {
+              "type": "string"
+             },
+             "type": {
+              "default": "text",
+              "enum": [
+               "text",
+               "number"
+              ],
+              "type": "string"
+             }
+            },
+            "required": [
+             "key",
+             "label"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "help": {
+           "description": "Optional one-line helper text shown under the control.",
+           "type": "string"
+          },
+          "key": {
+           "description": "Unique key for this field; becomes a key in the returned values object.",
+           "type": "string"
+          },
+          "label": {
+           "description": "Human-readable label shown above the control.",
+           "type": "string"
+          },
+          "required": {
+           "default": false,
+           "description": "If true, submit is blocked until this field has a value.",
+           "type": "boolean"
+          },
+          "rows": {
+           "default": [],
+           "items": {
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "type": {
+           "const": "editable_table"
+          }
+         },
+         "required": [
+          "type",
+          "key",
+          "label",
+          "columns"
+         ]
+        }
+       ],
+       "type": "object"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+     },
+     "submitLabel": {
+      "default": "Submit",
+      "description": "Label for the submit button.",
+      "type": "string"
+     },
+     "surface": {
+      "default": "inline",
+      "description": "inline = card in chat stream (small forms); dock = right-side workbench panel (large forms). Both block until the user submits.",
+      "enum": [
+       "inline",
+       "dock"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "description": "Title shown at the top of the form.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title",
+     "fields"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Find files matching a glob pattern. Supports *, **, ?, [abc], {a,b}.",
+   "name": "Glob",
+   "parameters": {
+    "properties": {
+     "path": {
+      "description": "Directory to search in. Defaults to current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Glob pattern (not regex) to match file paths. Supports *, **, ?, [abc], {a,b}. Example: src/**/*.rs",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Search files using regex patterns. Supports full ripgrep syntax, file type filtering, context lines.",
+   "name": "Grep",
+   "parameters": {
+    "properties": {
+     "-A": {
+      "description": "Trailing context lines after each match (rg -A). content mode only.",
+      "type": "number"
+     },
+     "-B": {
+      "description": "Leading context lines before each match (rg -B). content mode only.",
+      "type": "number"
+     },
+     "-C": {
+      "description": "Context lines on both sides of each match; overrides -A/-B. content mode only.",
+      "type": "number"
+     },
+     "-i": {
+      "description": "Case-insensitive search. Default is case-sensitive.",
+      "type": "boolean"
+     },
+     "glob": {
+      "description": "Glob filter on file paths, e.g. \"*.js\", \"*.{ts,tsx}\", \"**/test/*.py\".",
+      "type": "string"
+     },
+     "head_limit": {
+      "description": "Return only the first N entries. 0 = unlimited.",
+      "type": "number"
+     },
+     "multiline": {
+      "description": "Allow patterns to span line breaks and '.' to match newlines. Default false.",
+      "type": "boolean"
+     },
+     "offset": {
+      "description": "Skip the first N entries before head_limit. Use with head_limit for pagination.",
+      "type": "number"
+     },
+     "output_mode": {
+      "description": "Output format. \"files_with_matches\" (default): list matching file paths. \"content\": matching lines with line numbers. \"count\": match count per file.",
+      "enum": [
+       "content",
+       "files_with_matches",
+       "count"
+      ],
+      "type": "string"
+     },
+     "path": {
+      "description": "File or directory to search. Defaults to current working directory.",
+      "type": "string"
+     },
+     "pattern": {
+      "description": "Regex pattern to match against file contents (ripgrep regex syntax)",
+      "type": "string"
+     },
+     "type": {
+      "description": "Filter by file type, e.g. js, ts, tsx, py, rust, go, java. (rg --type)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "pattern"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "# LaunchUI — display deliverables in a workbench panel\n\nWhen you produce a deliverable that the user should *view* rather than read as chat text — a rendered HTML report, a Markdown document, a deployed web page, an exposed API endpoint — call LaunchUI to surface it in the workbench panel.\n\nThis is a **display-only** tool. It hands the deliverable off to the UI and returns immediately. No user response comes back. (For asking the user something or collecting structured input, use AskUser.)\n\n## When to use\n\n**Rule of thumb: if your task work writes a `.md` or `.html` file to disk, call LaunchUI on it.** Don't just say \"I wrote the file to X\" in chat — surface it in the panel.\n\nSpecifically:\n- You wrote one or more `.md` / `.html` files (reports, docs, dashboards, slides, charts, notes, READMEs…) → LaunchUI them. Pass every related file in **one** call so the panel renders them as tabs (e.g. a `.md` source together with its `.html` render, or multi-chapter docs).\n- You started a frontend or full-stack service → LaunchUI with the served URL.\n- You exposed an HTTP API endpoint → LaunchUI with the URL + usage card.\n\n## When NOT to use\n- Short conversational reply (a sentence, a code snippet, a paragraph of explanation) → just reply in chat. The trigger is **a file you wrote**, not formatted prose in chat.\n- The `.md`/`.html` you wrote is purely intermediate scratch (e.g. a temp file you immediately re-read and discarded) → no need.\n- Asking the user a question or getting input → use AskUser, not LaunchUI.\n\n**Common anti-pattern to avoid:** writing a `.md` report file and then pasting its contents back into chat instead of (or in addition to) calling LaunchUI. The panel is the right surface; chat is for narration of what you did.\n\n## Modes\n- **static** — render local HTML / Markdown files\n  - `files`: one or more paths. Supported: `.html` `.htm` `.md` `.markdown`\n  - **Pass ALL related deliverables in a single call** — multiple files automatically render as tabs in one panel. Don't make multiple LaunchUI calls when the artifacts belong together (e.g. a research `.md` report and the `.html` presentation built from it; a dashboard `.html` and its underlying data `.md`; multiple chapter `.md` files of the same doc).\n  - HTML must be **self-contained** (inline CSS / JS / base64 images). External `./style.css` style refs will NOT resolve.\n- **web** — show a running frontend or full-stack service\n  - `url`: the served page URL. Start the service with Bash first (the tool does not start it for you).\n- **backend** — show an API endpoint as an info card\n  - `url`: the endpoint\n  - `usage`: markdown with call examples (curl, SDK snippet, request/response shape)\n\n## Workflow\nLaunchUI does NOT decide what to build — it only surfaces deliverables that your actual task work has already produced. DO NOT invent or fabricate artifacts solely to have something to display.\n\nWhen your work *does* yield a viewable result:\n1. Finish producing the artifact(s) as part of the task (write the file(s), start the service, expose the API)\n2. Collect EVERY file/URL that belongs to this deliverable into a single LaunchUI call. If the task produced both a Markdown source/report AND a rendered HTML page, pass both paths together as `files` — the panel renders them as tabs so the user can switch between them.\n3. Continue with your next step — the panel opens for the user; no response comes back\n\n## File locations\nUsually LaunchUI does NOT decide where files live — by the time you call it, the file already exists on disk and you pass its actual path. The question is only where *you* chose to write it earlier:\n\n- If the user named a destination, write there.\n- Otherwise write it under the current working directory like any other generated output.\n- For transient deliverables with no natural home in the project tree, `<cwd>/workbench/` is the conventional landing spot.\n\nDo NOT paste rendered output into chat as a substitute — the panel gives the user copy-path, tabs, and history affordances that chat can't.",
+   "name": "LaunchUI",
+   "parameters": {
+    "additionalProperties": false,
+    "properties": {
+     "files": {
+      "description": "mode=static only. One or more html/markdown file paths (absolute or relative to cwd). Files must already exist. Multiple files automatically render as tabs.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "mode": {
+      "description": "Display mode. \"static\": render local html/md files. \"web\": iframe a running service URL. \"backend\": show an API endpoint card with usage examples.",
+      "enum": [
+       "static",
+       "web",
+       "backend"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "description": "Panel title shown in the workbench header. Keep it short and descriptive (e.g. \"Q3 Report\", \"Auth API\"). Defaults to filename or URL when omitted.",
+      "type": "string"
+     },
+     "url": {
+      "description": "mode=web / mode=backend. The URL to display. For \"web\" this is iframed and must be reachable (start the server with Bash first). For \"backend\" this is shown as the API endpoint to call. Must include protocol (http:// or https://).",
+      "type": "string"
+     },
+     "usage": {
+      "description": "mode=backend only. Markdown showing how to call the API — curl examples, SDK snippets, request/response shape. Rendered with markdown formatting in the panel.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "mode"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Edit Jupyter notebook (.ipynb) cells — replace, insert, or delete",
+   "name": "NotebookEdit",
+   "parameters": {
+    "properties": {
+     "cell_number": {
+      "description": "The 0-based index of the cell to edit",
+      "type": "number"
+     },
+     "cell_type": {
+      "description": "Cell type. Required for insert mode; defaults to current type otherwise.",
+      "enum": [
+       "code",
+       "markdown"
+      ],
+      "type": "string"
+     },
+     "edit_mode": {
+      "description": "Edit mode (default: replace)",
+      "enum": [
+       "replace",
+       "insert",
+       "delete"
+      ],
+      "type": "string"
+     },
+     "new_source": {
+      "description": "The new source for the cell",
+      "type": "string"
+     },
+     "notebook_path": {
+      "description": "Path to the .ipynb file. Absolute, or relative to the working directory.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "notebook_path",
+     "cell_number",
+     "new_source"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Retrieve the output of a background job started by Bash with background=true. Use wait=true (default) to wait for completion, or wait=false to get the current snapshot.",
+   "name": "PeekBgJob",
+   "parameters": {
+    "properties": {
+     "job_id": {
+      "description": "ID of the background job to peek at.",
+      "type": "string"
+     },
+     "wait": {
+      "default": true,
+      "description": "When true (default) wait for completion; when false return snapshot.",
+      "type": "boolean"
+     },
+     "wait_timeout": {
+      "default": 30000,
+      "description": "Wait timeout in milliseconds (default 30000).",
+      "type": "number"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Update your persona (SOUL.md) when the user gives a behaviour-shaping instruction. Examples: \"from now on respond more concisely\" → action=add_bullet, section=Guidelines. \"stop using emojis\" → action=add_bullet, section=Style, content=\"Never use emojis.\" \"forget I said X\" → action=remove_bullet. \"you are now MyAssistant who specializes in Y\" → action=replace_section, section=Identity. Multilingual: trigger on equivalent phrases (\"từ giờ trở đi\", \"luôn luôn\", \"đừng\", \"never\", \"always\", \"from now on\"). Section names: Identity, Guidelines, Style, Boundaries, Memory Management — or any custom H2 you propose. The Learned section is auto-managed; do NOT write to it. Idempotent: re-issuing the same instruction is safe. After the edit, your cognitive memory re-ingests automatically — you don't need to call CogAdd.",
+   "name": "PersonaUpdate",
+   "parameters": {
+    "properties": {
+     "action": {
+      "description": "How to apply `content` to the section.",
+      "enum": [
+       "add_bullet",
+       "append_line",
+       "replace_section",
+       "remove_bullet"
+      ],
+      "type": "string"
+     },
+     "content": {
+      "description": "The new bullet text, line, or replacement body. Phrase as a directive in second person (\"You respond concisely.\").",
+      "type": "string"
+     },
+     "reason": {
+      "description": "Optional: short note on what user instruction prompted this edit. Stored in the tool result but not persisted to SOUL.md.",
+      "type": "string"
+     },
+     "section": {
+      "description": "Target H2 section. Common: Identity, Guidelines, Style, Boundaries. Created if missing.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "section",
+     "action",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Read a file from the local filesystem",
+   "name": "Read",
+   "parameters": {
+    "properties": {
+     "file_path": {
+      "description": "Path to the file. Absolute, or relative to the working directory.",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Number of lines to read",
+      "type": "integer"
+     },
+     "offset": {
+      "description": "Line number to start reading from (1-indexed)",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "file_path"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Execute an agent skill",
+   "name": "Skill",
+   "parameters": {
+    "properties": {
+     "args": {
+      "description": "Optional arguments for the skill",
+      "type": "string"
+     },
+     "skill": {
+      "description": "The skill name. E.g., \"slides-master\", \"pdf-skill\", or \"markdown-converter\"",
+      "type": "string"
+     }
+    },
+    "required": [
+     "skill"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Stop a running background job started by Bash with background=true.",
+   "name": "StopBgJob",
+   "parameters": {
+    "properties": {
+     "job_id": {
+      "description": "ID of the background job to terminate.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "job_id"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Launch a new agent to handle complex, multi-step tasks",
+   "name": "Task",
+   "parameters": {
+    "properties": {
+     "description": {
+      "description": "A brief (3-5 word) description of the task",
+      "type": "string"
+     },
+     "isolation": {
+      "description": "worktree = the subagent edits its own git worktree (branch senclaw/task-<id>) instead of this chat's working directory; the result reports the branch and diff. Only in a git repository.",
+      "enum": [
+       "none",
+       "worktree"
+      ],
+      "type": "string"
+     },
+     "prompt": {
+      "description": "The task for the agent to perform",
+      "type": "string"
+     },
+     "subagent_type": {
+      "description": "The name of specialized agent to use for the task",
+      "type": "string"
+     }
+    },
+    "required": [
+     "description",
+     "prompt",
+     "subagent_type"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Get the current date and time with optional timezone offset",
+   "name": "Time",
+   "parameters": {
+    "properties": {
+     "timezone": {
+      "description": "Optional timezone offset like +07:00, -05:00, or Z for UTC",
+      "type": "string"
+     }
+    },
+    "required": [],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Create and manage a structured task list for your current coding session",
+   "name": "TodoWrite",
+   "parameters": {
+    "properties": {
+     "todos": {
+      "description": "The updated todo list",
+      "items": {
+       "properties": {
+        "activeForm": {
+         "minLength": 1,
+         "type": "string"
+        },
+        "content": {
+         "minLength": 1,
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "pending",
+          "in_progress",
+          "completed"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "content",
+        "status",
+        "activeForm"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "todos"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Search for specialized tools AND skills that aren't loaded by default. Returns full schemas of matching tools (callable in subsequent turns) and matching skills (invoke via the `Skill` tool). Use when a task needs capabilities beyond the core toolset (e.g. browser screenshots, calendar events, code graph queries, or an installed skill like 'ssh').",
+   "name": "ToolSearch",
+   "parameters": {
+    "properties": {
+     "max_results": {
+      "description": "Max tools to return (default 5, hard cap 20).",
+      "type": "number"
+     },
+     "query": {
+      "description": "Keywords describing the capability you need. Examples: 'browser screenshot', 'calendar event', 'wiki search', 'code graph symbols'.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Fetch a URL and return its content as text or markdown. Content over 60 KB is truncated. HTML is stripped to plain text. Use the `prompt` field to remind yourself why you fetched it; the prompt is not passed to a summarizer.",
+   "name": "WebFetch",
+   "parameters": {
+    "properties": {
+     "prompt": {
+      "description": "What you intend to do with the fetched content. Recorded for audit; not used for summarization.",
+      "type": "string"
+     },
+     "url": {
+      "description": "Target URL (http or https).",
+      "type": "string"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Write a file to the local filesystem",
+   "name": "Write",
+   "parameters": {
+    "properties": {
+     "content": {
+      "description": "Content to write to the file",
+      "type": "string"
+     },
+     "file_path": {
+      "description": "Path to the file. Absolute, or relative to the working directory.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "file_path",
+     "content"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "# Rich chat widget (display-only)\nPush a rich, non-interactive widget into the chat box for the user to see. This\nis ONE-WAY — the widget is rendered inline; the user does NOT respond to it\n(unlike FormUI/AskUserQuestion). Use it to show a chart, an image, a live clock,\na weather card, playable video/audio, or an installed Space App's own widget\nalongside your text reply.\n\nkind must be one of: chart | image | clock | weather | video | audio | app.\ndata is a kind-specific object (validated & rendered by the client):\n- chart:   { chartType: bar|line|area|pie|scatter, xLabel?, yLabel?, stacked?, ...data }\n           where ...data is ONE of (the daemon normalizes all of them):\n             series: [{ name, color?, points: [{x,y}] }]   (points may also be [x,y] pairs or bare numbers)\n             rows:   [{ date: \"26/07\", high: 37, low: 26 }, ...]   — one object per x;\n                     EVERY numeric column becomes a series; optional \"x\" names the x column\n             labels: [...] + values: [...]   — a single series\n           Numeric strings (\"37\", \"33,5\") are parsed. Prefer `rows` when you have tabular data.\n- image:   { url? | dataUrl?, caption?, alt? }   (one of url/dataUrl required)\n- clock:   { tz?, label?, showSeconds?, showDate?, format24h? }\n- weather: { location, unit: C|F, current: {temp,condition,icon,humidity,wind}, daily?: [{day,hi,lo,icon}] }\n- video:   { url, poster?, caption?, mime?, autoplay? }   (url required)\n- audio:   { url, caption?, mime? }   (url required)\n\nPrepare widget data INLINE in this tool call: do unit conversions and math\nyourself and pass the result directly (e.g. °F→°C, percentages). NEVER write a\ntemp script/file or run bash/node just to reshape data for a widget — the\n`rows` shortcut above exists precisely so raw tabular data can be passed as-is.\n\nFor `video`/`audio` the url MUST be an http(s) URL the chat client can fetch —\na local filesystem path will NOT play. Space Apps that store media expose one\n(e.g. the TikTok downloader returns `file_urls` on each finished download).\n\nkind \"app\" embeds a widget provided by an installed Space App: pass `widget`\n(its full id, e.g. \"crm.pipeline\") and `params` (per its schema) INSTEAD of\n`data`. Call the `widget_list` tool first to see available app widgets, their\ndescriptions and params.\n\nINLINE ALTERNATIVE: for a chart/media that belongs inside your flowing reply,\nyou may instead write a fenced block directly in your response text — e.g.\n```chart with the same data object — and the client renders it in place (same\ndata shortcuts). Use this tool for standalone cards, another chat_jid, or app\nwidgets (kind \"app\" requires the tool).\n\nOn messaging channels (Telegram/Zalo/WeChat/…) the rich card cannot render — the\nuser automatically receives a one-line text summary instead. The full widget\nshows on the SenClaw Web/Desktop UI.\n\nReturns immediately after queuing the widget — do not expect a value back.",
+   "name": "emit_widget",
+   "parameters": {
+    "properties": {
+     "chat_jid": {
+      "description": "Optional target chat JID; defaults to the current chat.",
+      "type": "string"
+     },
+     "data": {
+      "description": "Kind-specific payload (built-in kinds only). See the tool description for each kind's shape.",
+      "type": "object"
+     },
+     "kind": {
+      "description": "Which widget to render.",
+      "enum": [
+       "chart",
+       "image",
+       "clock",
+       "weather",
+       "video",
+       "audio",
+       "app"
+      ],
+      "type": "string"
+     },
+     "params": {
+      "description": "kind \"app\" only: params per the widget's declared schema (see widget_list).",
+      "type": "object"
+     },
+     "title": {
+      "description": "Optional card header shown above the widget.",
+      "type": "string"
+     },
+     "widget": {
+      "description": "kind \"app\" only: full app-widget id (e.g. \"widget-pack.countdown\"). Call widget_list for available ids.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "kind"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Find which files CALL or USE a symbol (by name) across the repository, with line numbers — the blast radius before changing a function or type. Tree-sitter reference index; excludes the defining lines.",
+   "name": "find_references",
+   "parameters": {
+    "properties": {
+     "name": {
+      "description": "Symbol name (exact).",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Find where a function/class/struct/type/module is DEFINED, by name, across the whole repository (tree-sitter index, not text search). Returns file:line and the signature. Faster and more precise than Grep for 'where is X defined'.",
+   "name": "find_symbol",
+   "parameters": {
+    "properties": {
+     "fuzzy": {
+      "description": "Substring match instead of exact (default false).",
+      "type": "boolean"
+     },
+     "kind": {
+      "description": "Optional filter: function | method | class | interface | type | module | constant | macro",
+      "type": "string"
+     },
+     "name": {
+      "description": "Symbol name. Exact match by default.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Language-server diagnostics (type errors, unresolved names, lints) for one file, or for every file the workspace's servers have reported on when `path` is omitted. Needs a server on PATH for the language (rust-analyzer, typescript-language-server, pyright, gopls, dart, clangd).",
+   "name": "lsp_diagnostics",
+   "parameters": {
+    "properties": {
+     "path": {
+      "description": "Workspace-relative file to check. Omit for everything currently reported.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Wait for a long-running job and resume THIS chat when it finishes. Use this instead of sleeping, instead of polling inside your turn, and instead of telling the user to ask you again later — after you hand work to something slow (an AI Office task, a dispatch/DAG run, a Space App job, a build), arm a watch and end your turn. SenClaw re-calls `tool` every `interval_secs` with no LLM involved, so waiting is nearly free, and the moment the condition holds it wakes you here with `resume_prompt` so you can deliver the result or carry on. It always reports back, including when it gives up at `timeout_secs`. Never arm one for something you can answer in this turn — a web search, a price, a score, a lookup: there is nothing to wait for, and it only wakes you again with nothing new to say. Omit `tool` only when the job cannot be checked with a single tool call; every wake is then a full turn of yours (at least 60 s apart, at most 10), and the watch ends only when you call schedule_watch_stop in a woken turn or it gives up — telling the user you are done does not end it.",
+   "name": "mcp__core__schedule_watch",
+   "parameters": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Ownership is pinned from the chat env, never from a parameter — a watch\nresumes a conversation, so letting a caller name someone else's chat would\nlet one session speak into another.",
+    "properties": {
+     "args": {
+      "default": null,
+      "description": "Arguments for `tool`, as a JSON object — include every one the tool\nrequires, e.g. `{\"id\": 31}`. Omitting a required argument does not fail\nloudly: the tool answers with a rejection each check, and the watch\ncannot tell that apart from \"not finished yet\"."
+     },
+     "done_op": {
+      "default": null,
+      "description": "`exists` (default), `equals`, `not_equals`, `contains`, `not_contains`,\n`in`, `not_in`. Case-insensitive.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "done_path": {
+      "default": null,
+      "description": "Dot path into the tool result, e.g. `task.status`. **Call the probe tool\nonce before arming and read the path off its actual answer** — a guessed\npath resolves to nothing, which counts as \"not ready\", so the watch waits\nout its whole deadline on a job that already finished. Empty: `contains`\nsearches the whole answer as text; `equals` / `in` read its `state` or\n`status` field (top level or one object down, e.g. `job.state`).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "done_value": {
+      "default": null,
+      "description": "Comparison value for `equals` / `contains` and friends.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "done_values": {
+      "default": [],
+      "description": "Comparison set for `in` / `not_in`, e.g. [\"done\",\"failed\",\"cancelled\"].",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "interval_secs": {
+      "default": null,
+      "description": "Seconds between checks. Default 60, floor 15.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "label": {
+      "default": null,
+      "description": "Short label naming what is being waited on, used in logs and in the\ngive-up message.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "resume_prompt": {
+      "description": "What the chat is told once the job finishes. Write it as an instruction\nto yourself in the future: you will be woken with this and nothing else,\nso restate what was being waited on. `{{result}}` is replaced with the\nprobe payload.",
+      "type": "string"
+     },
+     "timeout_secs": {
+      "default": null,
+      "description": "Give up after this many seconds. Default 3600, ceiling 86400.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "tool": {
+      "default": null,
+      "description": "Full `mcp__<server>__<tool>` name to re-call each check, e.g.\n`mcp__ai-office-mcp__office_get_task`. Omit when the job cannot be\nchecked with one tool call — you are then woken every interval (at least\n60 s apart, at most 10 times) by an automatic message to check it\nyourself, which costs a full turn each time, and you must end the watch\nwith `schedule_watch_stop` once the job is finished or you cannot tell.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "resume_prompt"
+    ],
+    "title": "ScheduleWatchParams",
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Ranked outline of the repository (file → definitions with line numbers), optionally focused on given files. Use when the outline in the system prompt is missing or you need it centred on a different part of the tree.",
+   "name": "repo_map",
+   "parameters": {
+    "properties": {
+     "budget_tokens": {
+      "description": "Size of the outline (default 2000, max 8000).",
+      "type": "integer"
+     },
+     "focus": {
+      "description": "Workspace-relative paths to centre the ranking on.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ {
+  "function": {
+   "description": "Read the full source of one definition (function/class/…) by name, without reading the whole file. Give `path` to disambiguate when the name is defined in several files.",
+   "name": "symbol_body",
+   "parameters": {
+    "properties": {
+     "name": {
+      "description": "Symbol name (exact).",
+      "type": "string"
+     },
+     "path": {
+      "description": "Workspace-relative file path, when the name is defined more than once.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "function"
+ }
+]

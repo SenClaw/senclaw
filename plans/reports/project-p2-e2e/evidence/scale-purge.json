@@ -1,0 +1,25 @@
+{
+ "facts": 20000,
+ "purgeStatus": 200,
+ "deletedFacts": 20000,
+ "purgeMs": 22681,
+ "singleStatementMs": 23977,
+ "probe": {
+  "requests": 68,
+  "median": 139,
+  "p95": 1030,
+  "max": 1132
+ },
+ "before": {
+  "facts": 20000,
+  "entities": 40000,
+  "links": 19999,
+  "fts": 20000
+ },
+ "after": {
+  "facts": 0,
+  "entities": 0,
+  "links": 0,
+  "fts": 0
+ }
+}

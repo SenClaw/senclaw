@@ -1,0 +1,16 @@
+[
+ {
+  "tag": "G1",
+  "bashPwd": "proj/A",
+  "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }",
+  "messagesInFirstRequest": 2,
+  "coreServers": 1
+ },
+ {
+  "tag": "G2",
+  "bashPwd": "proj/A",
+  "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"proj/A\", \"defaultWorkspace\": \"proj/A\", \"isAtDefault\": true }",
+  "messagesInFirstRequest": 10,
+  "coreServers": 1
+ }
+]

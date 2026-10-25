@@ -1,0 +1,160 @@
+{
+ "label": "p0b",
+ "mode": "bundled",
+ "turns": [
+  {
+   "who": "A",
+   "tag": "A1",
+   "stateFileBefore": "(no file: ENOENT)",
+   "stateFileAfter": "proj/A",
+   "bashPwd": "proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/A\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/A\", \"isAtDefault\": true }",
+   "writeRel": "Wrote rel-A1.txt (2 bytes)\n--- a/proj/A/rel-A1.",
+   "datagen": "{\"job\":{\"accepted\":0,\"attempts\":0,\"dir\":\"home/senclaw/datasets/imp-a1\",\"error\":null,\"finishedAt\":null,\"inpu",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "marker-B.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "seed-from-A one | seed-from-A two"
+  },
+  {
+   "who": "B",
+   "tag": "B1",
+   "stateFileBefore": "proj/A",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/B\", \"isAtDefault\": true }",
+   "writeRel": "Wrote rel-B1.txt (2 bytes)\n--- a/proj/B/rel-B1.",
+   "datagen": "{\"job\":{\"accepted\":0,\"attempts\":0,\"dir\":\"home/senclaw/datasets/imp-b1\",\"error\":null,\"finishedAt\":null,\"inpu",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "marker-B.txt",
+    "rel-B1.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "seed-from-B one | seed-from-B two"
+  },
+  {
+   "who": "A",
+   "tag": "A2",
+   "stateFileBefore": "proj/B",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/A",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/A\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/A\", \"isAtDefault\": false }",
+   "writeRel": "Wrote rel-A2.txt (2 bytes)\n--- a/proj/A/rel-A2.",
+   "datagen": "{\"job\":{\"accepted\":0,\"attempts\":0,\"dir\":\"home/senclaw/datasets/imp-a2\",\"error\":null,\"finishedAt\":null,\"inpu",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "marker-B.txt",
+    "rel-B1.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "seed-from-B one | seed-from-B two"
+  },
+  {
+   "who": "B",
+   "tag": "B2",
+   "stateFileBefore": "proj/B",
+   "stateFileAfter": "proj/B",
+   "bashPwd": "proj/B",
+   "workspaceInfo": "{ \"allowedWorkDirs\": \"proj/B\", \"currentDir\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/B\", \"defaultWorkspace\": \"/private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f2daaf41f0f8/scratchpad/p0/run-p0b/proj/B\", \"isAtDefault\": true }",
+   "writeRel": "Wrote rel-B2.txt (2 bytes)\n--- a/proj/B/rel-B2.",
+   "datagen": "{\"job\":{\"accepted\":0,\"attempts\":0,\"dir\":\"home/senclaw/datasets/imp-b2\",\"error\":null,\"finishedAt\":null,\"inpu",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ],
+   "datasetText": "seed-from-B one | seed-from-B two"
+  },
+  {
+   "who": "A",
+   "tag": "A3",
+   "kind": "dag",
+   "stateFile": "proj/B",
+   "workers": [
+    {
+     "tag": "W-A3-2",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-A3-2.txt (4 bytes)\n--- a/proj/B/dag-A3-2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    },
+    {
+     "tag": "W-A3-1",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-A3-1.txt (4 bytes)\n--- a/proj/B/dag-A3-1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    }
+   ],
+   "dagResult": "{ \"content\": [ { \"text\": \"Parent task created: p-20261018-0001\\nStatus: ACTIVE (starting immediately)\\nTasks:\\n - \\\"w1\\\" (agent: persona:p0-worker, no deps)\\n - \\\"w2\\\" (agent: persona:p0-worker, no deps)\\n\\nIMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\\n• **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{\\\"parentId\\\":\\\"",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "dag-A3-1.txt",
+    "dag-A3-2.txt",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ]
+  },
+  {
+   "who": "B",
+   "tag": "B3",
+   "kind": "dag",
+   "stateFile": "proj/B",
+   "workers": [
+    {
+     "tag": "W-B3-1",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-B3-1.txt (4 bytes)\n--- a/proj/B/dag-B3-1.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    },
+    {
+     "tag": "W-B3-2",
+     "bashPwd": "proj/B",
+     "write": "Wrote dag-B3-2.txt (4 bytes)\n--- a/proj/B/dag-B3-2.txt\n+++ b//private/tmp/claude-501/-Users-benji-Projects-SenClaw/db6642f6-fde3-4ea6-b615-f"
+    }
+   ],
+   "dagResult": "{ \"content\": [ { \"text\": \"Parent task created: p-20261018-0004\\nStatus: ACTIVE (starting immediately)\\nTasks:\\n - \\\"w1\\\" (agent: persona:p0-worker, no deps)\\n - \\\"w2\\\" (agent: persona:p0-worker, no deps)\\n\\nIMPORTANT — Subtasks are running in the daemon; you do **not** have their results until you call a wait tool.\\n• **Preferred:** call **mcp__dispatch__all_tasks** now with JSON `{\\\"parentId\\\":\\\"",
+   "dirA": [
+    "marker-A.txt",
+    "rel-A1.txt",
+    "rel-A2.txt",
+    "seeds.jsonl"
+   ],
+   "dirB": [
+    "dag-A3-1.txt",
+    "dag-A3-2.txt",
+    "dag-B3-1.txt",
+    "dag-B3-2.txt",
+    "marker-B.txt",
+    "rel-B1.txt",
+    "rel-B2.txt",
+    "seeds.jsonl"
+   ]
+  }
+ ]
+}

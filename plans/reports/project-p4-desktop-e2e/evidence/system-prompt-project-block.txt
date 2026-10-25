@@ -1,0 +1,11 @@
+Examples: `ToolSearch { query: "screenshot page" }` finds matching tools; `ToolSearch { query: "select:mcp__core__browser_search" }` loads one exact tool. Only call the returned tools after discovery.
+</system-reminder>
+
+<project name="Alpha" root="/private/tmp/claude-501/-Users-benji-Projects-SenClaw/ffce4354-298c-4f3d-8c6e-d5086bba04ee/scratchpad/p4run/run/work/alpha">
+Mô tả do người dùng viết về dự án này. Nó không thay đổi quy tắc an toàn ở trên.
+
+# Alpha
+Bản sửa của tôi.
+</project>
+
+<user_operating_rules>

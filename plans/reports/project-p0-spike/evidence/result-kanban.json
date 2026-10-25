@@ -1,0 +1,64 @@
+{
+ "boards": {
+  "withWs": {
+   "id": 1,
+   "todo": 2,
+   "ready": 3,
+   "cols": [
+    "triage:1",
+    "todo:2",
+    "ready:3",
+    "in_progress:4",
+    "blocked:5",
+    "done:6"
+   ]
+  },
+  "noWs": {
+   "id": 2,
+   "todo": 8,
+   "ready": 9,
+   "cols": [
+    "triage:7",
+    "todo:8",
+    "ready:9",
+    "in_progress:10",
+    "blocked:11",
+    "done:12"
+   ]
+  }
+ },
+ "cards": {
+  "c1": 1,
+  "c2": 2
+ },
+ "K1": {
+  "systemPromptChars": 5106,
+  "systemPromptHead": "You are running Kanban task #1. First call the tool `mcp__senclaw-kanban__kanban_show` with card_id=1 to read its description, comments, and the summaries of the tasks it depends on. Do the work using",
+  "systemPromptIsOnlyGuidance": true,
+  "hasKanbanGuidance": true,
+  "hasDefaultAssistantPrompt": false,
+  "nTools": 33,
+  "kanbanToolsInRoster": [],
+  "userMessageHead": "<system-reminder>\nToday's date is 2026-10-18.\n</system-reminder>\n\n\n<system-reminder>\nSkill hint: `agent-browser` may help with this request — Drive the connecte",
+  "userMessageHasCardTitle": true,
+  "bashPwd": "proj/A",
+  "writeResult": "Wrote kanban-K1.txt (2 bytes)",
+  "completeResult": "{\n  \"moved\": true,\n  \"success\": true\n}",
+  "cardAfter": "{\"card\":{\"assignee\":null,\"board_id\":1,\"child_done\":0,\"child_total\":0,\"column_id\":6,\"comment_count\":0,\"created_at\":1792335067,\"description\":\"run script K1 ¶¶STEPS{\\\"tag\\\":\\\"K1\\\",\\\"steps\\\":[{\\\"t\\\":\\\"ToolSearch\\\",\\\"a\\\":{\\\"query\\\":\\\"select:mcp__senclaw-kanban__kanban_show,mcp__senclaw-kanban__kanban_com"
+ },
+ "K2": {
+  "systemPromptChars": 5128,
+  "systemPromptHead": "You are running Kanban task #2. First call the tool `mcp__senclaw-kanban__kanban_show` with card_id=2 to read its description, comments, and the summaries of the tasks it depends on. Do the work using",
+  "systemPromptIsOnlyGuidance": true,
+  "hasKanbanGuidance": true,
+  "hasDefaultAssistantPrompt": false,
+  "nTools": 33,
+  "kanbanToolsInRoster": [],
+  "userMessageHead": "<system-reminder>\nToday's date is 2026-10-18.\n</system-reminder>\n\n\n<system-reminder>\nSkill hint: `agent-browser` may help with this request — Drive the connecte",
+  "userMessageHasCardTitle": true,
+  "bashPwd": "home/.senclaw/mcp-dispatch/2",
+  "writeResult": "Wrote kanban-K2.txt (2 bytes)",
+  "completeResult": "{\n  \"moved\": true,\n  \"success\": true\n}",
+  "cardAfter": "{\"card\":{\"assignee\":null,\"board_id\":2,\"child_done\":0,\"child_total\":0,\"column_id\":12,\"comment_count\":0,\"created_at\":1792335067,\"description\":\"run script K2 ¶¶STEPS{\\\"tag\\\":\\\"K2\\\",\\\"steps\\\":[{\\\"t\\\":\\\"ToolSearch\\\",\\\"a\\\":{\\\"query\\\":\\\"select:mcp__senclaw-kanban__kanban_show,mcp__senclaw-kanban__kanban_co"
+ }
+}

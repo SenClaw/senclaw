@@ -1,0 +1,15 @@
+# After purge of prj_4ce2876b (UI: Delete for good)
+Mon Oct 19 01:17:34 +07 2026
+## projects (all)
+{"projects":[]}
+## boards
+1 Orion roadmap project_id= None workspace_dir= /private/tmp/claude-501/-Users-benji-Projects-SenClaw/7844f9db-37f2-4302-93b4-197d18f25f46/scratchpad/run-p4web/proj/orion effective= /private/tmp/claude-501/-Users-benji-Projects-SenClaw/7844f9db-37f2-4302-93b4-197d18f25f46/scratchpad/run-p4web/proj/orion
+2 Ops board project_id= None workspace_dir= /private/tmp/claude-501/-Users-benji-Projects-SenClaw/7844f9db-37f2-4302-93b4-197d18f25f46/scratchpad/run-p4web/proj/billing effective= /private/tmp/claude-501/-Users-benji-Projects-SenClaw/7844f9db-37f2-4302-93b4-197d18f25f46/scratchpad/run-p4web/proj/billing
+## fact banks
+main 3
+## contexts dir
+## root folder untouched
+CLAUDE.md
+README.md
+src
+Use Rust 2021.
