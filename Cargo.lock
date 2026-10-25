@@ -4409,7 +4409,7 @@ dependencies = [
 
 [[package]]
 name = "senclaw"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "aes",
  "aes-gcm",
