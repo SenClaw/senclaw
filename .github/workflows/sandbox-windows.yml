@@ -34,9 +34,12 @@ jobs:
       # One thread: the tests share the machine's AppContainer profile list and
       # the process-wide grant cache, and the timing ones should not compete for
       # a core with a neighbour.
+      # Block scalars: an unquoted `backend:: --` holds `: `, which YAML reads as
+      # a mapping, and GitHub rejected the whole file before creating any job.
       - name: Windows sandbox tests (real AppContainer)
         shell: bash
-        run: cargo test --lib sandbox::backend:: -- --test-threads=1 --nocapture
+        run: |
+          cargo test --lib sandbox::backend:: -- --test-threads=1 --nocapture
 
       # Everything else under src/sandbox, including the runner tests that start
       # Python inside the container (the step the research document calls
@@ -45,7 +48,8 @@ jobs:
       - name: Rest of the sandbox suite (informational)
         continue-on-error: true
         shell: bash
-        run: cargo test --lib sandbox:: -- --test-threads=1 --nocapture
+        run: |
+          cargo test --lib sandbox:: -- --test-threads=1 --nocapture
 
       # The same module type-checked as the shipped binary builds it.
       - name: Build the daemon
