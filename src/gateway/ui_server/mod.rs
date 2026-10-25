@@ -58,6 +58,7 @@ mod space_personas;
 mod space_runtime;
 mod space_skills;
 mod subagents;
+mod system;
 mod terminal;
 mod tool_aliases;
 mod trajectory;

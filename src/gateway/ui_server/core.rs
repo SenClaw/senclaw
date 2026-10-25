@@ -291,6 +291,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .merge(browser_agent_router)
         .nest_service("/api/sandbox", sandbox_router)
         .route("/api/config", get(config_handler))
+        // Which core is running and how it was installed (see system.rs).
+        .route("/api/system/version", get(super::system::system_version))
         // The API's own contract, generated from these routers (see openapi.rs).
         .route("/api/openapi.json", get(super::openapi::openapi_json))
         // Open a URL in the host machine's default browser (see open_url.rs).

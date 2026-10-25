@@ -17,8 +17,8 @@ pub(crate) async fn config_handler(State(s): State<Arc<UiState>>) -> Json<serde_
     let admin_perms = get_admin_permissions_config(&s.config.paths.global_config_path);
     Json(serde_json::json!({
         // Daemon release version — same identity as the git tag / Cargo version.
-        // The desktop app compares this against its own build to detect a
-        // daemon left over from an older bundle.
+        // `/api/system/version` carries the full build identity; this field is
+        // what a client falls back to on a daemon from before that route.
         "version": env!("CARGO_PKG_VERSION"),
         "wsPort": s.ws_port,
         "token": s.ws_token,

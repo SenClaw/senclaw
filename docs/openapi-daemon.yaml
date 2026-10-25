@@ -10110,6 +10110,23 @@ paths:
       - subagents
       x-handler: subagents_toggle
       x-untyped: true
+  /api/system/version:
+    get:
+      operationId: get_api_system_version
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Success
+        '401':
+          description: Token required or invalid (see SENCLAW_AUTH_MODE)
+      summary: System version
+      tags:
+      - system
+      x-handler: system_version
+      x-untyped: true
   /api/thinking:
     post:
       operationId: post_api_thinking
@@ -11595,6 +11612,7 @@ tags:
 - name: skills
 - name: space
 - name: subagents
+- name: system
 - name: thinking
 - name: tool-aliases
 - name: tools-notes
@@ -11610,5 +11628,5 @@ tags:
 - name: workspace
 - name: worktrees
 - name: ws
-x-route-count: 413
-x-untyped-operations: 509
+x-route-count: 414
+x-untyped-operations: 510
