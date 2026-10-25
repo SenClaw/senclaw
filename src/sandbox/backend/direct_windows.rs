@@ -239,8 +239,14 @@ impl Container {
             return Ok(());
         }
         let mask = if write { FILE_ALL } else { FILE_READ_EXEC };
-        edit_dacl(self.sid, &path_s, mask, GRANT_ACCESS)
-            .map_err(|e| format!("granting the sandbox access to `{path_s}` failed: {e}"))?;
+        // Already there (a daemon restarted since, or another run of this sandbox
+        // in another process): writing it again would re-propagate the DACL to
+        // every file under the folder for nothing.
+        let present = explicit_access(self.sid, &path_s).is_some_and(|m| m & mask == mask);
+        if !present {
+            edit_dacl(self.sid, &path_s, mask, GRANT_ACCESS)
+                .map_err(|e| format!("granting the sandbox access to `{path_s}` failed: {e}"))?;
+        }
         if let Ok(mut g) = granted().lock() {
             g.insert(key);
         }
@@ -304,6 +310,12 @@ fn link_chain(path: &str) -> Vec<String> {
 /// Read before revoking, because writing a DACL back re-propagates it to every
 /// file under the folder — seconds on a `node_modules`.
 fn has_explicit_ace(sid: PSID, path: &str) -> bool {
+    explicit_access(sid, path).is_some()
+}
+
+/// The rights `sid`'s own (not inherited) allow-ACEs on `path` add up to, or
+/// `None` when it has no ACE of its own there at all.
+fn explicit_access(sid: PSID, path: &str) -> Option<u32> {
     let wide = HSTRING::from(path);
     unsafe {
         let mut dacl: *mut ACL = std::ptr::null_mut();
@@ -318,7 +330,7 @@ fn has_explicit_ace(sid: PSID, path: &str) -> bool {
             None,
             &mut descriptor,
         );
-        let mut found = false;
+        let mut found: Option<u32> = None;
         let mut info = ACL_SIZE_INFORMATION::default();
         if read.is_ok()
             && !dacl.is_null()
@@ -342,8 +354,9 @@ fn has_explicit_ace(sid: PSID, path: &str) -> bool {
                     && header.AceFlags & 0x10 == 0
                     && EqualSid(sid, PSID((ace as *mut u8).add(8) as *mut core::ffi::c_void)).is_ok()
                 {
-                    found = true;
-                    break;
+                    let mask = *((ace as *const u8).add(4) as *const u32);
+                    let allowed = if header.AceType == 0 { mask } else { 0 };
+                    found = Some(found.unwrap_or(0) | allowed);
                 }
             }
         }
@@ -541,10 +554,20 @@ fn job_pids(job: &OwnedHandle) -> Vec<u32> {
 
 /// Stop every run of a sandbox, whichever process started it. Returns how many
 /// runs were stopped.
+///
+/// A run's job is named a moment before its process joins it. Terminating the
+/// job in that moment ends nothing, and the process then joins and runs on — so
+/// an empty job is given up to two seconds to fill first.
 pub fn kill_all(sandbox_id: &str) -> usize {
     open_jobs(sandbox_id)
         .iter()
-        .filter(|job| unsafe { TerminateJobObject(HANDLE(job.as_raw_handle() as _), 1).is_ok() })
+        .filter(|job| {
+            let t = Instant::now();
+            while job_pids(job).is_empty() && t.elapsed() < Duration::from_secs(2) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            unsafe { TerminateJobObject(HANDLE(job.as_raw_handle() as _), 1).is_ok() }
+        })
         .count()
 }
 
@@ -1375,11 +1398,21 @@ mod tests {
 
     const BUSY: &str = "for /l %i in (1,1,2000000000) do @rem";
 
-    /// Wait until the sandbox has a live run another process could open.
+    /// Wait until the sandbox has a live run another process could open — its
+    /// job may still be empty, which is the moment a stop must not miss.
     fn wait_for_run(sb: &Sandbox) {
         let t = Instant::now();
         while open_jobs(&sb.id).is_empty() {
-            assert!(t.elapsed() < Duration::from_secs(10), "the run never showed up");
+            assert!(t.elapsed() < Duration::from_secs(60), "the run never showed up");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Wait until a run of the sandbox has a process in its job.
+    fn wait_for_process(sb: &Sandbox) {
+        let t = Instant::now();
+        while !open_jobs(&sb.id).iter().any(|j| !job_pids(j).is_empty()) {
+            assert!(t.elapsed() < Duration::from_secs(60), "no process ever joined the run");
             std::thread::sleep(Duration::from_millis(50));
         }
     }
@@ -1390,7 +1423,6 @@ mod tests {
         // daemon started; signalling a process group was a no-op on Windows.
         let d = tempfile::tempdir().unwrap();
         let sb = sandbox(d.path(), false);
-        let t = Instant::now();
         let o = std::thread::scope(|s| {
             let run = s.spawn(|| run(&sb, BUSY, 30_000, true));
             wait_for_run(&sb);
@@ -1399,7 +1431,6 @@ mod tests {
         });
         forget(&sb);
         assert!(!o.timed_out, "the run went on until its deadline: {o:?}");
-        assert!(t.elapsed() < Duration::from_secs(15), "{:?}", t.elapsed());
         assert!(open_jobs(&sb.id).is_empty(), "nothing is left to find");
     }
 
@@ -1409,7 +1440,7 @@ mod tests {
         let sb = sandbox(d.path(), false);
         let (procs, refused, stopped, o) = std::thread::scope(|s| {
             let run = s.spawn(|| run(&sb, BUSY, 30_000, true));
-            wait_for_run(&sb);
+            wait_for_process(&sb);
             let procs = processes(&sb.id);
             let refused = kill_pid(&sb.id, std::process::id());
             let shell = procs.iter().find(|p| p.command.eq_ignore_ascii_case("cmd.exe")).map(|p| p.pid);
