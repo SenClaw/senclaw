@@ -122,6 +122,35 @@ const FILE_READ_EXEC: u32 = 0x0012_0089 | 0x0012_00A0;
 /// only the directory entry.
 const INHERIT_TREE: u32 = 0x3;
 
+/// `OBJECT_INHERIT_ACE | NO_PROPAGATE_INHERIT_ACE`: the files directly in the
+/// folder inherit it, nothing below them does.
+const INHERIT_FILES_HERE: u32 = 0x1 | 0x4;
+
+/// A PATH folder with more entries than this under it is granted shallowly
+/// (folder and its own files): the inheritable ACE would be written into every
+/// one of them, for every new sandbox.
+const DEEP_GRANT_LIMIT: usize = 20_000;
+
+/// Whether `dir` holds fewer than `limit` entries in all. Counts without
+/// following links and stops at the limit.
+fn tree_smaller_than(dir: &Path, limit: usize) -> bool {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut n = 0usize;
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            n += 1;
+            if n >= limit {
+                return false;
+            }
+            if e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
+                stack.push(e.path());
+            }
+        }
+    }
+    true
+}
+
 /// Turn a sandbox id into an AppContainer moniker.
 ///
 /// The name is the identity of the profile on this machine, so it must be
@@ -224,6 +253,14 @@ impl Container {
     /// directory may be the user's own project, and replacing its ACL with one
     /// entry would take the access of everyone else away.
     pub fn grant(&self, path: &Path, write: bool) -> Result<(), String> {
+        self.grant_with(path, write, true)
+    }
+
+    /// [`Container::grant`], choosing how far the ACE reaches: the whole tree,
+    /// or (`tree: false`) the folder and the files directly in it — writing an
+    /// inheritable ACE re-writes the ACL of every file under the folder, and a
+    /// PATH folder can hold hundreds of thousands (vcpkg, an Android SDK).
+    pub fn grant_with(&self, path: &Path, write: bool, tree: bool) -> Result<(), String> {
         let path_s = winproc::strip_verbatim(&path.to_string_lossy());
         if !Path::new(&path_s).exists() {
             return Ok(()); // nothing to grant; not an error
@@ -234,17 +271,19 @@ impl Container {
         if winproc::is_windows_dir(&path_s, &|v| std::env::var(v).ok()) {
             return Ok(());
         }
-        let key = format!("{}|{}|{}", self.moniker, write, winproc::path_key(&path_s));
+        let key = format!("{}|{}|{}|{}", self.moniker, write, tree, winproc::path_key(&path_s));
         if granted().lock().map(|g| g.contains(&key)).unwrap_or(false) {
             return Ok(());
         }
         let mask = if write { FILE_ALL } else { FILE_READ_EXEC };
+        let inherit = if tree { INHERIT_TREE } else { INHERIT_FILES_HERE };
         // Already there (a daemon restarted since, or another run of this sandbox
         // in another process): writing it again would re-propagate the DACL to
         // every file under the folder for nothing.
-        let present = explicit_access(self.sid, &path_s).is_some_and(|m| m & mask == mask);
+        let present = explicit_access(self.sid, &path_s)
+            .is_some_and(|(m, flags)| m & mask == mask && (!tree || flags & INHERIT_TREE == INHERIT_TREE));
         if !present {
-            edit_dacl(self.sid, &path_s, mask, GRANT_ACCESS)
+            edit_dacl(self.sid, &path_s, mask, inherit, GRANT_ACCESS)
                 .map_err(|e| format!("granting the sandbox access to `{path_s}` failed: {e}"))?;
         }
         if let Ok(mut g) = granted().lock() {
@@ -258,12 +297,12 @@ impl Container {
                 Some(parent) if next.is_relative() => parent.join(next),
                 _ => next,
             };
-            self.grant(&next, write)?;
+            self.grant_with(&next, write, tree)?;
         }
         if let Ok(real) = std::fs::canonicalize(&path_s) {
             let real_s = winproc::strip_verbatim(&real.to_string_lossy());
             if winproc::path_key(&real_s) != winproc::path_key(&path_s) {
-                self.grant(Path::new(&real_s), write)?;
+                self.grant_with(Path::new(&real_s), write, tree)?;
             }
         }
         Ok(())
@@ -275,7 +314,7 @@ impl Container {
         if !Path::new(&path_s).exists() {
             return Ok(());
         }
-        edit_dacl(self.sid, &path_s, 0, REVOKE_ACCESS)
+        edit_dacl(self.sid, &path_s, 0, 0, REVOKE_ACCESS)
     }
 }
 
@@ -313,9 +352,9 @@ fn has_explicit_ace(sid: PSID, path: &str) -> bool {
     explicit_access(sid, path).is_some()
 }
 
-/// The rights `sid`'s own (not inherited) allow-ACEs on `path` add up to, or
-/// `None` when it has no ACE of its own there at all.
-fn explicit_access(sid: PSID, path: &str) -> Option<u32> {
+/// The rights and inheritance flags `sid`'s own (not inherited) allow-ACEs on
+/// `path` add up to, or `None` when it has no ACE of its own there at all.
+fn explicit_access(sid: PSID, path: &str) -> Option<(u32, u32)> {
     let wide = HSTRING::from(path);
     unsafe {
         let mut dacl: *mut ACL = std::ptr::null_mut();
@@ -330,7 +369,7 @@ fn explicit_access(sid: PSID, path: &str) -> Option<u32> {
             None,
             &mut descriptor,
         );
-        let mut found: Option<u32> = None;
+        let mut found: Option<(u32, u32)> = None;
         let mut info = ACL_SIZE_INFORMATION::default();
         if read.is_ok()
             && !dacl.is_null()
@@ -355,8 +394,12 @@ fn explicit_access(sid: PSID, path: &str) -> Option<u32> {
                     && EqualSid(sid, PSID((ace as *mut u8).add(8) as *mut core::ffi::c_void)).is_ok()
                 {
                     let mask = *((ace as *const u8).add(4) as *const u32);
-                    let allowed = if header.AceType == 0 { mask } else { 0 };
-                    found = Some(found.unwrap_or(0) | allowed);
+                    let (m, f) = found.unwrap_or((0, 0));
+                    found = Some(if header.AceType == 0 {
+                        (m | mask, f | header.AceFlags as u32)
+                    } else {
+                        (m, f)
+                    });
                 }
             }
         }
@@ -368,7 +411,7 @@ fn explicit_access(sid: PSID, path: &str) -> Option<u32> {
 }
 
 /// Read the DACL of `path`, apply one entry for `sid` to it, write it back.
-fn edit_dacl(sid: PSID, path: &str, mask: u32, mode: ACCESS_MODE) -> Result<(), String> {
+fn edit_dacl(sid: PSID, path: &str, mask: u32, inherit: u32, mode: ACCESS_MODE) -> Result<(), String> {
     let wide = HSTRING::from(path);
     unsafe {
         let mut old: *mut ACL = std::ptr::null_mut();
@@ -389,7 +432,7 @@ fn edit_dacl(sid: PSID, path: &str, mask: u32, mode: ACCESS_MODE) -> Result<(), 
         let ea = EXPLICIT_ACCESS_W {
             grfAccessPermissions: mask,
             grfAccessMode: mode,
-            grfInheritance: if mask == 0 { ACE_FLAGS(0) } else { ACE_FLAGS(INHERIT_TREE) },
+            grfInheritance: ACE_FLAGS(inherit),
             Trustee: TRUSTEE_W {
                 TrusteeForm: TRUSTEE_IS_SID,
                 TrusteeType: TRUSTEE_IS_UNKNOWN,
@@ -743,7 +786,13 @@ fn grant_access(
                 {
                     continue;
                 }
-                read_roots.push(PathBuf::from(dir_s));
+                // The whole tree when it is small enough — `npm.cmd` reads
+                // `node_modules\npm\…` under its folder — else the folder and
+                // its own files, which is what running a program from it needs.
+                let tree = tree_smaller_than(Path::new(&dir_s), DEEP_GRANT_LIMIT);
+                if let Err(e) = c.grant_with(Path::new(&dir_s), false, tree) {
+                    notes.push(e);
+                }
             }
         }
     }
@@ -1156,7 +1205,7 @@ fn forget_with(sb: &Sandbox, mut candidates: Vec<String>) {
         candidates.extend(
             g.iter()
                 .filter(|k| k.starts_with(&prefix))
-                .filter_map(|k| k.splitn(3, '|').nth(2).map(str::to_string)),
+                .filter_map(|k| k.splitn(4, '|').nth(3).map(str::to_string)),
         );
         g.retain(|k| !k.starts_with(&prefix));
     }
@@ -1454,6 +1503,39 @@ mod tests {
         assert_eq!(refused, Ok(false), "a process outside the sandbox must not be stoppable");
         assert_eq!(stopped, Some(Ok(true)));
         assert!(!o.timed_out, "stopping the shell ends the run: {o:?}");
+    }
+
+    #[test]
+    fn a_tree_is_counted_up_to_the_limit_only() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("a").join("b")).unwrap();
+        for i in 0..5 {
+            std::fs::write(d.path().join("a").join("b").join(format!("{i}.txt")), "x").unwrap();
+        }
+        // a, b and five files: seven entries.
+        assert!(tree_smaller_than(d.path(), 8));
+        assert!(!tree_smaller_than(d.path(), 7));
+    }
+
+    #[test]
+    fn a_shallow_grant_opens_the_folders_own_files_and_nothing_below() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("sub")).unwrap();
+        std::fs::write(outside.path().join("top.txt"), "top-file").unwrap();
+        std::fs::write(outside.path().join("sub").join("deep.txt"), "deep-file").unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let lines = format!(
+            "type \"{}\"\ntype \"{}\"",
+            outside.path().join("top.txt").display(),
+            outside.path().join("sub").join("deep.txt").display()
+        );
+        std::fs::write(d.path().join("read.cmd"), winproc::cmd_script(&lines)).unwrap();
+        let sb = sandbox(d.path(), false);
+        Container::open(&sb.id).unwrap().grant_with(outside.path(), false, false).unwrap();
+        let o = run(&sb, "read.cmd", 15_000, true);
+        forget(&sb);
+        assert!(o.stdout.contains("top-file"), "{o:?}");
+        assert!(!o.stdout.contains("deep-file"), "a shallow grant reached a subfolder: {o:?}");
     }
 
     #[test]
