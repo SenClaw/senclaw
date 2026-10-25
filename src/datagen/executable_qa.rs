@@ -163,11 +163,14 @@ impl CodeRunner for SandboxRunner {
         // Checked before any model call: a job that cannot run its programs
         // should not spend a generation finding that out.
         let db = crate::sandbox::shared_db().ok_or("the sandbox engine is unavailable")?;
-        if !crate::sandbox::policy::load(&db).run_python {
+        let policy = crate::sandbox::policy::load(&db);
+        if !policy.run_python {
             return Err("Python execution is switched off (Plugins → Sandbox → Run Python)".into());
         }
         let direct = crate::sandbox::caps::direct_caps(false).await;
-        if direct.available && direct.kind.is_enforced() {
+        // With the master switch off, `direct` would be an ordinary process.
+        // Model-written code never runs that way, so only a container is left.
+        if policy.enabled && direct.available && direct.kind.is_enforced() {
             return Ok("direct".into());
         }
         // Docker is probed only when the host has no jail of its own; the
@@ -176,10 +179,15 @@ impl CodeRunner for SandboxRunner {
         if docker.available {
             return Ok("docker".into());
         }
+        let direct_detail = if policy.enabled {
+            direct.detail
+        } else {
+            "the sandbox is switched off (Plugins → Sandbox)".to_string()
+        };
         Err(format!(
-            "no enforced sandbox on this machine (direct: {}, docker: {}) — executable_qa will not run \
+            "no enforced sandbox on this machine (direct: {direct_detail}, docker: {}) — executable_qa will not run \
              model-written code unconfined",
-            direct.detail, docker.detail
+            docker.detail
         ))
     }
 

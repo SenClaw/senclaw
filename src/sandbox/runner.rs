@@ -15,6 +15,7 @@ use crate::sandbox::caps::{self, DirectKind};
 use crate::sandbox::code;
 use crate::sandbox::config;
 use crate::sandbox::db::{self, Db, NewSandbox, Run, Sandbox};
+use crate::sandbox::policy;
 
 /// What `create` accepts. Anything omitted takes a documented default rather
 /// than an implicit one.
@@ -41,10 +42,14 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
     // the Docker daemon, which on a machine with Docker Desktop broken costs
     // four seconds before a 40 ms snippet even starts.
     let direct = caps::direct_caps(false).await;
+    // With the sandbox switched off, `direct` is an ordinary child process and
+    // needs no jail to be available — only an OS that can spawn one.
+    let sandbox_on = policy::load(db).enabled;
+    let direct_usable = direct.available || (!sandbox_on && cfg!(any(unix, windows)));
 
     let backend = match req.backend.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some("direct") => {
-            if !direct.available {
+            if !direct_usable {
                 return Err(anyhow!("the `direct` backend is unavailable: {}", direct.detail));
             }
             "direct".to_string()
@@ -67,7 +72,7 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
         None => {
             // An OS-enforced direct sandbox is the default, and settling it
             // here means the common path never touches Docker at all.
-            if direct.kind.is_enforced() {
+            if direct.kind.is_enforced() || !sandbox_on {
                 "direct".to_string()
             } else {
                 let docker = caps::docker_caps(false).await;
@@ -166,6 +171,13 @@ pub async fn stop(db: &Db, sb: &Sandbox) -> Result<()> {
 /// losing a workspace's contents to a mis-click is not recoverable.
 pub async fn delete(db: &Db, sb: &Sandbox, purge: bool) -> Result<()> {
     let _ = stop(db, sb).await;
+    // The AppContainer profile, and the folder access granted to it, outlive the
+    // sandbox row unless they are removed here.
+    #[cfg(windows)]
+    {
+        let gone = sb.clone();
+        let _ = tokio::task::spawn_blocking(move || backend::direct_windows::forget(&gone)).await;
+    }
     if purge {
         let dir = PathBuf::from(&sb.workdir);
         // Refuse to recursively delete anything that is not one of our own
@@ -203,7 +215,7 @@ pub async fn code_argv(lang: &'static crate::sandbox::code::Lang, rel: &str) -> 
     }
     for name in lang.interpreters {
         if let Some(path) = caps::which(name).await {
-            return Some(vec![path, rel.to_string()]);
+            return Some(vec![path, backend::winproc::windows_rel(rel)]);
         }
     }
     None
@@ -292,6 +304,11 @@ pub async fn exec_with_leftover(
     // On Windows a shell command still needs a program to run. The script goes
     // to a `.cmd` file and `cmd.exe` is pointed at it — never at a command line
     // built from the user's text.
+    //
+    // The script file is removed again once the run is over: an agent sandbox
+    // points at the user's own project folder, and one `.cmd` per command would
+    // pile up in it.
+    let mut script_file: Option<String> = None;
     let argv = match argv {
         Some(a) => Some(a),
         None if cfg!(windows) && sb.backend == "direct" => {
@@ -299,12 +316,15 @@ pub async fn exec_with_leftover(
             crate::sandbox::files::write(
                 &crate::sandbox::files::Scope::of(sb),
                 &rel,
-                &format!("@echo off\r\n{}\r\n", script.replace('\n', "\r\n")),
+                &backend::winproc::cmd_script(script),
             )
             .map_err(|e| anyhow!("cannot write the script: {e}"))?;
             let cmd_exe = std::env::var("COMSPEC")
                 .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
-            Some(vec![cmd_exe, "/d".into(), "/c".into(), rel])
+            // Backslashes: `cmd` reads a `/` as the start of a switch.
+            let arg = backend::winproc::windows_rel(&rel);
+            script_file = Some(rel);
+            Some(vec![cmd_exe, "/d".into(), "/c".into(), arg])
         }
         None => None,
     };
@@ -317,7 +337,13 @@ pub async fn exec_with_leftover(
         keep_leftovers,
     };
 
-    let outcome: Outcome = match sb.backend.as_str() {
+    // The master switch (Plugins → Sandbox) turns the OS jail off for `direct`:
+    // the run is an ordinary child process and is recorded as `none`, so no
+    // caller or reader mistakes it for a confined one. `docker` is a separate,
+    // explicit choice and is not affected.
+    let unconfined = sb.backend == "direct" && !policy::load(db).enabled;
+
+    let mut outcome: Outcome = match sb.backend.as_str() {
         "docker" => {
             let sb = ensure_started(db, sb).await?;
             backend::docker::exec(&sb, &spec).await
@@ -329,15 +355,22 @@ pub async fn exec_with_leftover(
             let allow = crate::sandbox::settings::load(db).allowlist;
             #[cfg(windows)]
             {
-                backend::direct_windows::exec(sb, &spec, &allow).await
+                backend::direct_windows::exec(sb, &spec, &allow, !unconfined).await
             }
             #[cfg(not(windows))]
             {
-                backend::direct::exec(sb, &spec, direct_kind().await, &allow).await
+                let kind = if unconfined { DirectKind::Degraded } else { direct_kind().await };
+                backend::direct::exec(sb, &spec, kind, &allow).await
             }
         }
         other => return Err(anyhow!("invalid backend `{other}`")),
     };
+    if unconfined {
+        outcome.isolation = "none".to_string();
+    }
+    if let Some(rel) = &script_file {
+        let _ = crate::sandbox::files::delete(&crate::sandbox::files::Scope::of(sb), rel);
+    }
 
     let leftover = Leftover { group: outcome.group, held: outcome.held.clone() };
     let run = Run {
@@ -694,6 +727,54 @@ mod tests {
         assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
         assert_eq!(run.stdout.trim(), "42");
         assert!(run.isolation == "seatbelt" || run.isolation == "bubblewrap");
+    }
+
+    #[tokio::test]
+    async fn with_the_master_switch_off_a_run_is_an_ordinary_process_and_says_so() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        let mut p = policy::ExecPolicy::default();
+        p.enabled = false;
+        policy::save(&db, &p).unwrap();
+
+        // `direct` must be creatable and runnable on any machine that can spawn
+        // a process, whether or not its OS jail would have started.
+        let sb = create(&db, req(None)).await.unwrap();
+        assert_eq!(sb.backend, "direct");
+
+        let argv = if cfg!(windows) {
+            Some(vec![
+                std::env::var("COMSPEC").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into()),
+                "/d".into(),
+                "/c".into(),
+                "echo unconfined".into(),
+            ])
+        } else {
+            None
+        };
+        let run = exec(
+            &db, &sb, "echo unconfined", None, BTreeMap::new(), "exec", None, "echo unconfined", argv,
+        )
+        .await
+        .unwrap();
+        assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
+        assert!(run.stdout.contains("unconfined"), "stdout: {}", run.stdout);
+        assert_eq!(run.isolation, "none", "an unconfined run must never claim a jail");
+    }
+
+    #[tokio::test]
+    async fn the_master_switch_back_on_restores_the_jail() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        let Some(sb) = enforced_sandbox(&db).await else { return };
+        let mut p = policy::ExecPolicy::default();
+        p.enabled = false;
+        policy::save(&db, &p).unwrap();
+        p.enabled = true;
+        policy::save(&db, &p).unwrap();
+
+        let run = run_code(&db, &sb, "python", "print(1)", None, BTreeMap::new()).await.unwrap();
+        assert_ne!(run.isolation, "none", "the default must be a confined run");
     }
 
     #[tokio::test]

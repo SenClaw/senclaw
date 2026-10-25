@@ -112,9 +112,21 @@ pub fn validate(source: &str, target: &str, read_only: bool) -> Result<Mount> {
         }
     }
 
+    // Windows: the Unix list above names nothing that exists there, so system
+    // folders, the profile and its credential stores have their own check. The
+    // access ACE a mount adds is inherited by everything under the folder.
+    let mut source = real.to_string_lossy().to_string();
+    if cfg!(windows) {
+        if let Some(why) = super::backend::winproc::forbidden_mount_reason(&source, &|n| std::env::var(n).ok()) {
+            return Err(anyhow!("mounting `{}` is not allowed: {why}", real.display()));
+        }
+        // `canonicalize` returns `\\?\C:\…`; the permission APIs want `C:\…`.
+        source = super::backend::winproc::strip_verbatim(&source);
+    }
+
     let target = normalise_target(target, &real)?;
     Ok(Mount {
-        source: real.to_string_lossy().to_string(),
+        source,
         target,
         read_only,
     })

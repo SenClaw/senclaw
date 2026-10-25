@@ -80,7 +80,7 @@ pub async fn run_raw(command: &str, cwd: &str, timeout_ms: u64) -> Result<RawRun
 /// Start `command` for a background task: piped output, nothing waited for.
 /// Returns the child and what confines it (empty when nothing does).
 pub async fn spawn(command: &str, cwd: &str) -> Result<(Child, String), String> {
-    if crate::sandbox::policy::current().exec_shell {
+    if crate::sandbox::policy::current().shell_sandboxed() {
         return crate::sandbox::policy::agent_shell_spawn(command, cwd).await.map_err(|e| {
             format!(
                 "Sandboxed execution failed: {e}. \

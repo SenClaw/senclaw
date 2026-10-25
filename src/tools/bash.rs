@@ -147,7 +147,7 @@ impl Tool for BashTool {
         // write-jailed to the working directory. When the switch is on but the
         // engine cannot run, the command FAILS rather than silently dropping
         // back to a raw shell — the user asked for the jail.
-        if crate::sandbox::policy::current().exec_shell {
+        if crate::sandbox::policy::current().shell_sandboxed() {
             let run = crate::sandbox::policy::agent_shell_foreground(
                 &command,
                 ctx.working_dir,

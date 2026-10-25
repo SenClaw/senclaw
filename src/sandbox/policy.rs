@@ -2,6 +2,15 @@
 //! OS sandbox, each behind its own on/off switch (Plugins → Sandbox in the
 //! Web UI, or `/api/sandbox/exec-policy`).
 //!
+//!   - `enabled`           — the master switch, **on by default**. Off means
+//!                            the sandbox is not used at all: agent `Bash` and
+//!                            scheduler scripts take their historical raw path,
+//!                            and Python / Node.js snippets run as ordinary
+//!                            child processes (recorded with isolation `none`).
+//!                            It exists because a machine whose OS sandbox
+//!                            cannot start (an AppContainer that refuses the
+//!                            interpreter, a locked-down policy) had no way to
+//!                            run code at all.
 //!   - `exec_shell`        — the agent's `Bash` tool runs inside the sandbox:
 //!                            writes are confined to the chat's working
 //!                            directory, reads follow `exec_fs_mode`, network
@@ -31,6 +40,10 @@ use crate::sandbox::{runner, shared_db};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ExecPolicy {
+    /// Master switch. `true` (the default) keeps every surface below as
+    /// configured; `false` runs them all unconfined — the other switches keep
+    /// their saved values and take effect again when this goes back on.
+    pub enabled: bool,
     /// Agent `Bash` tool runs inside the OS sandbox (write-jail to the chat
     /// working directory).
     pub exec_shell: bool,
@@ -64,6 +77,7 @@ pub struct ExecPolicy {
 impl Default for ExecPolicy {
     fn default() -> Self {
         ExecPolicy {
+            enabled: true,
             exec_shell: false,
             exec_network: true,
             exec_fs_mode: FsMode::Open,
@@ -74,6 +88,18 @@ impl Default for ExecPolicy {
             scheduler_script: false,
             scheduler_network: true,
         }
+    }
+}
+
+impl ExecPolicy {
+    /// Agent `Bash` goes through the sandbox: its own switch, and the master one.
+    pub fn shell_sandboxed(&self) -> bool {
+        self.enabled && self.exec_shell
+    }
+
+    /// Scheduler `script` tasks go through the sandbox.
+    pub fn scheduler_sandboxed(&self) -> bool {
+        self.enabled && self.scheduler_script
     }
 }
 
@@ -246,6 +272,28 @@ mod tests {
         assert!(!p.scheduler_script, "cron scripts must not silently change behaviour");
         assert!(p.run_python && p.run_node, "the new runtimes ship enabled (always sandboxed)");
         assert!(!p.code_network, "REPL runs start offline");
+    }
+
+    #[test]
+    fn the_sandbox_is_on_by_default_and_the_master_switch_overrides_the_others() {
+        let p = ExecPolicy::default();
+        assert!(p.enabled, "the sandbox ships switched on");
+
+        let mut p = ExecPolicy { exec_shell: true, scheduler_script: true, ..Default::default() };
+        assert!(p.shell_sandboxed() && p.scheduler_sandboxed());
+        p.enabled = false;
+        assert!(!p.shell_sandboxed() && !p.scheduler_sandboxed());
+        // The saved values survive, so switching back on restores them.
+        assert!(p.exec_shell && p.scheduler_script);
+    }
+
+    #[test]
+    fn a_policy_saved_before_the_master_switch_existed_loads_with_the_sandbox_on() {
+        let db = Db::open_memory().unwrap();
+        db.set_setting(KEY, r#"{"execShell":true,"runPython":true}"#).unwrap();
+        let p = load(&db);
+        assert!(p.enabled, "a missing `enabled` must never read as off");
+        assert!(p.exec_shell);
     }
 
     #[test]

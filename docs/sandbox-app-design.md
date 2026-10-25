@@ -196,6 +196,7 @@ và bật/tắt bằng công tắc ở **Plugins → Sandbox**.
 
 | Khoá JSON | Mặc định | Ý nghĩa |
 |---|---|---|
+| `enabled` | **true** | Công tắc tổng. `false` ⇒ `direct` chạy như tiến trình thường (`isolation: "none"`), `execShell`/`schedulerScript` bị bỏ qua; docker, sandbox từng Space App và `executable_qa` không đổi. Thiếu trong row cũ ⇒ `true` |
 | `execShell` | **false** | Tool `Bash` của agent chạy trong OS sandbox, write-jail vào đúng working dir của chat |
 | `execNetwork` | true | Mạng cho shell bị cưỡng chế |
 | `execFsMode` | **`open`** | Mức đọc cho shell bị cưỡng chế |
@@ -211,6 +212,10 @@ và bật/tắt bằng công tắc ở **Plugins → Sandbox**.
 * `execShell` và `schedulerScript` tắt ⇒ chạy **như cũ**, không sandbox
   (`isolation: "none"`). Hai đường này vốn tồn tại trước khi có sandbox; tắt là
   quay về hành vi gốc.
+* `enabled` tắt ⇒ **không còn sandbox**: `runner::exec` chạy backend `direct` ở chế độ
+  không cô lập (Unix: `DirectKind::Degraded`; Windows: `confine=false`, vẫn trong Job Object)
+  và ghi `isolation: "none"`. Đây là lối thoát cho máy không dựng nổi OS sandbox; nó
+  nằm ở `exec` — chỗ mọi lối vào chui qua — chứ không ở từng nơi gọi.
 * `runPython` / `runNode` tắt ⇒ **từ chối hẳn**, kèm câu chỉ đường
   ("switched off (Plugins → Sandbox)"). Hai runtime này chưa từng chạy ngoài
   sandbox nên không có "bản gốc" nào để rơi về.

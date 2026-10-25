@@ -57,7 +57,7 @@ impl DefaultTaskExecutor {
 /// on the legacy path so run logs always say what confined the script.
 async fn run_script_command(cmd: &str) -> anyhow::Result<(String, String, Option<i32>, String)> {
     let policy = crate::sandbox::policy::current();
-    if policy.scheduler_script {
+    if policy.scheduler_sandboxed() {
         let run = crate::sandbox::policy::run_once_sandboxed(
             "bash",
             cmd,

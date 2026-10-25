@@ -22,7 +22,7 @@ Card **Available isolation** trên đầu trang cho biết:
 |---|---|---|
 | macOS | **Seatbelt** (`sandbox-exec`) | Chính xác nhất — lọc được cả file lẫn từng cổng mạng |
 | Linux | **bubblewrap** | Tốt cho file; **không lọc được cổng ra** |
-| Windows | **AppContainer + Job Object** | Có code nhưng **chưa kiểm chứng trên máy thật** |
+| Windows | **AppContainer + Job Object** | Giới hạn RAM/số tiến trình là thật; **không đọc được loopback**, `open` hành xử như `strict`, chưa có terminal. Xem [sandbox-windows-research.md](sandbox-windows-research.md) |
 | Mọi nền tảng | **Docker** | Cần Docker daemon đang chạy; thêm giới hạn CPU/RAM |
 
 Nếu máy thiếu công cụ cách ly, trạng thái là **Degraded** — mã vẫn chạy nhưng
@@ -30,11 +30,32 @@ Nếu máy thiếu công cụ cách ly, trạng thái là **Degraded** — mã v
 
 ## 2. Công tắc cưỡng chế (Security enforcement) — phần quan trọng nhất
 
+### Công tắc tổng: **Sandbox** (mặc định BẬT)
+
+Nằm trên cùng card **Security enforcement**. **Tắt** nó khi máy không dựng nổi
+sandbox (ví dụ Windows chặn AppContainer, hoặc Python không khởi động trong đó)
+mà bạn vẫn cần chạy code:
+
+* Python / Node.js ở REPL, Bash của agent và script hẹn giờ chạy như **tiến trình
+  thường** với đầy đủ quyền của bạn — đọc/ghi mọi file bạn có quyền, dùng được mạng.
+* Mỗi lượt chạy được ghi `isolation: "none"`, nên lịch sử không bao giờ giả vờ là
+  đã cô lập.
+* Công tắc *Agent shell* và *Scheduler scripts* bị bỏ qua khi tổng đang tắt (giá trị
+  đã lưu của chúng được giữ, bật lại là có hiệu lực ngay). *Run Python/Node* vẫn là
+  quyền "cho phép chạy hay không".
+* Tắt phải xác nhận một lần; bật lại thì không.
+* Không ảnh hưởng: backend **docker** (bạn chọn nó rõ ràng), sandbox riêng của
+  từng Space App (§7), và job `executable_qa` của Datagen — job này **từ chối**
+  khi không có cô lập thật, vì nó chạy code do model viết.
+
+### Từng đường chạy
+
 Mặc định, sandbox chỉ là *công cụ có sẵn*. Các công tắc ở card **Security
 enforcement** biến nó thành *bắt buộc* cho những đường chạy vốn đã tồn tại:
 
 | Công tắc | Mặc định | Bật thì sao | Tắt thì sao |
 |---|---|---|---|
+| **Sandbox (công tắc tổng)** | BẬT | Các công tắc bên dưới có hiệu lực | Tất cả chạy không cô lập, ghi `isolation: "none"` |
 | **Agent shell (Bash)** | TẮT | Mọi lệnh Bash của agent chạy trong sandbox, chỉ ghi được vào thư mục làm việc của cuộc chat | Chạy shell thẳng trên máy như trước |
 | ↳ Network / Disk read / Local ports | bật / `open` / trống | Điều chỉnh riêng cho shell bị cưỡng chế | |
 | **Run Python** | BẬT | Python chạy trong sandbox | **Từ chối chạy Python** — agent báo "switched off (Plugins → Sandbox)" |

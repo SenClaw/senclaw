@@ -120,7 +120,7 @@ pub(super) async fn run_code(
         // With `exec` enforcement on, bash gets the real OS sandbox (real
         // shell and utilities, write-jailed); otherwise the pure-Rust brush
         // sandbox, exactly as before the sandbox integration.
-        Lang::Bash if policy.exec_shell => {
+        Lang::Bash if policy.shell_sandboxed() => {
             run_os_sandboxed("bash", code, policy.code_network, timeout_ms).await
         }
         Lang::Bash => super::bash_sandbox::run(code, timeout_ms).await,

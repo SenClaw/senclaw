@@ -1225,6 +1225,31 @@ table: [docs/space-app-sandbox.md](docs/space-app-sandbox.md). Process lifecycle
 *reclaimed* rather than adopted — only when the process's cwd proves it is that
 app's): [docs/sandbox-app-design.md](docs/sandbox-app-design.md).
 
+## Sandbox master switch and the Windows backend
+
+`ExecPolicy.enabled` (`src/sandbox/policy.rs`, **default true**, Plugins → Sandbox in web and desktop, `PUT /api/sandbox/exec-policy`) is the one
+way to run code without the OS jail. Off: `runner::exec` runs the `direct` backend unconfined (Unix `DirectKind::Degraded`, Windows `confine=false`),
+records `isolation: "none"`, and agent `Bash` / scheduler scripts take their raw path. Guide: [docs/sandbox-guide.md](docs/sandbox-guide.md) §2.
+Windows findings and what was fixed: [docs/sandbox-windows-research.md](docs/sandbox-windows-research.md).
+
+Rules for Claude:
+
+- **The switch is read in `runner::exec_with_leftover`, the choke point every entry point reaches** — not at each caller. Callers that choose a
+  *surface* use `ExecPolicy::shell_sandboxed()` / `scheduler_sandboxed()` (switch AND its own flag); never read `exec_shell` / `scheduler_script` bare.
+- **A missing `enabled` loads as true** (`#[serde(default)]` + `Default`), and a PUT that omits it turns the sandbox back ON. Keep both directions failing safe.
+- **`executable_qa` still refuses model-written code without a real jail**: with the switch off its preflight skips `direct` and needs Docker. Do not
+  "fix" that to follow the switch. `docker` is an explicit backend choice and is never affected.
+- **A Windows grant adds to the DACL, it never replaces it** (`edit_dacl`: `GetNamedSecurityInfoW` → `SetEntriesInAclW(old)` → `SetNamedSecurityInfoW`).
+  `SetEntriesInAclW(None)` + `SetNamedSecurityInfoW` installs a one-entry ACL, which strips every explicit ACE from the user's own folder.
+- **Windows string/path logic goes in `backend/winproc.rs`, not `direct_windows.rs`.** It is built on every OS so it is unit-tested on a Mac
+  (`rustc --test src/sandbox/backend/winproc.rs` runs it with no daemon build). `direct_windows.rs` only compiles for Windows: `scripts/typecheck-windows-sandbox.sh` type-checks the real file (and its tests) in a scratch
+  crate for `x86_64-pc-windows-msvc` and runs the winproc tests, in ~1 minute and ~100 MB; the whole-crate `cargo check --lib --target
+  x86_64-pc-windows-gnu` needs ~2 GB. Behaviour is `.github/workflows/sandbox-windows.yml`'s job.
+- **A Windows child needs `SystemRoot` in its environment** (Python will not start without it) and its handles restricted to a list; `windows_env` and
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` are not decoration. `CREATE_NO_WINDOW` is required because the daemon has no console.
+- **Mounts on Windows are checked by `winproc::forbidden_mount_reason`**: the ACE a mount adds is inherited by every file under it, so system folders,
+  drive roots, the profile and its credential stores are refused. The Unix list in `mounts.rs` names nothing that exists there.
+
 ## Space App runtime monitor
 
 Plugins → Space Apps → **Details & logs** carries a live panel for any

@@ -234,15 +234,7 @@ async fn probe_direct(os: &str) -> DirectCaps {
                 }
             }
         }
-        "windows" => DirectCaps {
-            available: true,
-            kind: DirectKind::AppContainer,
-            detail: "Windows AppContainer + Job Object: writes outside the sandbox directory are \
-                     blocked, user data is unreadable, the network is off unless a capability \
-                     grants it, and RAM/process count are enforced limits. NOT yet verified on \
-                     a real machine — see docs/sandbox-windows-research.md."
-                .into(),
-        },
+        "windows" => windows_direct_caps().await,
         other => DirectCaps {
             available: false,
             kind: DirectKind::Unsupported,
@@ -250,6 +242,48 @@ async fn probe_direct(os: &str) -> DirectCaps {
         },
     }
 }
+
+/// Windows: ask the OS whether an AppContainer profile can be made at all.
+///
+/// A machine whose policy forbids it used to be reported as `available`, and
+/// every run then failed with a launch error. Now the probe fails first, with
+/// the system's own message, and says what to do about it.
+#[cfg(windows)]
+async fn windows_direct_caps() -> DirectCaps {
+    let probed = tokio::task::spawn_blocking(crate::sandbox::backend::direct_windows::probe)
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match probed {
+        Ok(()) => DirectCaps {
+            available: true,
+            kind: DirectKind::AppContainer,
+            detail: WINDOWS_DETAIL.into(),
+        },
+        Err(e) => DirectCaps {
+            available: false,
+            kind: DirectKind::Unsupported,
+            detail: format!(
+                "This machine would not create a Windows AppContainer: {e}. Use the docker backend, \
+                 or switch the sandbox off in Plugins → Sandbox to run code without it."
+            ),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+async fn windows_direct_caps() -> DirectCaps {
+    DirectCaps { available: true, kind: DirectKind::AppContainer, detail: WINDOWS_DETAIL.into() }
+}
+
+/// What the Windows `direct` backend does and does not do — kept next to the
+/// probe so the UI never says more than the code delivers.
+const WINDOWS_DETAIL: &str = "Windows AppContainer + Job Object: writes outside the sandbox directory are \
+     blocked, user data is unreadable, the network is off unless the sandbox is allowed it, and \
+     RAM/process count are enforced limits. Limits of this backend: `open` reads behave like \
+     `strict` (only the interpreter, the allowlist and mounts are readable); a sandboxed \
+     process cannot reach services on this machine (loopback) even with the network on; there \
+     is no interactive terminal. Checked by the Windows CI job, not yet by a user's machine — \
+     see docs/sandbox-windows-research.md.";
 
 async fn probe_docker() -> DockerCaps {
     let bin = config::docker_bin();
@@ -410,6 +444,16 @@ pub async fn which(bin: &str) -> Option<String> {
 }
 
 fn is_exec(p: &std::path::Path) -> bool {
+    // `python.exe` in `…\Microsoft\WindowsApps` is a zero-byte alias that opens
+    // the Store; it is first on PATH on a stock Windows and runs nothing.
+    #[cfg(windows)]
+    {
+        if let Ok(m) = std::fs::metadata(p) {
+            if crate::sandbox::backend::winproc::is_store_stub(&p.to_string_lossy(), m.len()) {
+                return false;
+            }
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

@@ -22,6 +22,10 @@ pub mod direct;
 #[cfg(windows)]
 pub mod direct_windows;
 pub mod docker;
+/// String and path logic of the Windows backend; built everywhere so it is
+/// tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub mod winproc;
 
 use std::collections::BTreeMap;
 
