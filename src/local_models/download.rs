@@ -442,6 +442,8 @@ mod tests {
     /// The repack process can exit 0 and still have written the wrong
     /// checkpoint. That must not become a listed model. A second run that
     /// writes the pin does.
+    // Runs a Unix shell script with mode bits — a Windows host can't build it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn gturbo_download_keeps_only_the_pinned_checkpoint() {
         use std::os::unix::fs::PermissionsExt;

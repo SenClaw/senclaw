@@ -4,8 +4,11 @@
 # says which test broke, and why, to anyone looking at the run.
 #
 # usage: annotate-test-failures.sh <log> [error|warning]
-log=$1
 level=${2:-error}
+# Cargo colours its output on a runner; `^error` never matches `ESC[1m…error`.
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+sed -e 's/\x1b\[[0-9;]*m//g' "$1" > "$log"
 
 esc() { sed -e 's/%/%25/g' -e 's/\r//g'; }
 
@@ -15,7 +18,8 @@ failed=$(grep -E '^test .+ \.\.\. FAILED' "$log" | sed -E 's/^test (.+) \.\.\. F
 # Exit code 101 with no panic in the log: the tests did not compile, or the test
 # binary died (a stack overflow aborts it without a word from the harness).
 if ! grep -q 'panicked at' "$log"; then
-  compile=$(grep -m 3 -E '^error\[|^error: could not compile' "$log" | esc | paste -sd ' ' -)
+  # The error line, then the ` --> file:line` under it.
+  compile=$(grep -m 6 -A 1 -E '^error\[' "$log" | grep -E '^error\[|-->' | esc | paste -sd ' ' -)
   [ -n "$compile" ] && echo "::$level title=Did not compile::$compile"
   # One test thread: the last test that started and never reported is the one
   # that was running when the binary died.
