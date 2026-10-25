@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SenClaw — Luồng Sandbox, mạng và công tắc bật/tắt</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#16202b; --muted:#5b6876; --line:#dfe4ea;
+  --accent:#2457d6; --accent-soft:#e7eefc; --ok:#17803d; --ok-soft:#e3f5ea;
+  --warn:#9a5b00; --warn-soft:#fdf1dc; --bad:#b3261e; --bad-soft:#fbe7e5;
+  --new:#6b3fd1; --new-soft:#efe9fb; --code:#eef1f5; --pre:#0f1720; --pre-ink:#e6edf3;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+    --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+    --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+    --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933; --pre:#0b1117; --pre-ink:#e6edf3;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f141a; --panel:#172029; --ink:#e6ebf1; --muted:#9aa7b5; --line:#2a3541;
+  --accent:#7da2ff; --accent-soft:#1b2a4a; --ok:#58c987; --ok-soft:#14301f;
+  --warn:#f0b35a; --warn-soft:#3a2a10; --bad:#ff8a80; --bad-soft:#3d1a18;
+  --new:#b79cff; --new-soft:#2a1f4a; --code:#1e2933; --pre:#0b1117; --pre-ink:#e6edf3;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:0 16px 72px}
+header{padding:40px 0 18px}
+.kicker{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font-size:30px;line-height:1.2;margin:6px 0 10px}
+header p{margin:0;color:var(--muted);max-width:800px}
+nav{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -16px;padding:8px 16px;overflow-x:auto;white-space:nowrap}
+nav a{display:inline-block;margin-right:16px;color:var(--muted);text-decoration:none;font-size:13px;padding:4px 0}
+nav a:hover{color:var(--accent)}
+section{margin-top:46px}
+h2{font-size:22px;margin:0 0 4px}
+h2 + .lead{color:var(--muted);margin:0 0 18px;max-width:820px}
+h3{font-size:16px;margin:24px 0 8px}
+p{margin:8px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.chip{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;margin-right:4px;vertical-align:middle}
+.c-ok{background:var(--ok-soft);color:var(--ok)}
+.c-warn{background:var(--warn-soft);color:var(--warn)}
+.c-bad{background:var(--bad-soft);color:var(--bad)}
+.c-new{background:var(--new-soft);color:var(--new)}
+.c-info{background:var(--accent-soft);color:var(--accent)}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+code{background:var(--code);padding:1px 5px;border-radius:5px;word-break:break-word}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{padding:9px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:color-mix(in srgb,var(--panel) 80%,var(--line));white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.tldr{border-left:4px solid var(--accent);background:var(--accent-soft)}
+.tldr ul{margin:8px 0 0;padding-left:20px}
+.tldr li{margin:6px 0}
+.note{border-left:4px solid var(--warn);background:var(--warn-soft);border-radius:0 10px 10px 0;padding:10px 14px;margin:14px 0;font-size:14px}
+.note.bad{border-color:var(--bad);background:var(--bad-soft)}
+.note.ok{border-color:var(--ok);background:var(--ok-soft)}
+.fig{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;overflow-x:auto}
+.fig svg{display:block;width:100%;min-width:760px;height:auto}
+.fig figcaption{font-size:12.5px;color:var(--muted);padding:6px 6px 2px}
+figure{margin:0}
+/* svg */
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+.nb{fill:var(--panel);stroke:var(--line);stroke-width:1.3}
+.na{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.3}
+.no{fill:var(--ok-soft);stroke:var(--ok);stroke-width:1.3}
+.nw{fill:var(--warn-soft);stroke:var(--warn);stroke-width:1.3}
+.nd{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.3}
+.nn{fill:var(--new-soft);stroke:var(--new);stroke-width:1.3}
+.ng{fill:none;stroke:var(--line);stroke-width:1.3;stroke-dasharray:5 4}
+.tx{fill:var(--ink);font-size:13px}
+.tb{font-weight:650}
+.tm{fill:var(--muted);font-size:11px}
+.th{fill:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+.ln{stroke:var(--muted);stroke-width:1.5;fill:none}
+.lnd{stroke:var(--muted);stroke-width:1.5;fill:none;stroke-dasharray:6 4}
+.ah{fill:var(--muted)}
+.lbl{fill:var(--accent);font-size:11.5px;font-weight:650}
+.lbl.no2{fill:var(--bad)}
+/* code */
+.cmd{position:relative;margin:10px 0 14px}
+.cmd pre{margin:0;background:var(--pre);color:var(--pre-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.cmd .cap{font-size:12.5px;color:var(--muted);margin:0 0 4px}
+.cmd button{position:absolute;top:26px;right:8px;background:#ffffff1a;color:var(--pre-ink);border:1px solid #ffffff30;border-radius:6px;padding:2px 9px;font-size:11.5px;cursor:pointer}
+.cmd button:hover{background:#ffffff30}
+.cm{color:#8b98a5}
+kbd{font:12px ui-monospace,Menlo,monospace;background:var(--code);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px}
+ul.tight{margin:6px 0;padding-left:20px}
+ul.tight li{margin:4px 0}
+footer{margin-top:50px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:14px}
+@media (max-width:600px){h1{font-size:25px}.cmd button{position:static;margin-top:4px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">SenClaw · tài liệu luồng · daemon 0.2.10 (main) · 2026-10-25</div>
+  <h1>Sandbox: luồng chạy, mạng, và cách bật/tắt</h1>
+  <p>Một lệnh hay một đoạn code đi từ đâu tới đâu trước khi chạy, mạng được mở/đóng ở chỗ nào, và các lệnh để bật/tắt sandbox. Mọi tên hàm, đường dẫn, trường JSON dưới đây lấy từ mã nguồn hiện tại (<code>src/sandbox</code>).</p>
+</header>
+
+<nav>
+  <a href="#tong-quan">Tổng quan</a>
+  <a href="#luong">Luồng chạy</a>
+  <a href="#quyet-dinh">Một lần chạy</a>
+  <a href="#cong-tac">Công tắc bật/tắt</a>
+  <a href="#mang">Mạng</a>
+  <a href="#nen-tang">Theo nền tảng</a>
+  <a href="#lenh">Lệnh</a>
+  <a href="#space-app">Space App</a>
+  <a href="#su-co">Sự cố</a>
+</nav>
+
+<!-- ───────────────────────── 1. tổng quan ───────────────────────── -->
+<section id="tong-quan">
+  <h2>1. Tổng quan</h2>
+  <p class="lead">Sandbox là một engine nằm trong daemon. Nó nhốt code do agent hoặc người dùng chạy: chỉ ghi được vào thư mục của nó, đọc đĩa theo mức bạn chọn, và không ra mạng trừ khi cho phép.</p>
+  <div class="card tldr">
+    <b>Nhớ 5 điều</b>
+    <ul>
+      <li><b>Một cửa duy nhất.</b> Mọi đường chạy đều chui qua <code>runner::exec_with_leftover</code>. Công tắc tổng được đọc ở đó, không đọc rải rác ở từng nơi gọi.</li>
+      <li><b>Công tắc tổng <code>enabled</code> mặc định BẬT.</b> Tắt = code chạy như tiến trình thường, mỗi lượt ghi <code>isolation: "none"</code>. Không bao giờ giả vờ đã cô lập.</li>
+      <li><b>Mạng mặc định TẮT</b> ở mỗi sandbox. Có 4 chỗ đặt giá trị (mục 5) và mỗi hệ điều hành chặn theo một cách khác nhau.</li>
+      <li><b>Không có lệnh <code>senclaw sandbox on|off</code>.</b> Bật/tắt bằng giao diện (Plugins → Sandbox), bằng <code>curl</code> tới REST, hoặc bằng tool MCP <code>sbx_*</code> cho phần mạng. Công tắc tổng chỉ có ở giao diện và REST, agent không tự tắt được bằng tool.</li>
+      <li><b>Hai thứ cùng tên "sandbox", đừng lẫn:</b> engine (tài liệu này) và sandbox riêng của từng Space App (mục 8). Công tắc tổng không đụng tới cái thứ hai.</li>
+    </ul>
+  </div>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card"><span class="chip c-ok">dữ liệu</span><br><code>~/.senclaw/sandbox/</code><br><span class="mono">sandbox.sqlite</span> · <span class="mono">workspaces/&lt;id&gt;/</span><br>Đổi chỗ bằng <code>SENCLAW_SANDBOX_DATA_DIR</code>.</div>
+    <div class="card"><span class="chip c-info">REST</span><br><code>/api/sandbox/*</code> trên cổng UI <code>18788</code><br>Gắn trong <code>gateway/ui_server/core.rs</code>, cùng DB với engine.</div>
+    <div class="card"><span class="chip c-new">MCP</span><br>22 tool <code>sbx_*</code><br>Chạy bằng <code>senclaw sandbox-server</code> (stdio), có trong roster agent.</div>
+  </div>
+</section>
+
+<!-- ───────────────────────── 2. luồng ───────────────────────── -->
+<section id="luong">
+  <h2>2. Luồng tổng thể</h2>
+  <p class="lead">Sáu nơi gọi vào, một cổng chính sách ở giữa, một runner, rồi backend. Kết quả luôn quay về dạng <code>Outcome</code> kèm <code>isolation</code> đo lúc chạy.</p>
+  <figure class="fig">
+<svg viewBox="0 0 980 505" role="img" aria-label="Sơ đồ tổng thể: nơi gọi, chính sách, runner, backend">
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <text x="16" y="22" class="th">Ai gọi</text>
+  <text x="262" y="22" class="th">Cổng chính sách</text>
+  <text x="516" y="22" class="th">Runner</text>
+  <text x="760" y="22" class="th">Backend</text>
+
+  <!-- entries -->
+  <g>
+    <rect x="16" y="36" width="216" height="50" rx="9" class="nb"/><text x="28" y="57" class="tx tb">Bash của agent</text><text x="28" y="74" class="tm">tools/bash.rs</text>
+    <rect x="16" y="98" width="216" height="50" rx="9" class="nb"/><text x="28" y="119" class="tx tb">Script hẹn giờ</text><text x="28" y="136" class="tm">scheduler/executor.rs</text>
+    <rect x="16" y="160" width="216" height="50" rx="9" class="nb"/><text x="28" y="181" class="tx tb">REPL Python / Node</text><text x="28" y="198" class="tm">POST /api/code/run</text>
+    <rect x="16" y="222" width="216" height="50" rx="9" class="nb"/><text x="28" y="243" class="tx tb">Tool sbx_* của agent</text><text x="28" y="260" class="tm">MCP · sandbox_server.rs</text>
+    <rect x="16" y="284" width="216" height="50" rx="9" class="nb"/><text x="28" y="305" class="tx tb">Trang Sandbox · REST</text><text x="28" y="322" class="tm">/api/sandbox/*</text>
+    <rect x="16" y="346" width="216" height="50" rx="9" class="nn"/><text x="28" y="367" class="tx tb">Datagen executable_qa</text><text x="28" y="384" class="tm">chạy code do model viết</text>
+  </g>
+
+  <!-- policy -->
+  <rect x="262" y="36" width="212" height="188" rx="10" class="na"/>
+  <text x="274" y="58" class="tx tb">ExecPolicy · policy.rs</text>
+  <text x="274" y="84" class="tx tb" style="fill:var(--accent)">enabled  ← công tắc tổng</text>
+  <text x="274" y="106" class="tx">exec_shell · scheduler_script</text>
+  <text x="274" y="128" class="tx">run_python · run_node</text>
+  <text x="274" y="150" class="tx">exec · code · scheduler _network</text>
+  <text x="274" y="172" class="tx">exec_fs_mode · exec_loopback</text>
+  <text x="274" y="196" class="tm">Bash, hẹn giờ: tắt → chạy thô.</text>
+  <text x="274" y="212" class="tm">Python/Node: tắt → từ chối.</text>
+
+  <!-- bus entries 1..3 -> policy -->
+  <path d="M232,61 H247 M232,123 H247 M232,185 H247 M247,61 V185 M247,124 H262" class="ln" marker-end="url(#a1)"/>
+  <!-- direct entries -->
+  <path d="M232,247 H516" class="ln" marker-end="url(#a1)"/>
+  <path d="M232,309 H516" class="ln" marker-end="url(#a1)"/>
+  <text x="300" y="283" class="tm">đi thẳng vào runner</text>
+  <path d="M232,371 H516" class="lnd" marker-end="url(#a1)"/>
+  <text x="262" y="364" class="tm">luôn cần jail thật, hoặc docker</text>
+  <!-- policy -> runner -->
+  <path d="M474,130 H516" class="ln" marker-end="url(#a1)"/>
+
+  <!-- runner -->
+  <rect x="516" y="36" width="214" height="392" rx="10" class="nb"/>
+  <text x="530" y="58" class="tx tb">runner::exec_with_leftover</text>
+  <rect x="530" y="70" width="186" height="44" rx="7" class="na"/><text x="540" y="89" class="tx">① chọn backend</text><text x="540" y="105" class="tm">create(): docker / direct</text>
+  <rect x="530" y="124" width="186" height="44" rx="7" class="nb"/><text x="540" y="143" class="tx">② ghi script</text><text x="540" y="159" class="tm">.runs/&lt;id&gt;.py|.cmd</text>
+  <rect x="530" y="178" width="186" height="44" rx="7" class="nw"/><text x="540" y="197" class="tx tb">③ đọc enabled</text><text x="540" y="213" class="tm">unconfined = !enabled</text>
+  <rect x="530" y="232" width="186" height="44" rx="7" class="nb"/><text x="540" y="251" class="tx">④ gọi backend</text><text x="540" y="267" class="tm">timeout, kill cả cây tiến trình</text>
+  <rect x="530" y="286" width="186" height="44" rx="7" class="nb"/><text x="540" y="305" class="tx">⑤ ghi Run vào DB</text><text x="540" y="321" class="tm">sandbox.sqlite · bảng runs</text>
+  <text x="530" y="356" class="tm">isolation = thứ thực sự đã áp,</text>
+  <text x="530" y="371" class="tm">đo lúc chạy, không chép từ cấu hình.</text>
+  <text x="530" y="396" class="tm">Xoá sandbox → forget():</text>
+  <text x="530" y="411" class="tm">dọn profile + quyền (Windows).</text>
+
+  <!-- backends -->
+  <rect x="750" y="36" width="214" height="262" rx="10" class="ng"/>
+  <text x="762" y="56" class="th">direct · trên máy này</text>
+  <rect x="762" y="66" width="190" height="42" rx="7" class="no"/><text x="772" y="85" class="tx tb">macOS · Seatbelt</text><text x="772" y="100" class="tm">isolation: seatbelt</text>
+  <rect x="762" y="116" width="190" height="42" rx="7" class="no"/><text x="772" y="135" class="tx tb">Linux · bubblewrap</text><text x="772" y="150" class="tm">isolation: bubblewrap</text>
+  <rect x="762" y="166" width="190" height="52" rx="7" class="no"/><text x="772" y="185" class="tx tb">Windows · AppContainer</text><text x="772" y="200" class="tm">+ Job Object · appcontainer</text>
+  <rect x="762" y="228" width="190" height="58" rx="7" class="nw"/><text x="772" y="247" class="tx tb">Không cô lập</text><text x="772" y="262" class="tm">enabled=false → isolation: none</text><text x="772" y="276" class="tm">(thiếu công cụ → degraded)</text>
+  <rect x="750" y="312" width="214" height="62" rx="10" class="nn"/>
+  <text x="762" y="334" class="tx tb">docker · container</text>
+  <text x="762" y="350" class="tm">bạn chọn rõ backend này;</text>
+  <text x="762" y="364" class="tm">công tắc tổng không đụng tới</text>
+  <path d="M716,254 H738 V160 H750" class="ln" marker-end="url(#a1)"/>
+  <path d="M738,254 V343 H750" class="ln" marker-end="url(#a1)"/>
+
+  <!-- outcome -->
+  <path d="M623,428 V452" class="ln" marker-end="url(#a1)"/>
+  <rect x="16" y="454" width="948" height="40" rx="9" class="no"/>
+  <text x="30" y="479" class="tx"><tspan class="tb">Outcome</tspan> { exit_code, stdout, stderr, truncated, timed_out, duration_ms, isolation }  →  bảng <tspan class="tb">runs</tspan>  →  hiện ở trang Sandbox / trả về cho agent</text>
+</svg>
+    <figcaption>Hình 1. Nét liền là đường chạy chính. Nét đứt: <code>executable_qa</code> tự kiểm tra trước khi tốn lượt gọi model, và từ chối nếu không có jail thật.</figcaption>
+  </figure>
+
+  <h3>Sáu nơi gọi vào</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Nơi gọi</th><th>Đi qua cổng nào</th><th>Chạy ở đâu khi cổng đóng</th></tr>
+    <tr><td>Bash của agent<br><code>tools/bash.rs</code>, <code>bg_tasks/shell.rs</code></td><td><code>shell_sandboxed()</code> = <code>enabled &amp;&amp; exec_shell</code></td><td>Bash thô trên máy (<code>isolation: none</code>)</td></tr>
+    <tr><td>Script hẹn giờ<br><code>scheduler/executor.rs</code></td><td><code>scheduler_sandboxed()</code> = <code>enabled &amp;&amp; scheduler_script</code></td><td><code>bash -c</code> thô như trước</td></tr>
+    <tr><td>REPL Python/Node<br><code>/api/code/run</code></td><td><code>run_python</code> / <code>run_node</code> (kiểm trong <code>runner::run_code</code>)</td><td>Tắt = <b>từ chối</b>, không có đường thô thay thế</td></tr>
+    <tr><td>Tool <code>sbx_*</code> của agent</td><td>Không qua <code>ExecPolicy</code>; chỉ <code>run_python/run_node</code> khi chạy code</td><td>Công tắc tổng tắt → chạy không cô lập, ghi <code>none</code></td></tr>
+    <tr><td>Trang Sandbox · REST</td><td>Như <code>sbx_*</code></td><td>Như <code>sbx_*</code></td></tr>
+    <tr><td>Datagen <code>executable_qa</code></td><td>Tự kiểm ở <code>preflight</code></td><td>Không bao giờ chạy không cô lập: công tắc tắt thì chỉ còn docker, không có docker thì job báo lỗi</td></tr>
+  </table></div>
+</section>
+
+<!-- ───────────────────────── 3. một lần chạy ───────────────────────── -->
+<section id="quyet-dinh">
+  <h2>3. Một lần chạy đi qua những ngã rẽ nào</h2>
+  <p class="lead">Đọc từ trên xuống. Hình thoi là chỗ code quyết định; hộp vàng là nơi code chạy mà không có jail.</p>
+  <figure class="fig">
+<svg viewBox="0 0 980 665" role="img" aria-label="Cây quyết định cho một lần chạy">
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+
+  <!-- starts -->
+  <rect x="30" y="30" width="250" height="44" rx="9" class="nb"/><text x="42" y="50" class="tx tb">Bash agent · Script hẹn giờ</text><text x="42" y="66" class="tm">chọn bề mặt</text>
+  <rect x="330" y="30" width="270" height="44" rx="9" class="nb"/><text x="342" y="50" class="tx tb">Chạy code Python / Node</text><text x="342" y="66" class="tm">REPL · sbx_run · sbx_run_in</text>
+  <rect x="770" y="30" width="190" height="44" rx="9" class="nb"/><text x="782" y="50" class="tx tb">sbx_exec · trang Sandbox</text><text x="782" y="66" class="tm">lệnh shell, không qua cổng</text>
+
+  <!-- A diamond -->
+  <path d="M155,100 L280,135 L155,170 L30,135 Z" class="na"/>
+  <text x="155" y="130" text-anchor="middle" class="tx tb">enabled &amp;&amp;</text>
+  <text x="155" y="146" text-anchor="middle" class="tx tb">công tắc bề mặt?</text>
+  <path d="M155,74 V100" class="ln" marker-end="url(#a2)"/>
+  <path d="M155,170 V200" class="ln" marker-end="url(#a2)"/>
+  <text x="165" y="188" class="lbl no2">tắt</text>
+  <rect x="30" y="202" width="250" height="44" rx="9" class="nw"/><text x="42" y="222" class="tx tb">Chạy thô như trước</text><text x="42" y="238" class="tm">isolation: none</text>
+  <path d="M280,135 H305 V290" class="ln" marker-end="url(#a2)"/>
+  <text x="286" y="127" class="lbl">bật</text>
+
+  <!-- B diamond -->
+  <path d="M465,100 L590,135 L465,170 L340,135 Z" class="na"/>
+  <text x="465" y="130" text-anchor="middle" class="tx tb">run_python /</text>
+  <text x="465" y="146" text-anchor="middle" class="tx tb">run_node bật?</text>
+  <path d="M465,74 V100" class="ln" marker-end="url(#a2)"/>
+  <path d="M465,170 V290" class="ln" marker-end="url(#a2)"/>
+  <text x="475" y="230" class="lbl">bật</text>
+  <path d="M590,135 H620" class="ln" marker-end="url(#a2)"/>
+  <text x="596" y="127" class="lbl no2">tắt</text>
+  <rect x="622" y="106" width="126" height="58" rx="9" class="nd"/><text x="632" y="126" class="tx tb">Từ chối</text><text x="632" y="142" class="tm">"switched off"</text><text x="632" y="156" class="tm">+ chỉ đường</text>
+
+  <!-- C -->
+  <path d="M865,74 V290" class="ln" marker-end="url(#a2)"/>
+
+  <!-- runner bar -->
+  <rect x="20" y="292" width="940" height="36" rx="9" class="nb"/>
+  <text x="490" y="315" text-anchor="middle" class="tx tb">runner::exec_with_leftover</text>
+
+  <!-- D3 -->
+  <path d="M490,328 V356" class="ln" marker-end="url(#a2)"/>
+  <path d="M490,356 L620,392 L490,428 L360,392 Z" class="na"/>
+  <text x="490" y="388" text-anchor="middle" class="tx tb">backend của</text>
+  <text x="490" y="404" text-anchor="middle" class="tx tb">sandbox = docker?</text>
+  <path d="M360,392 H292" class="ln" marker-end="url(#a2)"/>
+  <text x="318" y="384" class="lbl">có</text>
+  <rect x="42" y="370" width="250" height="44" rx="9" class="nn"/><text x="54" y="390" class="tx tb">Container</text><text x="54" y="406" class="tm">isolation: container · mạng none/bridge</text>
+
+  <!-- D4 -->
+  <path d="M490,428 V466" class="ln" marker-end="url(#a2)"/>
+  <text x="500" y="452" class="lbl">direct</text>
+  <path d="M490,466 L620,502 L490,538 L360,502 Z" class="na"/>
+  <text x="490" y="498" text-anchor="middle" class="tx tb">enabled</text>
+  <text x="490" y="514" text-anchor="middle" class="tx tb">(công tắc tổng)?</text>
+  <path d="M620,502 H660" class="ln" marker-end="url(#a2)"/>
+  <text x="626" y="494" class="lbl no2">tắt</text>
+  <rect x="662" y="474" width="298" height="56" rx="9" class="nw"/><text x="674" y="494" class="tx tb">Tiến trình thường · isolation: none</text><text x="674" y="510" class="tm">Windows vẫn nằm trong Job Object (trần RAM,</text><text x="674" y="523" class="tm">giết cả cây). Mạng và đĩa: không rào nào.</text>
+
+  <!-- jail -->
+  <path d="M490,538 V556 M165,556 H815 M165,556 V568 M490,556 V568 M815,556 V568" class="ln"/>
+  <path d="M165,568 V570 M490,568 V570 M815,568 V570" class="ln" marker-end="url(#a2)"/>
+  <text x="500" y="552" class="lbl">bật</text>
+  <rect x="20" y="572" width="290" height="42" rx="9" class="no"/><text x="32" y="591" class="tx tb">macOS · Seatbelt</text><text x="32" y="606" class="tm">sandbox-exec + profile sinh theo từng lần</text>
+  <rect x="345" y="572" width="290" height="42" rx="9" class="no"/><text x="357" y="591" class="tx tb">Linux · bubblewrap</text><text x="357" y="606" class="tm">bwrap: namespace riêng, hệ thống chỉ đọc</text>
+  <rect x="670" y="572" width="290" height="42" rx="9" class="no"/><text x="682" y="591" class="tx tb">Windows · AppContainer + Job Object</text><text x="682" y="606" class="tm">cấp quyền thư mục → CreateProcess</text>
+  <text x="20" y="640" class="tm">Dựng jail lỗi lúc chạy (Seatbelt từ chối profile, Windows không tạo được AppContainer…) → lệnh LỖI, không rơi về chạy thô. Lối thoát: tắt công tắc tổng, hoặc dùng docker.</text>
+  <text x="20" y="656" class="tm">Máy thiếu công cụ (Linux không có bwrap, macOS không có sandbox-exec) → vẫn chạy nhưng nhãn "degraded", không có rào hệ điều hành. Tạo sandbox mặc định ưu tiên docker nếu có.</text>
+</svg>
+    <figcaption>Hình 2. Hai cổng khác nhau, đừng nhầm: cổng bề mặt (hình thoi trên) quyết định có dùng sandbox hay không; công tắc tổng (hình thoi dưới) quyết định jail có được dựng hay không.</figcaption>
+  </figure>
+</section>
+
+<!-- ───────────────────────── 4. công tắc ───────────────────────── -->
+<section id="cong-tac">
+  <h2>4. Công tắc bật/tắt</h2>
+  <p class="lead">Lưu trong bảng <code>settings</code> của <code>sandbox.sqlite</code> (khoá <code>exec_policy</code>). Đọc/ghi qua <code>GET|PUT /api/sandbox/exec-policy</code> hoặc ở Plugins → Sandbox (web và desktop).</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>Khoá JSON</th><th>Mặc định</th><th>Bật thì</th><th>Tắt thì</th></tr>
+    <tr><td><code>enabled</code></td><td><span class="chip c-ok">true</span></td><td>Các công tắc bên dưới có hiệu lực</td><td>Cả engine không dựng jail: chạy như tiến trình thường, <code>isolation: none</code>. Giá trị đã lưu của các công tắc khác được giữ nguyên</td></tr>
+    <tr><td><code>execShell</code></td><td><span class="chip c-warn">false</span></td><td>Bash của agent chạy trong jail, chỉ ghi được vào thư mục làm việc của chat</td><td>Bash thô như trước</td></tr>
+    <tr><td><code>runPython</code> · <code>runNode</code></td><td><span class="chip c-ok">true</span></td><td>Cho phép Python / Node thật</td><td><b>Từ chối chạy</b> (không có đường thô)</td></tr>
+    <tr><td><code>schedulerScript</code></td><td><span class="chip c-warn">false</span></td><td>Task <code>script</code> / <code>script-agent</code> chạy trong sandbox dùng-một-lần</td><td><code>bash -c</code> thô</td></tr>
+    <tr><td><code>execNetwork</code> · <code>codeNetwork</code> · <code>schedulerNetwork</code></td><td>true · false · true</td><td>Mạng cho từng bề mặt (mục 5)</td><td>Chặn mạng của bề mặt đó</td></tr>
+    <tr><td><code>execFsMode</code></td><td><code>open</code></td><td><code>strict</code> / <code>allowlist</code> / <code>open</code>: mức đọc đĩa của Bash bị cưỡng chế</td><td>—</td></tr>
+    <tr><td><code>execLoopback</code></td><td><code>[]</code></td><td>Cổng trên máy này mà Bash được gọi (vd dev server đang làm)</td><td>Rỗng = không cổng local nào</td></tr>
+  </table></div>
+
+  <h3>Công tắc tổng × từng bề mặt</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Bề mặt</th><th><code>enabled = true</code></th><th><code>enabled = false</code></th></tr>
+    <tr><td>Bash agent (<code>execShell</code> bật)</td><td><span class="chip c-ok">seatbelt / bubblewrap / appcontainer</span></td><td><span class="chip c-warn">bash thô · none</span></td></tr>
+    <tr><td>Script hẹn giờ (<code>schedulerScript</code> bật)</td><td><span class="chip c-ok">trong sandbox</span></td><td><span class="chip c-warn">bash thô · none</span></td></tr>
+    <tr><td>Python / Node (REPL, <code>sbx_run</code>)</td><td><span class="chip c-ok">trong jail</span></td><td><span class="chip c-warn">tiến trình thường · none</span></td></tr>
+    <tr><td><code>sbx_exec</code> / trang Sandbox, backend direct</td><td><span class="chip c-ok">trong jail</span></td><td><span class="chip c-warn">tiến trình thường · none</span></td></tr>
+    <tr><td>Backend <code>docker</code></td><td><span class="chip c-ok">container</span></td><td><span class="chip c-ok">container (không đổi)</span></td></tr>
+    <tr><td>Datagen <code>executable_qa</code></td><td><span class="chip c-ok">direct có jail hoặc docker</span></td><td><span class="chip c-ok">chỉ docker</span> · không có thì từ chối</td></tr>
+    <tr><td>Sandbox từng Space App</td><td colspan="2">Không liên quan, cấu hình riêng (mục 8)</td></tr>
+  </table></div>
+
+  <div class="note bad"><b>Bẫy của <code>PUT /exec-policy</code>.</b> Struct có <code>#[serde(default)]</code>, nên PUT thiếu trường sẽ <b>đặt lại trường đó về mặc định</b>, không giữ nguyên. Gửi <code>{"enabled":false}</code> một mình sẽ làm <code>execShell</code> quay về <code>false</code>. Luôn đọc rồi sửa rồi ghi lại (hàm <code>sbx_policy</code> ở mục 7 làm đúng việc đó). Giao diện đã gửi đủ object.</div>
+  <div class="note ok"><b>Fail-safe.</b> Dòng cũ chưa có <code>enabled</code> được đọc là <b>bật</b>. PUT thiếu <code>enabled</code> cũng đưa sandbox về <b>bật</b>. Hai hướng đều nghiêng về an toàn.</div>
+  <div class="note"><b>Ai tắt được công tắc tổng?</b> Người dùng ở giao diện, hoặc ai gọi được REST (loopback không cần token ở chế độ <code>auto</code>). Không có tool <code>sbx_*</code> nào đổi nó. Một Bash chạy không cô lập vẫn gọi được <code>127.0.0.1:18788</code>, nên khi bạn tắt sandbox, "agent không tự tắt được" chỉ còn đúng với tool MCP, không đúng với shell thô.</div>
+</section>
+
+<!-- ───────────────────────── 5. mạng ───────────────────────── -->
+<section id="mang">
+  <h2>5. Mạng</h2>
+  <p class="lead">Ba lớp: ai đặt giá trị, giá trị nằm ở đâu, backend chặn bằng gì. Mặc định mọi sandbox <b>không ra mạng</b>.</p>
+  <figure class="fig">
+<svg viewBox="0 0 980 400" role="img" aria-label="Ba lớp của mạng: nguồn giá trị, sandbox.network và ports, cơ chế chặn của backend">
+  <defs><marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+  <text x="16" y="22" class="th">① Ai đặt giá trị</text>
+  <text x="330" y="22" class="th">② Giá trị nằm ở đâu</text>
+  <text x="650" y="22" class="th">③ Backend chặn bằng gì</text>
+
+  <rect x="16" y="36" width="256" height="52" rx="9" class="nb"/><text x="28" y="57" class="tx tb">REPL Python / Node</text><text x="28" y="74" class="tm">codeNetwork · mặc định tắt</text>
+  <rect x="16" y="98" width="256" height="52" rx="9" class="nb"/><text x="28" y="119" class="tx tb">Bash của agent</text><text x="28" y="136" class="tm">execNetwork · mặc định bật</text>
+  <rect x="16" y="160" width="256" height="52" rx="9" class="nb"/><text x="28" y="181" class="tx tb">Script hẹn giờ</text><text x="28" y="198" class="tm">schedulerNetwork · mặc định bật</text>
+  <rect x="16" y="222" width="256" height="52" rx="9" class="nb"/><text x="28" y="243" class="tx tb">Sandbox bạn tạo</text><text x="28" y="260" class="tm">sbx_create · sbx_update · mặc định tắt</text>
+  <rect x="16" y="296" width="256" height="52" rx="9" class="nn"/><text x="28" y="317" class="tx tb">Space App</text><text x="28" y="334" class="tm">off | all | hosts · mặc định all</text>
+
+  <rect x="330" y="36" width="254" height="104" rx="10" class="na"/>
+  <text x="344" y="60" class="tx tb">sandbox.network : bool</text>
+  <text x="344" y="80" class="tx">false = chặn · true = mở</text>
+  <text x="344" y="102" class="tm">REPL, hẹn giờ: sandbox dùng-một-lần</text>
+  <text x="344" y="116" class="tm">Bash: dòng agent:&lt;thư mục&gt;, được</text>
+  <text x="344" y="130" class="tm">đồng bộ lại từ chính sách mỗi lần.</text>
+  <rect x="330" y="154" width="254" height="76" rx="10" class="na"/>
+  <text x="344" y="176" class="tx tb">ports : listen · connect · loopback</text>
+  <text x="344" y="196" class="tm">mở đúng vài cổng trong lúc mạng đang tắt</text>
+  <text x="344" y="210" class="tm">(cổng ≥ 1024, tối đa 16 luật)</text>
+  <rect x="330" y="296" width="254" height="52" rx="10" class="nn"/>
+  <text x="344" y="318" class="tx tb">proxy allowlist trên loopback</text>
+  <text x="344" y="334" class="tm">chỉ khi network = hosts (proxy.rs)</text>
+  <rect x="330" y="244" width="254" height="40" rx="10" class="nw"/>
+  <text x="344" y="262" class="tx tb">enabled = false</text>
+  <text x="344" y="276" class="tm">bỏ qua tất cả: không có rào mạng nào</text>
+
+  <path d="M272,62 H300 M272,124 H300 M272,186 H300 M272,248 H300 M300,62 V248 M300,95 H330" class="ln" marker-end="url(#a3)"/>
+  <path d="M272,322 H330" class="ln" marker-end="url(#a3)"/>
+  <path d="M584,88 H616 M584,192 H616 M616,88 V232 M584,322 H616 M616,232 V322" class="ln"/>
+  <path d="M616,70 H650 M616,134 H650 M616,198 H650 M616,262 H650 M616,70 V262" class="ln" marker-end="url(#a3)"/>
+
+  <rect x="650" y="36" width="314" height="56" rx="9" class="no"/><text x="662" y="57" class="tx tb">macOS · Seatbelt</text><text x="662" y="74" class="tm">(deny network*) · lọc từng cổng, hai chiều</text>
+  <rect x="650" y="100" width="314" height="56" rx="9" class="no"/><text x="662" y="121" class="tx tb">Linux · bubblewrap</text><text x="662" y="138" class="tm">--unshare-net · mở cổng listen mất cách ly</text>
+  <rect x="650" y="164" width="314" height="56" rx="9" class="no"/><text x="662" y="185" class="tx tb">Windows · AppContainer</text><text x="662" y="202" class="tm">không có internetClient · loopback luôn bị chặn</text>
+  <rect x="650" y="228" width="314" height="56" rx="9" class="nn"/><text x="662" y="249" class="tx tb">Docker</text><text x="662" y="266" class="tm">--network none / bridge · mở cổng → bridge</text>
+  <text x="650" y="312" class="tm">Space App: Seatbelt đầy đủ, Linux chỉ giới hạn thư mục,</text>
+  <text x="650" y="327" class="tm">Windows chưa có sandbox riêng cho app.</text>
+  <text x="16" y="380" class="tm">Đổi mạng của sandbox docker đang chạy → container được tạo lại (file giữ nguyên) vì cờ mạng cố định lúc docker run.</text>
+</svg>
+    <figcaption>Hình 3. Cùng một cờ <code>network</code>, bốn cách chặn khác nhau. Nên đọc cột ③ trước khi hứa với ai rằng "sandbox chặn mạng".</figcaption>
+  </figure>
+
+  <h3>Cổng (ports) theo backend</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Backend</th><th><code>listen</code> (sandbox mở cổng, máy này truy cập được)</th><th><code>connect</code> (chỉ gọi ra cổng này)</th><th><code>loopback</code> (gọi dịch vụ trên máy này)</th></tr>
+    <tr><td>macOS Seatbelt</td><td>Chính xác từng cổng</td><td>Chính xác từng cổng</td><td>Chính xác từng cổng</td></tr>
+    <tr><td>Linux bubblewrap</td><td>Được, nhưng mất namespace mạng</td><td><b>Không lọc</b></td><td>—</td></tr>
+    <tr><td>Docker</td><td>Publish ra <code>127.0.0.1</code>, chính xác</td><td><b>Không lọc</b></td><td>—</td></tr>
+    <tr><td>Windows</td><td colspan="3">Không dùng được: AppContainer chặn loopback kể cả khi có mạng. Mở lại cần quyền admin (<code>CheckNetIsolation LoopbackExempt</code>), SenClaw không làm việc đó.</td></tr>
+  </table></div>
+  <div class="note">Loopback là nơi API của chính SenClaw (<code>18788</code>) và mọi Space App đang nghe, không hỏi token. Vì vậy <code>execLoopback</code> mặc định rỗng: một sandbox gọi được cổng đó thì không còn là sandbox.</div>
+</section>
+
+<!-- ───────────────────────── 6. nền tảng ───────────────────────── -->
+<section id="nen-tang">
+  <h2>6. Theo từng nền tảng</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Nền tảng</th><th>Cơ chế</th><th>Ghi</th><th>Đọc</th><th>Giới hạn tài nguyên</th><th>Lưu ý</th></tr>
+    <tr><td>macOS</td><td>Seatbelt (<code>sandbox-exec</code>)</td><td>Chỉ thư mục sandbox + mount</td><td>strict / allowlist / open; kho khoá (<code>~/.ssh</code>, Keychain…) luôn cấm</td><td>Không ép được RAM</td><td>Chính xác nhất. <code>sandbox-exec</code> không lồng nhau</td></tr>
+    <tr><td>Linux</td><td>bubblewrap</td><td>Chỉ thư mục sandbox</td><td>Thật sự: đường không bind thì không tồn tại</td><td>Không (trừ docker)</td><td>Không lọc cổng ra</td></tr>
+    <tr><td>Windows</td><td>AppContainer + Job Object</td><td>Chỉ thư mục sandbox + mount được cấp</td><td><code>open</code> hoạt động như <code>strict</code>; thêm thư mục interpreter, PATH, allowlist</td><td><b>Ép thật</b>: trần RAM, số tiến trình, giết cả cây (mỗi lần chạy là một Job Object có tên)</td><td>Không loopback; mount hiện ở đường dẫn gốc (không symlink); chưa có terminal; chưa chạy thử trên Windows thật</td></tr>
+    <tr><td>Docker</td><td>Container</td><td>Chỉ <code>/work</code></td><td>Không có đĩa máy (bắt đầu từ image)</td><td>CPU, RAM, pids</td><td>Cần Docker daemon đang chạy</td></tr>
+  </table></div>
+
+  <h3>Nhãn <code>isolation</code> trên mỗi lượt chạy</h3>
+  <div class="grid g3">
+    <div class="card"><span class="chip c-ok">seatbelt</span><span class="chip c-ok">bubblewrap</span><span class="chip c-ok">appcontainer</span><span class="chip c-ok">container</span><p>Rào hệ điều hành thật đã được áp.</p></div>
+    <div class="card"><span class="chip c-warn">degraded</span><p>Máy thiếu công cụ (vd không có <code>bwrap</code>): chạy như tiến trình thường, nhưng do máy, không do bạn chọn.</p></div>
+    <div class="card"><span class="chip c-bad">none</span><p>Không cô lập: công tắc tổng tắt, hoặc bash/script hẹn giờ ở đường thô.</p></div>
+  </div>
+  <p style="margin-top:12px">Phần Windows có bản ghi riêng các lỗi đã sửa và những gì còn mở: <code>docs/sandbox-windows-research.md</code>. Workflow <code>.github/workflows/sandbox-windows.yml</code> chạy test AppContainer thật trên runner Windows.</p>
+</section>
+
+<!-- ───────────────────────── 7. lệnh ───────────────────────── -->
+<section id="lenh">
+  <h2>7. Lệnh</h2>
+  <p class="lead">Không có subcommand <code>senclaw sandbox</code>. Việc bật/tắt đi qua REST (dưới đây dùng <code>curl</code> + <code>jq</code>), giao diện, hoặc tool MCP. Subcommand duy nhất liên quan là <code>senclaw sandbox-server</code>, chính là server MCP.</p>
+
+  <h3>7.1 Chuẩn bị</h3>
+  <div class="cmd"><div class="cap">Địa chỉ, token, hai hàm trợ giúp. Dán một lần vào shell.</div><button>Sao chép</button><pre><span class="cm"># cổng UI mặc định; đổi bằng SENCLAW_UI_PORT</span>
+BASE=http://127.0.0.1:18788
+<span class="cm"># chỉ cần token khi SENCLAW_AUTH_MODE=always hoặc gọi từ máy khác</span>
+AUTH=()
+<span class="cm"># AUTH=(-H "Authorization: Bearer $(cat ~/.senclaw/api_token)")</span>
+
+j() { curl -s "${AUTH[@]}" -H 'Content-Type: application/json' "$@"; }
+
+<span class="cm"># đọc → sửa bằng jq → ghi lại (tránh bẫy PUT thiếu trường)</span>
+sbx_policy() {
+  j "$BASE/api/sandbox/exec-policy" | jq "$1" \
+    | j -X PUT -d @- "$BASE/api/sandbox/exec-policy"
+}</pre></div>
+
+  <h3>7.2 Xem trạng thái</h3>
+  <div class="cmd"><button>Sao chép</button><pre><span class="cm"># chính sách hiện hành (có "enabled")</span>
+j $BASE/api/sandbox/exec-policy | jq
+
+<span class="cm"># máy này cô lập được bằng gì; refresh=true để dò lại, bỏ cache 20 giây</span>
+j "$BASE/api/sandbox/caps?refresh=true" | jq '{os, direct, backends}'
+
+<span class="cm"># các sandbox đang có và 30 lượt chạy gần nhất (xem trường isolation)</span>
+j $BASE/api/sandbox/sandboxes | jq '.sandboxes[] | {id, name, backend, network}'
+j "$BASE/api/sandbox/runs?limit=30" | jq '.runs[] | {language, exitCode, isolation, network}'</pre></div>
+
+  <h3>7.3 Tắt và bật sandbox</h3>
+  <div class="cmd"><button>Sao chép</button><pre><span class="cm"># TẮT: code chạy không cô lập, mỗi lượt ghi isolation "none"</span>
+sbx_policy '.enabled=false' | jq .enabled
+
+<span class="cm"># BẬT lại (mặc định)</span>
+sbx_policy '.enabled=true'  | jq .enabled</pre></div>
+  <div class="cmd"><div class="cap">Không có <code>jq</code>: cùng việc đó bằng Python.</div><button>Sao chép</button><pre>python3 - &lt;&lt;'PY'
+import json, urllib.request
+u = "http://127.0.0.1:18788/api/sandbox/exec-policy"
+p = json.load(urllib.request.urlopen(u)); p["enabled"] = False   <span class="cm"># True để bật lại</span>
+r = urllib.request.Request(u, json.dumps(p).encode(), {"Content-Type": "application/json"}, method="PUT")
+print(json.load(urllib.request.urlopen(r))["enabled"])
+PY</pre></div>
+
+  <h3>7.4 Từng bề mặt</h3>
+  <div class="cmd"><button>Sao chép</button><pre>sbx_policy '.execShell=true'        <span class="cm"># Bash agent chạy trong jail</span>
+sbx_policy '.execShell=false'       <span class="cm"># Bash agent chạy thô như trước</span>
+sbx_policy '.schedulerScript=true'  <span class="cm"># script hẹn giờ vào sandbox</span>
+sbx_policy '.runPython=false'       <span class="cm"># TỪ CHỐI Python (không phải chạy thô)</span>
+sbx_policy '.runNode=false'
+sbx_policy '.execFsMode="strict"'   <span class="cm"># strict | allowlist | open</span></pre></div>
+
+  <h3>7.5 Mạng</h3>
+  <div class="cmd"><div class="cap">Mạng theo bề mặt (chính sách):</div><button>Sao chép</button><pre>sbx_policy '.codeNetwork=true'        <span class="cm"># REPL Python/Node được ra mạng</span>
+sbx_policy '.codeNetwork=false'       <span class="cm"># mặc định</span>
+sbx_policy '.execNetwork=false'       <span class="cm"># Bash agent bị cưỡng chế: không mạng</span>
+sbx_policy '.schedulerNetwork=false'
+sbx_policy '.execLoopback=[3000,5173]'  <span class="cm"># Bash agent được gọi 2 cổng local này</span></pre></div>
+  <div class="cmd"><div class="cap">Mạng của một sandbox cụ thể:</div><button>Sao chép</button><pre><span class="cm"># tạo sandbox có mạng (mặc định không có)</span>
+j -X POST $BASE/api/sandbox/sandboxes -d '{"name":"demo","backend":"direct","network":true}'
+
+ID=&lt;id trả về&gt;
+
+<span class="cm"># bật/tắt mạng sandbox đang có (docker: tạo lại container, giữ file)</span>
+j -X PATCH $BASE/api/sandbox/sandboxes/$ID -d '{"network":true}'
+j -X PATCH $BASE/api/sandbox/sandboxes/$ID -d '{"network":false}'
+
+<span class="cm"># không mạng nhưng mở đúng vài cổng (thay hẳn danh sách cũ)</span>
+j -X POST $BASE/api/sandbox/sandboxes/$ID/ports -d '{"listen":[8000],"connect":[443],"loopback":[]}'
+
+<span class="cm"># mức đọc đĩa của riêng sandbox này</span>
+j -X POST $BASE/api/sandbox/sandboxes/$ID/fs-mode -d '{"fsMode":"strict"}'</pre></div>
+
+  <h3>7.6 Chạy thử</h3>
+  <div class="cmd"><button>Sao chép</button><pre><span class="cm"># một lần rồi xoá sandbox (cách agent hay dùng)</span>
+j -X POST $BASE/api/sandbox/run-once \
+  -d '{"language":"python","code":"print(6*7)","network":false}' | jq '.run | {stdout, exitCode, isolation}'
+
+<span class="cm"># trong sandbox có sẵn</span>
+j -X POST $BASE/api/sandbox/sandboxes/$ID/exec -d '{"command":"echo xin chao","timeoutMs":10000}'
+j -X POST $BASE/api/sandbox/sandboxes/$ID/run  -d '{"language":"python","code":"print(1)"}'
+
+<span class="cm"># dừng mọi tiến trình đang chạy trong sandbox</span>
+j -X POST $BASE/api/sandbox/sandboxes/$ID/kill -d '{}'
+
+<span class="cm"># xoá (giữ file; thêm ?purge=true để xoá cả file)</span>
+j -X DELETE "$BASE/api/sandbox/sandboxes/$ID"</pre></div>
+
+  <h3>7.7 Tool MCP cho agent</h3>
+  <p>Chạy server: <code>senclaw sandbox-server</code> (stdio). Đã có sẵn trong roster agent; đăng ký thủ công cho Claude Code ở <code>.mcp.json</code>:</p>
+  <div class="cmd"><button>Sao chép</button><pre>{
+  "mcpServers": {
+    "senclaw-sandbox": {
+      "type": "stdio",
+      "command": "/đường/dẫn/tới/senclaw",
+      "args": ["sandbox-server"]
+    }
+  }
+}</pre></div>
+  <div class="tablewrap"><table>
+    <tr><th>Việc</th><th>Tool</th><th>Tham số chính</th></tr>
+    <tr><td>Máy cô lập được bằng gì</td><td><code>sbx_capabilities</code></td><td>—</td></tr>
+    <tr><td>Chạy một đoạn code rồi xoá</td><td><code>sbx_run</code></td><td><code>language</code>, <code>code</code>, <code>network</code> (mặc định false), <code>backend</code>, <code>timeoutMs</code> ≤ 600000</td></tr>
+    <tr><td>Tạo sandbox dài hạn</td><td><code>sbx_create</code></td><td><code>network</code>, <code>backend</code>, <code>image</code>, giới hạn…</td></tr>
+    <tr><td><b>Bật/tắt mạng</b>, đổi giới hạn</td><td><code>sbx_update</code></td><td><code>sandboxId</code>, <code>network</code>, <code>cpus</code>, <code>memoryMb</code>, <code>timeoutMs</code></td></tr>
+    <tr><td>Mở cổng</td><td><code>sbx_ports</code></td><td><code>sandboxId</code>, <code>listen</code>, <code>connect</code>, <code>loopback</code> (thay hẳn danh sách)</td></tr>
+    <tr><td>Mức đọc đĩa</td><td><code>sbx_fs_mode</code></td><td><code>sandboxId</code>, <code>fsMode</code> (<code>strict</code> | <code>allowlist</code> | <code>open</code>)</td></tr>
+    <tr><td>Chạy lệnh / code trong sandbox có sẵn</td><td><code>sbx_exec</code> · <code>sbx_run_in</code> · <code>sbx_install</code></td><td><code>sandboxId</code>, …</td></tr>
+    <tr><td>Mount thư mục</td><td><code>sbx_mount</code> · <code>sbx_unmount</code></td><td><code>sandboxId</code>, <code>source</code>, <code>target</code>, <code>readOnly</code></td></tr>
+    <tr><td>Theo dõi và dọn</td><td><code>sbx_stats</code> · <code>sbx_kill</code> · <code>sbx_events</code> · <code>sbx_trace</code> · <code>sbx_runs</code> · <code>sbx_list</code> · <code>sbx_delete</code> · <code>sbx_settings</code> · <code>sbx_files</code> · <code>sbx_file_read</code> · <code>sbx_file_write</code></td><td>—</td></tr>
+  </table></div>
+  <div class="note ok">Không có tool nào đọc hay ghi <code>exec-policy</code>. Muốn đổi công tắc tổng phải qua giao diện hoặc REST.</div>
+
+  <h3>7.8 Biến môi trường</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Biến</th><th>Tác dụng</th></tr>
+    <tr><td><code>SENCLAW_SANDBOX_DATA_DIR</code> (hoặc <code>SANDBOX_DATA_DIR</code>)</td><td>Chỗ lưu <code>sandbox.sqlite</code> và <code>workspaces/</code>. Mặc định <code>~/.senclaw/sandbox</code></td></tr>
+    <tr><td><code>SANDBOX_DOCKER_BIN</code></td><td>Đường dẫn CLI docker (Docker Desktop, Colima, OrbStack, Podman đặt ở chỗ khác nhau)</td></tr>
+    <tr><td><code>SANDBOX_DEFAULT_IMAGE</code></td><td>Image cho sandbox docker, mặc định <code>python:3.12-slim</code></td></tr>
+    <tr><td><code>SENCLAW_UI_PORT</code></td><td>Cổng REST nếu không dùng <code>18788</code></td></tr>
+    <tr><td><code>SENCLAW_AUTH_MODE</code></td><td><code>auto</code> (mặc định) / <code>always</code> / <code>off</code>. <code>always</code> bắt mọi lệnh <code>curl</code> ở trên phải kèm token</td></tr>
+  </table></div>
+
+  <h3>7.9 Giao diện</h3>
+  <ul class="tight">
+    <li><b>Công tắc tổng và các công tắc bề mặt:</b> Plugins → Sandbox → thẻ <i>Security enforcement</i> (web và desktop). Tắt công tắc tổng có hộp xác nhận; bật lại thì không.</li>
+    <li><b>Mạng và cổng của từng sandbox:</b> bảng <i>Managed sandboxes</i>, mở rộng một dòng.</li>
+    <li><b>Mặc định cho sandbox mới:</b> thẻ <i>Defaults for new sandboxes</i> (mức đọc, allowlist, RAM, CPU, timeout; mạng mặc định tắt).</li>
+  </ul>
+</section>
+
+<!-- ───────────────────────── 8. Space App ───────────────────────── -->
+<section id="space-app">
+  <h2>8. Sandbox riêng của Space App (cái thứ hai)</h2>
+  <p class="lead">Một Space App là server sống lâu do daemon dựng lên, nên không dùng mô hình "sandbox + lượt chạy" ở trên. Cấu hình theo từng app, dùng chung phần dựng profile Seatbelt/bwrap. <b>Công tắc tổng ở mục 4 không điều khiển nó.</b></p>
+  <div class="tablewrap"><table>
+    <tr><th>Trường</th><th>Mặc định</th><th>Ý nghĩa</th></tr>
+    <tr><td><code>enabled</code></td><td><span class="chip c-warn">false</span></td><td>App chạy trong jail (ghi chỉ vào thư mục app và thư mục dữ liệu của nó)</td></tr>
+    <tr><td><code>readMode</code></td><td><code>open</code></td><td><code>open</code> / <code>strict</code> (app cần runtime của nó, <code>strict</code> có thể làm hỏng nvm…)</td></tr>
+    <tr><td><code>network</code></td><td><code>all</code></td><td><code>off</code> · <code>all</code> · <code>hosts</code> (chỉ vài trang, qua proxy allowlist trên loopback; client bỏ qua <code>HTTP_PROXY</code> thì không tới đâu cả)</td></tr>
+    <tr><td><code>hosts</code></td><td><code>[]</code></td><td>Tên miền cho <code>hosts</code>; <code>localhost</code>, <code>169.254.169.254</code>, metadata cloud không bao giờ cho phép</td></tr>
+    <tr><td><code>daemonApi</code></td><td><code>true</code></td><td>Cho app gọi API SenClaw trên loopback (cần cho cầu nối AI)</td></tr>
+    <tr><td><code>loopback</code> · <code>folders</code></td><td><code>[]</code></td><td>Cổng local và thư mục thêm</td></tr>
+    <tr><td><code>forced</code></td><td>từ manifest</td><td>Manifest khai <code>sandbox.force</code> thì <b>không tắt được</b>: <code>PUT</code> trả 409</td></tr>
+  </table></div>
+  <div class="cmd"><button>Sao chép</button><pre>j $BASE/api/space/apps/&lt;id&gt;/sandbox | jq
+j -X PUT $BASE/api/space/apps/&lt;id&gt;/sandbox -d '{
+  "enabled": true, "readMode": "open",
+  "network": "hosts", "hosts": ["api.openai.com"],
+  "daemonApi": true, "loopback": [], "folders": []
+}'
+j $BASE/api/space/apps/sandbox-overview | jq   <span class="cm"># cái gì thực sự đang chạy với jail nào</span></pre></div>
+  <p>Hiệu lực áp lúc app khởi động: đổi cấu hình rồi phải dừng và chạy lại app. Nền tảng: macOS đầy đủ, Linux chỉ thư mục, Windows chưa có. Chi tiết: <code>docs/space-app-sandbox.md</code>.</p>
+</section>
+
+<!-- ───────────────────────── 9. sự cố ───────────────────────── -->
+<section id="su-co">
+  <h2>9. Sự cố thường gặp</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Thấy gì</th><th>Nguyên nhân</th><th>Xử lý</th></tr>
+    <tr><td>"Python execution is switched off"</td><td><code>runPython=false</code></td><td><code>sbx_policy '.runPython=true'</code></td></tr>
+    <tr><td>"Sandboxed execution failed: …" khi Bash chạy</td><td><code>execShell</code> bật nhưng jail không dựng được</td><td>Đọc lý do trong lỗi. Tạm thời: <code>sbx_policy '.enabled=false'</code> hoặc <code>.execShell=false</code></td></tr>
+    <tr><td>Windows: "would not create a Windows AppContainer"</td><td>Chính sách máy chặn tạo profile, hoặc thiếu quyền</td><td>Dùng docker, hoặc tắt công tắc tổng</td></tr>
+    <tr><td>Code không ra được mạng</td><td><code>network=false</code> (mặc định)</td><td>Mục 7.5. Nhớ cột ③ của hình 3: Windows còn chặn loopback</td></tr>
+    <tr><td>Code gọi <code>127.0.0.1:3000</code> thất bại</td><td>Loopback đóng mặc định</td><td><code>.execLoopback=[3000]</code> (macOS); Windows không có cách</td></tr>
+    <tr><td>Lịch sử chạy hiện <code>isolation: none</code></td><td>Công tắc tổng đang tắt, hoặc bề mặt đi đường thô</td><td>Kiểm <code>enabled</code> và <code>execShell</code> / <code>schedulerScript</code></td></tr>
+    <tr><td>Sau khi PUT, các công tắc khác về mặc định</td><td>PUT thiếu trường</td><td>Dùng <code>sbx_policy</code> (đọc, sửa, ghi)</td></tr>
+    <tr><td>Chạy docker báo "daemon not running"</td><td>Docker Desktop chưa bật</td><td>Bật Docker rồi <code>caps?refresh=true</code></td></tr>
+    <tr><td><code>curl</code> trả 401</td><td><code>SENCLAW_AUTH_MODE=always</code> hoặc không phải loopback</td><td>Thêm <code>AUTH=(-H "Authorization: Bearer $(cat ~/.senclaw/api_token)")</code></td></tr>
+    <tr><td>Space App bật jail mà vẫn "unconfined"</td><td>Profile cố định lúc khởi động</td><td>Dừng rồi chạy lại app</td></tr>
+  </table></div>
+
+  <h3>Chưa rõ / chưa làm</h3>
+  <ul class="tight">
+    <li>Chưa có lệnh <code>senclaw sandbox status|on|off</code>. Nếu bạn muốn thao tác không cần <code>curl</code>/<code>jq</code>, có thể thêm một subcommand mỏng gọi đúng REST ở trên.</li>
+    <li>Backend Windows chưa được chạy trên máy Windows thật; workflow <code>sandbox-windows.yml</code> là cách đầu tiên để có kết quả, chưa có lần chạy nào.</li>
+    <li>Công tắc tổng áp cho engine; muốn một công tắc điều khiển cả sandbox từng Space App thì cần quyết định riêng (app khai <code>force</code> hiện cố ý không tắt được).</li>
+  </ul>
+</section>
+
+<footer>
+  Nguồn: <code>src/sandbox/{policy,runner,api,caps,ports,fsmode,app_policy}.rs</code>, <code>src/sandbox/backend/*</code>, <code>src/mcp/sandbox_server.rs</code>, <code>src/tools/bash.rs</code>, <code>src/scheduler/executor.rs</code>, <code>src/datagen/executable_qa.rs</code>.
+  Tài liệu liên quan: <code>docs/sandbox-guide.md</code>, <code>docs/sandbox-app-design.md</code>, <code>docs/sandbox-windows-research.md</code>, <code>docs/space-app-sandbox.md</code>.
+</footer>
+
+</div>
+<script>
+document.querySelectorAll('.cmd button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var pre = b.parentElement.querySelector('pre');
+    var text = pre.innerText;
+    var done = function () { var t = b.textContent; b.textContent = 'Đã chép'; setTimeout(function () { b.textContent = t; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () {}); }
+  });
+});
+</script>
+</body>
+</html>
