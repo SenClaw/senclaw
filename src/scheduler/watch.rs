@@ -388,6 +388,40 @@ pub fn resolve_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a s
     Some(cur)
 }
 
+/// Probe tools that treat a job id as optional but have no single state to wait
+/// on without one: asked for nothing in particular they list every job, dataset
+/// and catalog entry instead.
+const NAMED_JOB_PROBES: [(&str, &str); 1] = [("datagen_status", "job_id")];
+
+/// What a watch on `tool` is missing, when `args` leaves out the job it is
+/// meant to follow. `None` when the tool needs no such argument or `args` names
+/// the job.
+///
+/// Seen on gemma-4-e4b (2026-10-16): a watch on `datagen_status` armed with
+/// `args: {}`. The tool answers that with `{jobs: […], datasets: […],
+/// catalog: […]}`, which has no `state` or `status` of its own — `state_field`
+/// looks at scalars and at objects one level down, not into a list — so every
+/// check read "not reported yet". The import job had finished 12 s before the
+/// watch was armed, and the watch polled on regardless. Guessing which job the
+/// listing meant would be worse: the probe server is shared and unscoped, so
+/// the newest job may be another chat's. The model still holds the id while it
+/// arms the watch, so the arming is where to refuse.
+pub fn missing_probe_arg(tool: &str, args: &serde_json::Value) -> Option<String> {
+    let name = tool.trim().rsplit("__").next().unwrap_or_default();
+    let (_, arg) = NAMED_JOB_PROBES.iter().find(|(t, _)| *t == name)?;
+    let named = args
+        .get(*arg)
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty());
+    (!named).then(|| {
+        format!(
+            "Error: a watch on {name} must say which job to follow: args {{\"{arg}\": \"<the id datagen_start \
+             returned>\"}}. Without it the tool lists every job, dataset and catalog entry, which has no single \
+             state to wait on, so the watch would check until its deadline on a job that may already be done."
+        )
+    })
+}
+
 /// The tool's own error text when it answered `isError: true`.
 ///
 /// A JSON-RPC call that *succeeds* can still carry a tool-level failure, and
@@ -632,6 +666,59 @@ mod tests {
         let not_running = DoneWhen { path: String::new(), op: DoneOp::NotEquals, value: Some("running".into()), values: vec![] };
         assert!(!not_running.evaluate(&json!({"items": 3})), "a negated op does not fire on a missing state");
         assert!(not_running.evaluate(&json!({"task": {"status": "completed"}})));
+    }
+
+    #[test]
+    fn a_job_listing_has_no_state_to_wait_on_even_when_every_job_in_it_is_done() {
+        // The answer `datagen_status` gives with no job_id, as the failed run's
+        // probes saw it (JobStatus is camelCase, newest job first). The finished
+        // import is right there in `jobs`, and the armed condition — no path,
+        // `in` [done, failed, cancelled] — still reads "not reported yet":
+        // 5 checks over 4 minutes against a job that was done before the watch
+        // existed. This pins why the arming refuses the call instead.
+        let listing = json!({
+            "jobs": [{
+                "jobId": "c44bde07eee7", "name": "gsm8k-40c", "pipeline": "import",
+                "owner": "acp:work:04904aa8", "state": "done", "target": 40, "accepted": 40,
+            }],
+            "datasets": [{"name": "gsm8k-40c", "accepted": 40}],
+            "catalog": [{"id": "gsm8k"}],
+        });
+        let armed = DoneWhen {
+            path: String::new(),
+            op: DoneOp::In,
+            value: None,
+            values: vec!["done".into(), "failed".into(), "cancelled".into()],
+        };
+        assert!(!armed.evaluate(&listing));
+        // Naming the job gives the answer the condition can read.
+        assert!(armed.evaluate(&json!({"job": listing["jobs"][0].clone()})));
+    }
+
+    #[test]
+    fn a_datagen_status_watch_must_name_its_job() {
+        let named = json!({"job_id": "c44bde07eee7"});
+        for tool in [
+            "mcp__senclaw-datagen__datagen_status",
+            "mcp__core__datagen_status",
+            "mcp__datagen__datagen_status",
+            "datagen_status",
+        ] {
+            assert!(missing_probe_arg(tool, &named).is_none(), "{tool} with a job id");
+            let refused = missing_probe_arg(tool, &json!({})).expect(tool);
+            assert!(refused.contains("job_id"), "the refusal says what to add: {refused}");
+        }
+        for unnamed in [json!(null), json!({"job_id": ""}), json!({"job_id": "  "}), json!({"job_id": null}), json!({"id": "c44bde07eee7"})] {
+            assert!(missing_probe_arg("mcp__core__datagen_status", &unnamed).is_some(), "{unnamed}");
+        }
+    }
+
+    #[test]
+    fn other_probe_tools_are_not_held_to_the_datagen_rule() {
+        assert!(missing_probe_arg("mcp__ai-office-mcp__office_get_task", &json!({})).is_none());
+        assert!(missing_probe_arg("mcp__core__dispatch_status", &json!({})).is_none());
+        // A name that merely ends the same way is another tool.
+        assert!(missing_probe_arg("mcp__x__not_datagen_status", &json!({})).is_none());
     }
 
     #[test]

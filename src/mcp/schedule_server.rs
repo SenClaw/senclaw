@@ -48,7 +48,8 @@ struct ScheduleWatchParams {
     /// Arguments for `tool`, as a JSON object — include every one the tool
     /// requires, e.g. `{"id": 31}`. Omitting a required argument does not fail
     /// loudly: the tool answers with a rejection each check, and the watch
-    /// cannot tell that apart from "not finished yet".
+    /// cannot tell that apart from "not finished yet". `datagen_status` takes
+    /// `{"job_id": "<id from datagen_start>"}`; without it the watch is refused.
     #[serde(default)]
     args: Option<serde_json::Value>,
     /// Dot path into the tool result, e.g. `task.status`. **Call the probe tool
@@ -420,6 +421,13 @@ impl ScheduleServer {
             Ok(a) => a,
             Err(e) => return ToolResult::err(e),
         };
+        if let Some(refusal) = p
+            .tool
+            .as_deref()
+            .and_then(|t| crate::scheduler::watch::missing_probe_arg(t, &args))
+        {
+            return ToolResult::err(refusal);
+        }
         let op = p.done_op.as_deref().map(DoneOp::parse).unwrap_or(DoneOp::Exists);
         let path = p.done_path.clone().unwrap_or_default();
         let interval_secs = p.interval_secs.unwrap_or(60).clamp(15, 3600);
@@ -827,6 +835,46 @@ mod tests {
         text["done_op"] = serde_json::json!("contains");
         text["done_value"] = serde_json::json!("done");
         assert!(!arm(text).is_error, "contains on the whole answer stays allowed");
+    }
+
+    #[test]
+    fn a_datagen_watch_without_a_job_id_is_refused_while_the_model_can_fix_it() {
+        // The 2026-10-16 run: `args` left empty on `datagen_status`, which then
+        // lists everything and has no state to wait on. The watch was armed,
+        // checked five times and never resolved on a job that was already done.
+        let cfg = test_config();
+        let db = Db::open_in_memory(&cfg).unwrap();
+        let srv = ScheduleServer::new();
+        let count = || -> i64 {
+            db.with_conn(|c| {
+                c.query_row("SELECT COUNT(*) FROM scheduled_tasks WHERE context_mode='watch'", [], |r| r.get(0))
+                    .map_err(Into::into)
+            })
+            .unwrap()
+        };
+        let arm = |args: Option<serde_json::Value>| {
+            let mut v = serde_json::json!({
+                "resume_prompt": "import done: {{result}}",
+                "tool": "mcp__senclaw-datagen__datagen_status",
+                "done_op": "in",
+                "done_values": ["done", "failed", "cancelled"]
+            });
+            if let Some(a) = args {
+                v["args"] = a;
+            }
+            let p: ScheduleWatchParams = serde_json::from_value(v).unwrap();
+            srv.schedule_watch(&db, "team-a", "tg:group:1", p)
+        };
+
+        for unnamed in [None, Some(serde_json::json!({})), Some(serde_json::json!("{}")), Some(serde_json::json!({"job_id": " "}))] {
+            let refused = arm(unnamed);
+            assert!(refused.is_error, "{}", refused.content);
+            assert!(refused.content.contains("job_id"), "{}", refused.content);
+        }
+        assert_eq!(count(), 0, "a refused watch leaves no row polling");
+
+        assert!(!arm(Some(serde_json::json!({"job_id": "c44bde07eee7"}))).is_error);
+        assert_eq!(count(), 1);
     }
 
     #[test]
