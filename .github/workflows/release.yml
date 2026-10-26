@@ -52,6 +52,21 @@ jobs:
           SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET: ${{ secrets.SENCLAW_GEMINI_CLI_OAUTH_CLIENT_SECRET }}
         run: cargo build --release --bin senclaw --target ${{ matrix.target }}
 
+      # The binary must start on a Mac without Homebrew. A library under
+      # /opt/homebrew or /usr/local exists only on the build machine: git2 once
+      # linked the runner's OpenSSL, and a runner moving to openssl@4 shipped a
+      # daemon that failed to load on every Mac with openssl@3.
+      - name: Check the daemon links no Homebrew library
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          libs=$(otool -L "target/${{ matrix.target }}/release/senclaw" | tail -n +2)
+          echo "$libs"
+          if grep -E '/opt/homebrew/|/usr/local/' <<<"$libs"; then
+            echo "::error::senclaw links a Homebrew library; it would not start on a Mac without it"
+            exit 1
+          fi
+
       - name: Collect asset
         shell: bash
         run: |

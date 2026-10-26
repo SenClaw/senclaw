@@ -175,7 +175,10 @@ libc = "0.2.186"
 once_cell = "1"
 
 # Git operations for marketplace
-git2 = "0.19"
+# `vendored-openssl` builds OpenSSL into the binary. Without it libgit2/libssh2
+# link the build machine's Homebrew OpenSSL dynamically, and the daemon does not
+# start on a Mac that lacks that exact keg (desktop v0.2.12 linked openssl@4).
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 
 # Repo map / symbol tools — AST parsing via tree-sitter (plans/260912-0141-code-v2 phase 3;
 # unused until that phase lands — remove if it is dropped)
