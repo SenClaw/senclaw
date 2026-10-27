@@ -547,7 +547,21 @@ fn is_readonly_safe_segment(segment: &str) -> bool {
     if first == "find" && toks.iter().any(|t| DANGEROUS_FIND_FLAGS.contains(t)) {
         return false;
     }
+    // `tree -o FILE` writes its listing to a file (it overwrote a source file
+    // with no prompt while it counted as read-only).
+    if first == "tree" && writes_output_flag(&toks[1..]) {
+        return false;
+    }
     true
+}
+
+/// `-o` (also inside a cluster such as `-ao`), `--output`, `--output=…`.
+fn writes_output_flag(args: &[&str]) -> bool {
+    args.iter().any(|t| {
+        *t == "--output"
+            || t.starts_with("--output=")
+            || (t.starts_with('-') && !t.starts_with("--") && t[1..].chars().take_while(|c| c.is_ascii_alphabetic()).any(|c| c == 'o'))
+    })
 }
 
 // ============================================================================
@@ -689,6 +703,10 @@ mod tests {
     fn filter_command_write_paths_blocked() {
         assert!(is_readonly_safe_command("sort file.txt"));
         assert!(!is_readonly_safe_command("sort -o /etc/passwd file.txt"));
+        assert!(!is_readonly_safe_command("tree -o src/main.rs"));
+        assert!(!is_readonly_safe_command("tree -a -o out.txt ."));
+        assert!(!is_readonly_safe_command("tree --output=src/lib.rs"));
+        assert!(is_readonly_safe_command("tree -L 2 src"));
         assert!(!is_readonly_safe_command("sort --output=x file.txt"));
         assert!(!is_readonly_safe_command("sort -no x file.txt"));
         assert!(is_readonly_safe_command("uniq file.txt"));
