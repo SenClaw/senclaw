@@ -1620,6 +1620,18 @@ pub async fn query(
     let mut stop_gate_rounds: u8 = 0;
     let mut evidence = finish_check::Evidence::default();
     let original_prompt = last_user_prompt(&messages);
+    // Spec flow. What the spec gate refused this run and nothing applied later
+    // (target, the gate's words): the answer then says so, because a refused
+    // model still tends to report the change as made. And on the turn after a
+    // review, the spec as it was, to send the agent back once if it never touched
+    // it and to tell the person whether the design changed.
+    let mut spec_blocked: Vec<(String, String)> = Vec::new();
+    let triage = if config.is_subagent || !crate::specs::commands::is_review_results(&original_prompt) {
+        None
+    } else {
+        crate::specs::commands::TriageWatch::start(&config.working_dir, &crate::specs::SpecStore::default_store())
+    };
+    let mut triage_nudged = false;
     // Resilience: retry transient EMPTY_COMPLETION before failing the session.
     let max_empty_retries_cap = max_empty_retries();
     let mut empty_retries: u8 = 0;
@@ -2157,6 +2169,26 @@ pub async fn query(
         } else {
             text_content.clone()
         };
+        // Spec flow notes, from the files and the gate rather than the model: what was
+        // blocked and stayed unchanged, and (after a review) whether the design changed.
+        // Not on an answer the triage nudge is about to send back.
+        let triage_will_nudge = !triage_nudged && !forcing_final && triage.as_ref().is_some_and(|w| w.untouched_with_blockers());
+        let reported = if tool_uses.is_empty() && !config.is_subagent && !triage_will_nudge {
+            let vietnamese = crate::docs::has_vietnamese_diacritics(crate::specs::commands::request_of(&original_prompt))
+                || crate::docs::has_vietnamese_diacritics(&text_content);
+            let mut out = reported;
+            if let Some((_, reason)) = spec_blocked.last() {
+                let targets: Vec<String> = spec_blocked.iter().map(|(t, _)| t.clone()).collect();
+                warn!("[{}] answer after spec-gate refusals on {} - note attached", config.agent_id, targets.join(", "));
+                out = format!("{}\n\n{}", out.trim_end(), crate::specs::commands::blocked_warning(&targets, reason, vietnamese));
+            }
+            if let Some(w) = &triage {
+                out = format!("{}\n\n{}", out.trim_end(), w.note(vietnamese));
+            }
+            out
+        } else {
+            reported
+        };
 
         config
             .event_bus
@@ -2240,6 +2272,16 @@ pub async fn query(
                 }
             }
             if !config.is_subagent && !forcing_final {
+                // The review found blockers and this turn, meant to act on them, left the spec as it was.
+                if triage_will_nudge {
+                    if let Some(w) = &triage {
+                        triage_nudged = true;
+                        info!("[{}] review-results turn left the spec untouched - sending the agent back once", config.agent_id);
+                        messages.push(assistant_msg);
+                        messages.push(create_user_message(vec![ContentBlock::Text { text: w.nudge() }]));
+                        continue;
+                    }
+                }
                 // A skill that works through tools was loaded and nothing was called after it.
                 if skill_nudges < MAX_SKILL_NUDGES {
                     if let Some(skill) = skill_unused.clone() {
@@ -2254,7 +2296,10 @@ pub async fn query(
                 if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES {
                     let unfinished = if announces_without_acting(&text_content) {
                         Some(("ends on a colon", announce_nudge()))
-                    } else if !acted {
+                    } else if !acted && !crate::specs::commands::is_rewritten(&original_prompt) {
+                        // Not on a spec-flow step: there asking the person one question at a time
+                        // is the job. This nudge told gemma-4-e4b "do not ask for approval" in the
+                        // middle of /brainstorm, and it wrote the brief without asking anything.
                         // Nothing edited or run yet. Files the request names that no call has touched.
                         let unopened: Vec<String> = files_named_in(&original_prompt)
                             .into_iter()
@@ -2687,6 +2732,19 @@ pub async fn query(
                     exit_plan_mode_called = false;
                 }
                 skill_unused = track_skill_use(skill_unused.take(), name, input, content, failed);
+                let spec_refused = content.starts_with(crate::specs::gate::REFUSAL_PREFIX);
+                let target = input
+                    .get("file_path")
+                    .or_else(|| input.get("notebook_path"))
+                    .and_then(|v| v.as_str())
+                    .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
+                    .unwrap_or_else(|| name.clone());
+                if spec_refused {
+                    spec_blocked.retain(|(t, _)| t != &target);
+                    spec_blocked.push((target, content.to_string()));
+                } else if !failed && matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
+                    spec_blocked.retain(|(t, _)| t != &target);
+                }
                 if config.coding_session {
                     if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
                         acted = true;
@@ -2708,7 +2766,8 @@ pub async fn query(
                             unverified_edit = true;
                             last_edit_path = input.get("file_path").or_else(|| input.get("notebook_path")).and_then(|v| v.as_str()).map(String::from);
                         }
-                    } else if name == "Bash" {
+                    } else if name == "Bash" && !spec_refused {
+                        // A check the spec gate refused never ran: it neither passed nor failed.
                         if let Some(cmd) = input.get("command").and_then(|v| v.as_str()).filter(|c| is_verification_command(c)) {
                             unverified_edit = false;
                             last_check_failed = failed.then(|| cmd.to_string());

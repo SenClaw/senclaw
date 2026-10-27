@@ -44,6 +44,22 @@ pub fn read_first(path: &str) -> String {
     format!("{REFUSAL_PREFIX} Read {path} in full first (no offset/limit): it is the approved design for this folder.")
 }
 
+/// A spec this long is handed over in the refusal itself; a longer one is not
+/// (the refusal asks for a `Read`), so one refusal never floods the context.
+pub const INLINE_SPEC_MAX_CHARS: usize = 24_000;
+
+/// The refusal for a chat that has not read the approved spec, with the spec
+/// in it. Asked to `Read` it, gemma-4-e4b never did (7 refusals in a row, no
+/// code written); with the text in the result it has seen it, so the gate
+/// records the read and the same change goes through when it is made again.
+pub fn read_first_inline(path: &str, text: &str) -> String {
+    format!(
+        "{REFUSAL_PREFIX} {path} is the approved design for this folder and this chat had not read it. Here it is in full; \
+         make your change again so that it follows this design.\n<spec_file path=\"{path}\">\n{}\n</spec_file>",
+        text.trim_end().replace("</spec_file", "<\\/spec_file")
+    )
+}
+
 /// One tool call as the gate sees it. `tool` is the permission name (the tool
 /// that will actually run, so an alias of `Edit` is an `Edit`) and `input` has
 /// its paths already resolved against the working folder.
@@ -131,9 +147,15 @@ pub fn check(g: &GateInput, store: &SpecStore) -> Option<String> {
     }
     if !g.is_subagent && !g.chat_jid.is_empty() {
         let read = receipts().lock().unwrap_or_else(|p| p.into_inner()).get(g.chat_jid).cloned();
-        let current = read.is_some_and(|(p, h)| p == spec_path && Some(h) == hash);
+        let current = read.is_some_and(|(p, h)| p == spec_path && Some(h.as_str()) == hash.as_deref());
         if !current {
-            return Some(read_first(rel));
+            return Some(match (text.as_deref(), hash) {
+                (Some(text), Some(hash)) if text.chars().count() <= INLINE_SPEC_MAX_CHARS => {
+                    receipts().lock().unwrap_or_else(|p| p.into_inner()).insert(g.chat_jid.to_string(), (spec_path, hash));
+                    read_first_inline(rel, text)
+                }
+                _ => read_first(rel),
+            });
         }
     }
     None
@@ -315,13 +337,44 @@ mod tests {
     }
 
     #[test]
-    fn approved_needs_full_read_receipt() {
+    fn approved_hands_the_spec_over_once_then_lets_the_change_through() {
+        let f = fixture();
+        f.open(&full_spec());
+        f.approve();
+        let jid = "gate-test:inline";
+        let refusal = f.edit("src/a.rs", jid).unwrap();
+        assert!(refusal.starts_with(REFUSAL_PREFIX), "{refusal}");
+        assert!(refusal.contains("<spec_file path=\"docs/designs/s.md\">") && refusal.contains("- [ ] T1"), "{refusal}");
+        // It has seen it now: the same change goes through, no Read needed.
+        assert!(f.edit("src/a.rs", jid).is_none());
+        // A new version of the design is handed over again.
+        std::fs::write(f.root.join(REL), full_spec().replace("T1", "T1 and T2")).unwrap();
+        f.approve();
+        assert!(f.edit("src/a.rs", jid).unwrap().contains("T1 and T2"));
+        assert!(f.edit("src/a.rs", jid).is_none());
+        forget(jid);
+    }
+
+    #[test]
+    fn a_spec_too_long_to_hand_over_asks_for_a_read() {
+        let f = fixture();
+        f.open(&format!("{}{}", full_spec(), "x\n".repeat(INLINE_SPEC_MAX_CHARS)));
+        f.approve();
+        let jid = "gate-test:long";
+        let refusal = f.edit("src/a.rs", jid).unwrap();
+        assert!(refusal.contains("Read docs/designs/s.md in full"), "{refusal}");
+        assert!(f.edit("src/a.rs", jid).is_some());
+        record_read(jid, &json!({"file_path": REL}), &f.wd, &f.store);
+        assert!(f.edit("src/a.rs", jid).is_none());
+        forget(jid);
+    }
+
+    #[test]
+    fn approved_needs_a_read_receipt_per_chat() {
         let f = fixture();
         f.open(&full_spec());
         f.approve();
         let jid = "gate-test:approved";
-        let refusal = f.edit("src/a.rs", jid).unwrap();
-        assert!(refusal.contains("Read docs/designs/s.md in full"), "{refusal}");
         record_read(jid, &json!({"file_path": REL}), &f.wd, &f.store);
         assert!(f.edit("src/a.rs", jid).is_none());
         // Another chat has not read it.
@@ -338,14 +391,16 @@ mod tests {
         let f = fixture();
         f.open(&full_spec());
         f.approve();
-        let jid = "gate-test:partial";
-        record_read(jid, &json!({"file_path": REL, "offset": 3}), &f.wd, &f.store);
-        assert!(f.edit("src/a.rs", jid).is_some());
-        record_read(jid, &json!({"file_path": REL, "limit": 2}), &f.wd, &f.store);
-        assert!(f.edit("src/a.rs", jid).is_some());
-        record_read(jid, &json!({"file_path": REL, "offset": 1, "limit": 2000}), &f.wd, &f.store);
-        assert!(f.edit("src/a.rs", jid).is_none());
-        forget(jid);
+        let read = |input: serde_json::Value, jid: &str| {
+            record_read(jid, &input, &f.wd, &f.store);
+            receipts().lock().unwrap().contains_key(jid)
+        };
+        assert!(!read(json!({"file_path": REL, "offset": 3}), "gate-test:partial-a"));
+        assert!(!read(json!({"file_path": REL, "limit": 2}), "gate-test:partial-b"));
+        assert!(read(json!({"file_path": REL, "offset": 1, "limit": 2000}), "gate-test:partial-c"));
+        for j in ["gate-test:partial-a", "gate-test:partial-b", "gate-test:partial-c"] {
+            forget(j);
+        }
     }
 
     #[test]
@@ -359,6 +414,7 @@ mod tests {
         assert!(f.edit("src/a.rs", jid).is_none());
         std::fs::write(f.root.join(REL), full_spec().replace("T1", "T1 and drop a table")).unwrap();
         let refusal = f.edit("src/a.rs", jid).unwrap();
+        assert!(!refusal.contains("<spec_file"), "a changed spec is not handed over as approved: {refusal}");
         assert!(refusal.contains("changed after it was approved"), "{refusal}");
         forget(jid);
     }

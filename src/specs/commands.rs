@@ -399,6 +399,101 @@ pub fn is_rewritten(prompt: &str) -> bool {
     prompt.starts_with("[Spec flow — ")
 }
 
+/// The person's own words in a turn this module wrote (between `<request>`
+/// tags), else the prompt itself: what to read the person's language from — the
+/// rest of a rewritten turn is English instructions and Vietnamese lens names.
+pub fn request_of(prompt: &str) -> &str {
+    if !is_rewritten(prompt) {
+        return prompt;
+    }
+    prompt
+        .split_once("<request>\n")
+        .and_then(|(_, rest)| rest.split_once("\n</request>"))
+        .map(|(request, _)| request)
+        .unwrap_or(prompt)
+}
+
+/// The turn after a `/review`: the agent is to act on the findings.
+pub fn is_review_results(prompt: &str) -> bool {
+    prompt.starts_with("[Spec flow — REVIEW RESULTS]")
+}
+
+/// What the spec looked like when the review-results turn began, to tell at
+/// its end whether the agent changed it. gemma-4-e4b went three review rounds
+/// without touching the spec and said each time that it had fixed everything.
+#[derive(Debug, Clone)]
+pub struct TriageWatch {
+    path: PathBuf,
+    rel: String,
+    before: String,
+    reviewed_hash: String,
+    blockers: usize,
+}
+
+impl TriageWatch {
+    /// The open spec of the folder `working_dir` is in, with its last review.
+    pub fn start(working_dir: &str, store: &SpecStore) -> Option<Self> {
+        let (root, state) = store.find_root(Path::new(working_dir))?;
+        let review = state.specs.get(&state.active)?.review.clone()?;
+        let path = root.join(&state.active);
+        let before = std::fs::read_to_string(&path).ok()?;
+        Some(Self { path, rel: state.active, before, reviewed_hash: review.hash, blockers: review.blocker })
+    }
+
+    /// The file is byte for byte what it was when the turn began, and the review
+    /// it answers found blockers: the agent has not acted on them.
+    pub fn untouched_with_blockers(&self) -> bool {
+        self.blockers > 0 && std::fs::read_to_string(&self.path).is_ok_and(|now| now == self.before)
+    }
+
+    pub fn nudge(&self) -> String {
+        format!(
+            "{}You have not changed {}, and its review found {} blocker(s). Fix them now: call Edit or Write on {} and change \
+             the design text the findings point at (or record under ## Review Log why a finding is wrong). Do not touch any \
+             other file: code stays locked until the person approves.",
+            crate::zen_core::stuck::AUTOMATIC,
+            self.rel,
+            self.blockers,
+            self.rel
+        )
+    }
+
+    /// One line for the person, from the files and not from the model: did the
+    /// design change since the review, and what that means for `/approve`.
+    pub fn note(&self, vietnamese: bool) -> String {
+        let now = std::fs::read_to_string(&self.path).map(|t| super::design_hash(&t)).unwrap_or_default();
+        let (was, is) = (&self.reviewed_hash[..8.min(self.reviewed_hash.len())], &now[..8.min(now.len())]);
+        match (now == self.reviewed_hash, vietnamese) {
+            (true, true) if self.blockers > 0 => format!(
+                "📋 {}: nội dung thiết kế không đổi (phiên bản {was}), vẫn còn {} blocker — /approve sẽ từ chối cho tới khi spec được sửa và /review lại (hoặc /approve force).",
+                self.rel, self.blockers
+            ),
+            (true, false) if self.blockers > 0 => format!(
+                "📋 {}: the design text is unchanged (version {was}) and still has {} blocker(s) — /approve refuses until it is fixed and reviewed again (or /approve force).",
+                self.rel, self.blockers
+            ),
+            (true, true) => format!("📋 {}: nội dung thiết kế không đổi (phiên bản {was}).", self.rel),
+            (true, false) => format!("📋 {}: the design text is unchanged (version {was}).", self.rel),
+            (false, true) => format!("📋 {}: thiết kế đã đổi từ phiên bản {was} sang {is} — chạy /review để soát bản mới.", self.rel),
+            (false, false) => format!("📋 {}: the design changed from version {was} to {is} — run /review to check the new version.", self.rel),
+        }
+    }
+}
+
+/// What the person reads after an answer in which the spec gate refused changes
+/// that nothing applied later: `targets` are the files (or `Bash`), `reason` the
+/// gate's own words. A model that was refused still tends to say it made the change.
+pub fn blocked_warning(targets: &[String], reason: &str, vietnamese: bool) -> String {
+    let list = targets.join(", ");
+    let reason = reason.trim_start_matches(gate::REFUSAL_PREFIX).trim();
+    let reason: String = reason.lines().next().unwrap_or("").chars().take(240).collect();
+    if vietnamese {
+        format!("⚠️ Luồng spec đã chặn — chưa có thay đổi nào được áp dụng cho: {list}. Lý do: {reason}")
+    } else {
+        format!("⚠️ Blocked by the spec flow — nothing was changed in: {list}. Reason: {reason}")
+    }
+}
+
 fn header(kind: &str, text: &str) -> String {
     format!("[Spec flow — {kind}] The person ran a spec command. Their message, verbatim:\n<request>\n{}\n</request>\n", text.trim())
 }
@@ -419,10 +514,11 @@ pub fn brainstorm_prompt(text: &str, rel: &str, date: &str) -> String {
          - Read the code the idea touches before you ask anything.\n\
          - Ask ONE question per reply: the root problem, who or what uses it, what must not break, what is out of scope.\n\
          - When you can state the idea in 2-3 sentences, ask the person to confirm them.\n\
-         - After they confirm, Write {rel} with exactly these headings:\n\
+         - After they confirm, Write {rel} with exactly these lines as its headings, nothing added to them:\n\
          # <title>\n*   **Status:** Brief\n*   **Date:** {date}\n## Overview\n## The Problem\n## Goals\n## Non-Goals\n\
-         ## Open Questions\n## Anchored Hypothesis   (the 2-3 sentences the person confirmed)\n\
-         ## Options   (2-3 approaches, with pros and cons)\n\
+         ## Open Questions\n## Anchored Hypothesis\n## Options\n\
+         - Under ## Anchored Hypothesis put the 2-3 sentences the person confirmed; under ## Options, 2-3 approaches \
+         with their pros and cons.\n\
          - Then give the person the path and the next steps: the review command to stress-test the idea, or the draft \
          command to write the full spec.\n\
          Reply in the person's language.",
@@ -440,13 +536,15 @@ pub fn draft_prompt(text: &str, rel: &str, commands: Option<&str>) -> String {
          - First write everything from Overview to Risks, then stop and ask the person ONE question about it. Only \
          after they agree, write the Detailed Implementation Plan.\n\
          - Every target file is a line `#### N. `path` (Create|Modify|Delete)` followed by what changes in it.\n\
+         - Under ### Tasks, one line per task: `- [ ] T1 <what to do, in which file>` — a list line, never a heading.\n\
+         - Under ## Critical User Journeys, each journey as Given / When / Then. ## Review Log stays the last section.\n\
          - Commands in the Verification Plan come from the project's commands; no real code, only signatures and \
          schemas; unknowns go under Open Questions.\n\
-         Template:\n\
+         Template — use exactly these lines as the headings, nothing added to them:\n\
          # <title>\n*   **Status:** Draft\n*   **Date:** <today>\n## Overview\n## The Problem\n## Goals\n## Non-Goals\n\
-         ## Open Questions\n## Critical User Journeys   (Given / When / Then)\n## Technical Plan\n\
+         ## Open Questions\n## Critical User Journeys\n## Technical Plan\n\
          ## Alternatives Considered\n## Risks\n## Detailed Implementation Plan\n### Target Files\n\
-         ### Tasks   (- [ ] T1 …)\n### Verification Plan\n## Review Log   (always the last section)\n\
+         ### Tasks\n### Verification Plan\n## Review Log\n\
          Reply in the person's language.",
         header("DRAFT", text)
     )
@@ -458,7 +556,8 @@ pub fn review_prompt(text: &str, rel: &str, result: &review::Review) -> String {
          Kiểm = can it be built from this and does it match the code, Hiểu = a newcomer's reading, Phản biện = critic.\n\
          Findings:\n{}\n(The person can see the full report with the spec status command.)\n\
          Rules for this step:\n\
-         - Do not change source files; only {rel} and other files in {DESIGNS_DIR}/.\n\
+         - Code stays locked until the person approves: do not touch any file but {rel}. Your next tool call is Edit or \
+         Write on {rel}.\n\
          - For each BLOCKER and MAJOR choose FIX (edit the spec), CONTEST (only with evidence a reviewer could read in \
          the spec or the code — never for a Hiểu finding), or ESCALATE (a choice only the person can make: ask them, \
          one question per reply).\n\
@@ -704,6 +803,62 @@ mod tests {
         )
         .await;
         assert!(prompt.contains("[Spec flow — DRAFT]"), "{prompt}");
+    }
+
+    #[test]
+    fn templates_keep_hints_out_of_heading_lines() {
+        let b = brainstorm_prompt("/brainstorm x", "docs/designs/x.md", "2026-10-27");
+        let d = draft_prompt("/draft", "docs/designs/x.md", None);
+        for prompt in [&b, &d] {
+            for line in prompt.lines().filter(|l| l.starts_with("##")) {
+                assert!(!line.contains('(') && !line.contains("- [ ]"), "hint inside a heading: {line}");
+            }
+        }
+        assert!(d.contains("### Tasks\n") && d.contains("- [ ] T1 <what to do"));
+    }
+
+    #[test]
+    fn triage_watch_sees_an_untouched_spec_and_says_so() {
+        let e = env();
+        let rel = open(&e, &full_spec());
+        reviewed(&e, &rel, true, 2);
+        let watch = TriageWatch::start(&e.root.to_string_lossy(), &e.store).unwrap();
+        assert!(watch.untouched_with_blockers());
+        assert!(watch.nudge().contains("Edit or Write on docs/designs/s.md") && watch.nudge().contains("2 blocker(s)"));
+        assert!(watch.note(false).contains("unchanged") && watch.note(false).contains("2 blocker(s)"));
+        assert!(watch.note(true).contains("không đổi"));
+        // A Review Log line is a change of the file, not of the design.
+        std::fs::write(e.root.join(&rel), format!("{}## Review Log\n* CONTEST x\n", full_spec())).unwrap();
+        assert!(!watch.untouched_with_blockers());
+        assert!(watch.note(false).contains("unchanged"));
+        std::fs::write(e.root.join(&rel), full_spec().replace("T2", "T2 with dates")).unwrap();
+        assert!(watch.note(false).contains("changed from version"));
+    }
+
+    #[test]
+    fn the_language_of_a_rewritten_turn_is_the_persons_request() {
+        let e = env();
+        let rel = open(&e, &full_spec());
+        reviewed(&e, &rel, true, 1);
+        let review = review::Review {
+            path: rel.clone(),
+            hash: "0".repeat(64),
+            mode: review::Mode::Design,
+            at: String::new(),
+            findings: Vec::new(),
+            runs: Vec::new(),
+        };
+        let prompt = review_prompt("/review", &rel, &review);
+        assert!(crate::docs::has_vietnamese_diacritics(&prompt), "lens names carry diacritics");
+        assert_eq!(request_of(&prompt), "/review");
+        assert_eq!(request_of("sửa lỗi này"), "sửa lỗi này");
+    }
+
+    #[test]
+    fn blocked_warning_quotes_the_gate() {
+        let w = blocked_warning(&["todo.py".into()], "Error: [spec] No design spec for this folder yet. More.\nsecond line", false);
+        assert_eq!(w, "⚠️ Blocked by the spec flow — nothing was changed in: todo.py. Reason: No design spec for this folder yet. More.");
+        assert!(blocked_warning(&["todo.py".into()], "Error: [spec] x", true).starts_with("⚠️ Luồng spec đã chặn"));
     }
 
     #[tokio::test]
