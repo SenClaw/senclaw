@@ -1,0 +1,86 @@
+diff --git a/todo.py b/todo.py
+index 665235f..ed1c6c1 100644
+--- a/todo.py
++++ b/todo.py
+@@ -1,21 +1,72 @@
+-"""A tiny to-do list kept in memory."""
++from datetime import datetime, date
++from typing import Optional
++# Giả định utils.py đã được tạo và có sẵn các hàm cần thiết
++from utils import validate_and_convert_date, get_today_utc, UTC_TZ
++
++class TaskItem:
++    def __init__(self, task_id: int, title: str, due_date: Optional[datetime]):
++        self.id = task_id
++        self.title = title
++        # Lưu trữ ngày tháng đã được validate và chuyển về UTC
++        self.due_date = due_date 
++        self.done: bool = False
++
++    def is_overdue(self) -> bool:
++        """Kiểm tra xem task có quá hạn không, so sánh với ngày hôm nay UTC."""
++        if self.due_date is None:
++            return False
++        # So sánh chỉ dựa trên date component để đảm bảo tính an toàn nhất qua múi giờ.
++        return self.due_date.date() <= get_today_utc().date()
++
++    def to_dict(self):
++        """Chuyển TaskItem thành dictionary cho việc hiển thị/lưu trữ."""
++        return {
++            "id": self.id, 
++            "title": self.title, 
++            "done": self.done, 
++            # Hiển thị dưới dạng string đã định dạng an toàn bằng hàm utils
++            "due_date": utils.date_to_string_for_display(self.due_date) if self.due_date else None
++        }
+ 
+ 
+ class TodoList:
+     def __init__(self):
+         self.items = []
+ 
+-    def add(self, title):
+-        item = {"id": len(self.items) + 1, "title": title, "done": False}
++    def add(self, title: str, due_date_str: Optional[str] = None) -> TaskItem:
++        """Thêm một task mới vào danh sách."""
++        task_id = len(self.items) + 1
++        due_date = None
++        try:
++            # Sử dụng validation từ utils.py
++            if due_date_str:
++                due_date = validate_and_convert_date(due_date_str)
++        except ValueError as e:
++            print(f"Lỗi khi thêm task {title}: {e}")
++            return None 
++
++        item = TaskItem(task_id, title, due_date)
+         self.items.append(item)
+         return item
+ 
+-    def done(self, item_id):
++    def done(self, item_id: int):
++        """Đánh dấu công việc là hoàn thành."""
+         for item in self.items:
+-            if item["id"] == item_id:
+-                item["done"] = True
++            if item.id == item_id:
++                item.done = True
+                 return item
+-        raise KeyError(item_id)
++        raise KeyError(f"Task ID {item_id} not found.")
+ 
+     def pending(self):
+-        return [i for i in self.items if not i["done"]]
++        """Trả về TẤT CẢ các mục chưa hoàn thành, bao gồm cả Overdue."""
++        # Sắp xếp theo ID tăng dần để đảm bảo tính nhất quán.
++        return sorted([i for i in self.items if not i.done], key=lambda item: item.id)
++
++    def overdue(self) -> list[TaskItem]:
++        """Trả về danh sách các mục chưa hoàn thành và đã quá hạn."""
++        overdue_items = [
++            i for i in self.items 
++            if not i.done and i.is_overdue() # Sử dụng phương thức của TaskItem
++        ]
++        # Sắp xếp theo ID tăng dần, như yêu cầu ban đầu.
++        return sorted(overdue_items, key=lambda item: item.id)
+\ No newline at end of file

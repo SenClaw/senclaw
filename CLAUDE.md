@@ -1717,12 +1717,29 @@ Rules for Claude:
   needs `Stage::Reviewed` (a full spec, reviewed in this version, complete, 0 blocker); `force` skips the review conditions only.
 - **A Code session's folder is its own `allowed_work_dirs[0]`** (`session_dir_in`), never the workspace-state file: outside a project that file
   is the profile's (`workspace-state-main.json`), rewritten by whichever session was opened last.
+- **Kiểm reads the whole spec and judges its plan** (`KiemScope::Whole`). EGM gives the readiness reviewer only the implementation plan;
+  on gemma-4-e4b that lens then reported a type the Technical Plan defines as missing, as a BLOCKER in every round. `KiemScope::Plan`
+  stays only for `measure_kiem_scope_on_a_real_model` (ignored test: alternates both scopes on one spec against a real model).
 - **A lens counts only if it can be read** (`review::parse_findings`: ≥ 1 finding, `NONE`, or "BLOCKER: none" per severity); cut at the
   limit, unreadable, failed, or with a severity word on a line the parser could not read (`### Blockers` over a plain list) keeps the review
   incomplete and `/approve` refuses it. Never let an unparsed reply read as clean. Thinking off, 4096 tokens, 600 s each, one after another.
   Providers answered through `dispatch_completion` report no stop reason (`finish: ""`), so a cut there is not seen.
-- **The read receipt needs a whole-file `Read`** of the current version, and is forgotten wherever the history goes (clear context, `reset`,
-  session wipe, compaction). A subagent needs approval, not a read; it inherits its parent's flow through `TaskTool`'s resolver.
+- **After approval, a chat's first change is refused with the spec in the refusal** (`read_first_inline`, ≤ 24,000 characters) and the read
+  is recorded, so the same change made again goes through. Told to `Read` it, gemma-4-e4b never did (7 refusals, 0 `Read`, no code
+  written — `plans/reports/test-261027-2225-spec-flow-real-model-e4b.md`); do not go back to asking for the read. A longer spec still asks for
+  a whole-file `Read`. Receipts are forgotten wherever the history goes (clear context, `reset`, session wipe, compaction). A subagent
+  needs approval, not a read; it inherits its parent's flow through `TaskTool`'s resolver.
+- **The answer says what the gate blocked** (`spec_blocked` in the loop, `commands::blocked_warning`): files (or `Bash`) refused and not
+  changed later in the run are listed on the reply, never on the message kept for the model — e4b said "I fixed pending()" after its edit was
+  refused. **On the turn after `/review`**, `TriageWatch` sends the agent back once when the spec file is byte for byte unchanged and the
+  review had blockers (e4b went three rounds without touching it, saying each time it had fixed everything), and the reply ends with a 📋
+  line saying whether the design hash changed. Language for these notes comes from the person's `<request>` and the reply
+  (`request_of`), never the whole rewritten turn — its lens names (Cảnh, Kiểm…) made every note Vietnamese.
+- **A spec-flow step is not held to "act, don't ask"**: on a rewritten turn (`is_rewritten`) the loop skips the "has not acted yet and asks /
+  pastes / names unopened files" send-back — it told gemma-4-e4b mid-`/brainstorm` not to ask for approval, and it wrote the brief without
+  asking a single question. The colon "announces and stops" nudge still applies.
+- **A `Bash` the gate refused is no check**: it neither clears nor sets `last_check_failed` (a refused `python3 -m unittest` fired "the last
+  check failed" and the model concluded its tests were broken).
 - **`required` binds Code sessions and project chats only** (`effective_flow`); a chat merely in a git repo runs `on`, and a worktree under
   `SENCLAW_HOME` (a `Task` with `isolation: "worktree"`) is never held by it. `/spec skip` is per chat, in memory, cleared with the receipt.
 - **A refusal starts with `Error: [spec]`** and emits no `ToolExecutionError` (a policy deny, not a broken tool — the failure ledger stays
@@ -1733,6 +1750,8 @@ Rules for Claude:
   never the command: re-running `/review` cost four model calls and could overwrite a complete review. A channel sends the command's own words,
   not the formatted batch, and moves its cursor only to that message.
 - **The `<spec>` block rides in the turn context** (beside recall, never stored, ≤ 1,200 characters, `</spec` defused).
+- **Prompt templates keep hints off heading lines.** e4b copied `## Options   (2-3 approaches…)` and turned every task into
+  `### Tasks   (- [ ] T1) …`, so the spec had no checkboxes; hints are separate lines now (`templates_keep_hints_out_of_heading_lines`).
 
 ## Context compression (`src/context_compress/`)
 

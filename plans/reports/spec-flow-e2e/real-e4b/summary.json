@@ -1,0 +1,160 @@
+{
+ "model": "google/gemma-4-e4b",
+ "steps": [
+  {
+   "pre_refusals": []
+  },
+  {
+   "brainstorm_open": {
+    "active": "docs/designs/261027-them-han-chot-cho-cong-viec.md",
+    "gateRefusals": []
+   }
+  },
+  {
+   "brief": {
+    "written": true,
+    "chars": 2826,
+    "headings": [
+     "## Overview",
+     "## The Problem",
+     "## Goals",
+     "## Non-Goals",
+     "## Open Questions",
+     "## Anchored Hypothesis",
+     "## Options   (2-3 approaches, with pros and cons)"
+    ]
+   }
+  },
+  {
+   "draft": {
+    "hasDetailed": true,
+    "chars": 4896,
+    "headings": [
+     "## Overview",
+     "## The Problem",
+     "## Goals",
+     "## Non-Goals",
+     "## Open Questions",
+     "## Critical User Journeys",
+     "## Technical Plan",
+     "## Alternatives Considered",
+     "## Risks",
+     "## Detailed Implementation Plan",
+     "### Target Files",
+     "#### 1. `todo.py` (Modify)",
+     "### Tasks   (- [ ] T1) Cập nhật `__init__` của `TodoList` để hỗ trợ cấu trúc dữ liệu mới.",
+     "### Tasks   (- [ ] T2) Sửa `add(title)`: Cho phép nhận tham số ngày hết hạn và lưu trữ nó vào mục `item`.",
+     "### Tasks   (- [ ] T3) Viết hàm `overdue_tasks()`: Truy vấn các công việc chưa hoàn thành mà ngày hiện tại đã lớn hơn `due_date`.",
+     "## Verification Plan",
+     "## Review Log"
+    ]
+   }
+  },
+  {
+   "review_1": {
+    "turnSeconds": 168,
+    "lensSeconds": 71,
+    "triageSeconds": 97,
+    "review": {
+     "hash": "74ef7fdad7cf09e0ec4f3a5162904d520aaf0e1c59e6644054334a20563d448c",
+     "at": "2026-10-27T22:10:10+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 6,
+     "major": 14,
+     "nit": 4,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T221010.md"
+    },
+    "specChangedByTriage": 0
+   }
+  },
+  {
+   "review_2": {
+    "turnSeconds": 175,
+    "lensSeconds": 73,
+    "triageSeconds": 102,
+    "review": {
+     "hash": "74ef7fdad7cf09e0ec4f3a5162904d520aaf0e1c59e6644054334a20563d448c",
+     "at": "2026-10-27T22:13:00+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 4,
+     "major": 15,
+     "nit": 4,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T221300.md"
+    },
+    "specChangedByTriage": 1
+   }
+  },
+  {
+   "review_3": {
+    "turnSeconds": 136,
+    "lensSeconds": 78,
+    "triageSeconds": 58,
+    "review": {
+     "hash": "74ef7fdad7cf09e0ec4f3a5162904d520aaf0e1c59e6644054334a20563d448c",
+     "at": "2026-10-27T22:16:00+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 4,
+     "major": 19,
+     "nit": 3,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T221600.md"
+    },
+    "specChangedByTriage": 0
+   }
+  },
+  {
+   "approve_forced": "Approved docs/designs/261027-them-han-chot-cho-cong-viec.md (version 74ef7fda, forced). Code changes in /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/proj are unlocked; every chat reads this spec before its first change. Editing the design text locks them again until /review and /approve."
+  },
+  {
+   "approved": "Approved docs/designs/261027-them-han-chot-cho-cong-viec.md (version 74ef7fda, forced). Code changes in /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/proj are unlocked; every chat reads this spec before its first change. Editing the design text locks them again until /review and /approve."
+  },
+  {
+   "build_1": {
+    "refusals": [],
+    "readSpec": false,
+    "tests": "PASS Ran 3 tests in 0.000s |  | OK"
+   }
+  },
+  {
+   "build_2": {
+    "refusals": [],
+    "tests": "PASS Ran 3 tests in 0.000s |  | OK"
+   }
+  },
+  {
+   "build_3": {
+    "refusals": [],
+    "tests": "PASS Ran 3 tests in 0.000s |  | OK"
+   }
+  },
+  {
+   "final": {
+    "tests": "PASS Ran 3 tests in 0.000s |  | OK",
+    "diff": "",
+    "untracked": "?? docs/\n?? workbench/",
+    "status": "docs/designs/261027-them-han-chot-cho-cong-viec.md — Thêm hạn chót cho công việc và liệt kê việc quá hạn\nstage: approved · version 74ef7fda\nreview: 2026-10-27T22:16:00+07:00 · 4 blocker, 19 major, 3 nit · complete · report /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/home/.senclaw/specs/d5de5be1e5bf01d7/reviews/261027-them-han-chot-cho-cong-viec-20261027T221600.md\napproval: 2026-10-27T22:16:58+07:00 via web (forced)\ntasks: 0/0 · open questions: 0",
+    "totalMinutes": 19
+   }
+  }
+ ]
+}

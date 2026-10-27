@@ -302,7 +302,7 @@ Mở đầu `[Spec flow — <BRAINSTORM|DRAFT|REVIEW RESULTS>] The person ran /<
 | Hướng | Persona | DESIGN: đọc + bằng chứng | BRAINSTORM: đọc + bằng chứng | Hỏi |
 |---|---|---|---|---|
 | **Cảnh** (`canh`) | Skeptical Architect | cả file + chỉ dẫn dự án + repo map | cả file + chỉ dẫn + repo map | DESIGN: gốc vấn đề hay triệu chứng, YAGNI, tối ưu sớm, phát minh lại thứ repo có, sa vào chi tiết, sai tầng. BRAINSTORM: có cần làm không, thứ gì có sẵn giải được |
-| **Kiểm** (`kiem`) | Tech Lead + Codebase Auditor | từ `## Detailed…` tới hết + kết quả kiểm máy + outline file `Modify` + `<project_commands>` | cả file + repo map | DESIGN: Zero-Decision Rule, thiếu file/bước/test, chữ ký không khớp outline. BRAINSTORM: migration, tương thích, rollout/rollback |
+| **Kiểm** (`kiem`) | Tech Lead + Codebase Auditor | cả file, chấm phần `## Detailed…` (sửa G 2026-10-28: chỉ đọc phần kế hoạch thì báo thiếu thứ Technical Plan đã định nghĩa) + kết quả kiểm máy + outline file `Modify` + `<project_commands>` | cả file + repo map | DESIGN: Zero-Decision Rule, thiếu file/bước/test, chữ ký không khớp outline. BRAINSTORM: migration, tương thích, rollout/rollback |
 | **Hiểu** (`hieu`) | Naive Reader | cả file, không gì khác | cả file | thuật ngữ chưa định nghĩa, điều kiện ngầm, "tự động lo", hai cách hiểu |
 | **Phản biện** (`phan_bien`) | Design Critic | phần trên `## Detailed…` | cả file | phương án thay thế bị loại có lý do, giả định chưa chứng minh, điểm hỏng, bảo mật, giới hạn / chi phí, nút thắt |
 
@@ -568,3 +568,5 @@ Code review sau triển khai (2026-10-27 21:17, reviewer code ngữ cảnh trố
 *   m9 kênh: cursor qua cả lô → FIX (cursor dừng ở tin lệnh).
 *   n: refusal phát `ToolExecutionError` → FIX (không phát). `forget` ở mọi compaction → giữ (an toàn hơn). Stop không huỷ review → giới hạn.
 
+
+Chạy thật trên gemma-4-e4b (2026-10-27 22:05–23:15, [báo cáo](../reports/test-261027-2225-spec-flow-real-model-e4b.md)): lượt 1 lộ 6 vấn đề → FIX A (spec trong lời từ chối READ_FIRST + receipt), B (cảnh báo tất định + dòng 📋), C (nhắc triage khi spec y nguyên), D (Bash bị chặn không tính là check), E (template không chú thích trong heading), F' (lượt spec không bị nhắc "đừng hỏi"); lượt 2 + 3 xác nhận.

@@ -1,0 +1,45 @@
+{
+ "model": "google/gemma-4-e4b",
+ "steps": [
+  {
+   "pre_refusals": []
+  },
+  {
+   "brainstorm_open": {
+    "active": "docs/designs/261027-them-han-chot-cho-cong-viec.md",
+    "gateRefusals": []
+   }
+  },
+  {
+   "brief": {
+    "written": true,
+    "chars": 3281,
+    "headings": [
+     "## Overview",
+     "## The Problem",
+     "## Goals",
+     "## Non-Goals",
+     "## Open Questions",
+     "## Anchored Hypothesis",
+     "## Options"
+    ]
+   }
+  },
+  {
+   "brainstorm_questions": [
+    {
+     "step": "brainstorm-1",
+     "seconds": 16,
+     "asked": false,
+     "tail": "ôi có một câu hỏi: **Bạn muốn deadline được lưu trữ dưới dạng kiểu dữ liệu nào (ví dụ: chuỗi ngày tháng \"YYYY-MM-DD\", hay một đối tượng Date thực tế) để dễ dàng so sánh logic \"quá hạn\" trong Python?**"
+    },
+    {
+     "step": "brainstorm-2",
+     "seconds": 73,
+     "asked": false,
+     "tail": "chưa có thay đổi nào được áp dụng cho: todo.py. Lý do: docs/designs/261027-them-han-chot-cho-cong-viec.md is brief, not approved. Only files in docs/designs/ may change until the person runs /approve."
+    }
+   ]
+  }
+ ]
+}

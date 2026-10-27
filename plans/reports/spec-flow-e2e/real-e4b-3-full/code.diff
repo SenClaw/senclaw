@@ -1,0 +1,63 @@
+diff --git a/todo.py b/todo.py
+index 665235f..e2b922c 100644
+--- a/todo.py
++++ b/todo.py
+@@ -1,21 +1,48 @@
+-"""A tiny to-do list kept in memory."""
+-
++import datetime
++from typing import Optional
+ 
+ class TodoList:
++    """A tiny to-do list kept in memory."""
+     def __init__(self):
++        # Khởi tạo với danh sách trống, đảm bảo cấu trúc cơ bản nhất
+         self.items = []
+ 
+-    def add(self, title):
+-        item = {"id": len(self.items) + 1, "title": title, "done": False}
++    def add(self, title: str, due_date: Optional[datetime.date] = None) -> dict:
++        """Thêm công việc mới vào danh sách."""
++        item = {
++            "id": len(self.items) + 1, 
++            "title": title, 
++            "done": False,
++            "due_date": due_date # Thêm trường due_date
++        }
+         self.items.append(item)
+         return item
+ 
+-    def done(self, item_id):
++    def done(self, item_id: int):
++        """Đánh dấu một công việc là đã hoàn thành."""
+         for item in self.items:
+             if item["id"] == item_id:
+-                item["done"] = True
++                # Giữ lại tất cả thuộc tính cũ khi hoàn thành
++                item["done"] = True 
+                 return item
+-        raise KeyError(item_id)
++        raise KeyError(f"Item ID {item_id} not found.")
++
++    def pending(self) -> list:
++        """Trả về danh sách các công việc chưa hoàn thành, sắp xếp theo ID."""
++        # Logic không thay đổi, vẫn trả về danh sách đã sắp xếp theo ID.
++        return sorted([i for i in self.items if not i["done"]], key=lambda item: item["id"])
++
++    def get_overdue(self, target_date: datetime.date) -> list:
++        """Trả về danh sách các tác vụ chưa hoàn thành và có ngày hết hạn <= target_date."""
++        overdue_items = []
++        for item in self.items:
++            # Điều kiện 1: Phải là công việc đang chờ xử lý (Pending)
++            if item["done"]:
++                continue
+ 
+-    def pending(self):
+-        return [i for i in self.items if not i["done"]]
++            due_date = item.get("due_date")
++            # Điều kiện 2: Phải có due_date, và ngày đó phải <= target_date
++            if isinstance(due_date, datetime.date) and due_date <= target_date:
++                overdue_items.append(item)
++        
++        return sorted(overdue_items, key=lambda item: item["id"])
+\ No newline at end of file

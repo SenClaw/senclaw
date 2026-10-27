@@ -23,8 +23,11 @@ dễ dùng không / chi phí và điểm hỏng).
   `docs/designs/*.md` và mọi `Bash` không chỉ-đọc trong thư mục đó bị từ chối, kể cả khi `codeAutonomy = full`. Lời từ chối nói
   lệnh nào mở khoá.
 - **Mọi chat xem spec trước khi làm tiếp.** Mỗi lượt của mọi chat làm việc trong thư mục đó có khối `<spec>` (đường dẫn, giai
-  đoạn, mục tiêu, việc còn lại, luật). Sau khi duyệt, chat nào chưa `Read` **trọn** bản spec hiện tại thì lần sửa đầu tiên bị từ
-  chối. Xoá lịch sử chat (`reset`, "clear context", compaction) thì phải đọc lại.
+  đoạn, mục tiêu, việc còn lại, luật). Sau khi duyệt, lần sửa đầu tiên của một chat chưa đọc bản spec hiện tại bị từ chối **kèm toàn
+  văn spec trong lời từ chối**; sửa lại lần nữa thì được (model nhỏ không tự `Read` khi được bảo). Spec dài hơn 24.000 ký tự thì phải
+  `Read` trọn file. Xoá lịch sử chat (`reset`, "clear context", compaction) thì phải xem lại.
+- **Câu trả lời không nói sai việc đã làm.** Khi cổng đã chặn mà file chưa đổi, câu trả lời có dòng "⚠️ Luồng spec đã chặn…". Sau
+  `/review`, nếu agent không sửa spec mà vẫn còn Blocker thì bị nhắc một lần, và câu trả lời có dòng 📋 cho biết thiết kế đổi hay không.
 - **Chỉ người duyệt.** `/approve` chỉ được nhận từ tin nhắn người gửi (web/desktop, kênh, REST chat của phiên Code); lịch hẹn,
   DAG, kanban không duyệt được; tool của agent không ghi được kho duyệt.
 - **Sửa thiết kế sau khi duyệt thì khoá lại.** Tick `- [x]`, đổi `**Status:**`/`**Date:**`, ghi thêm vào `## Review Log` cuối

@@ -67,7 +67,8 @@ async function command(jid, text, timeoutMs = 15000) {
 }
 const mockReqs = () => (fs.existsSync(`${MOCK}/requests.jsonl`) ? fs.readFileSync(`${MOCK}/requests.jsonl`, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 const results = (tag) => mockReqs().filter((r) => r.tag === tag).flatMap((r) => r.prevResults ?? []);
-const lastResults = (tag) => { const all = mockReqs().filter((r) => r.tag === tag); return all.length ? all[all.length - 1].prevResults ?? [] : []; };
+// The memory extraction that runs after a turn reads the same conversation and is tagged too: not a step.
+const lastResults = (tag) => { const all = mockReqs().filter((r) => r.tag === tag && !r.extraction && !r.lens); return all.length ? all[all.length - 1].prevResults ?? [] : []; };
 const bodiesWith = (needle) => fs.readdirSync(`${MOCK}/bodies`).map((f) => fs.readFileSync(`${MOCK}/bodies/${f}`, 'utf8')).filter((b) => b.includes(needle));
 const lensCalls = () => mockReqs().filter((r) => r.lens);
 const stepsFile = (kind, tag, list) => fs.writeFileSync(`${MOCK}/spec-steps-${kind}.json`, JSON.stringify({ tag, steps: list }));
@@ -108,6 +109,7 @@ check('S0 default specFlow is required', beh.body.specFlow === 'required', JSON.
 await say(A, steps('S1', [editHello('S1')]));
 check('S1 required: edit refused with NO_SPEC', results('S1').some((r) => r.includes('No design spec for this folder yet')), results('S1'));
 check('S1 file untouched', !hello().includes('S1'), hello());
+check('S1 the answer says nothing was changed', replies.some(([j, t]) => j === A && t.includes('Blocked by the spec flow') && t.includes('hello.py')), replies.slice(-2));
 
 // S2: /spec skip lets this chat edit
 const skipped = await command(A, '/spec skip');
@@ -162,6 +164,8 @@ st = state();
 check('S8 review recorded 1 blocker, design mode', st?.specs?.[SPEC]?.review?.blocker === 1 && st.specs[SPEC].review.mode === 'design', JSON.stringify(st?.specs?.[SPEC]?.review));
 const ap8 = await command(A, '/approve');
 check('S8 /approve refused for the blocker', ap8.includes('1 blocker(s)'), ap8);
+check('S8 an untouched spec sends the triage back once', mockReqs().filter((r) => (r.lastText ?? '').includes('You have not changed')).length >= 1);
+check('S8 the answer says the design is unchanged with its blocker', replies.some(([j, t]) => j === A && t.includes('📋') && t.includes('unchanged') && t.includes('1 blocker(s)')), replies.slice(-2));
 
 // S8b: an unreadable lens leaves the review incomplete
 lensAnswers({ hieu: 'Looks good to me overall!' });
@@ -176,22 +180,20 @@ const ap9 = await command(A, '/approve');
 check('S9 /approve after a clean review', ap9.startsWith(`Approved ${SPEC} (version `), ap9);
 check('S9 approval recorded via web', state()?.specs?.[SPEC]?.approval?.via === 'web');
 
-// S10: approved, but this chat has not read it
-await say(A, steps('A1', [editHello('A1')]));
-check('S10 approved spec not read: edit refused (READ_FIRST)', results('A1').some((r) => r.includes(`Read ${SPEC} in full first`)) && !hello().includes('A1'), results('A1'));
-await say(A, steps('A2', [{ t: 'Read', a: { file_path: SPEC_ABS, offset: 5, limit: 3 } }, editHello('A2')]));
-check('S10 a partial read is not a read', lastResults('A2').some((r) => r.includes('in full first')) && !hello().includes('A2'), lastResults('A2'));
-await say(A, steps('A3', [{ t: 'Read', a: { file_path: SPEC_ABS } }, editHello('A3')]));
-check('S10 after a full read the edit lands', hello().includes('A3'), lastResults('A3'));
+// S10: approved, but this chat has not read it: the first change is refused with the spec in the refusal
+await say(A, steps('A1', [editHello('A1'), editHello('A1')]));
+const a1 = lastResults('A1');
+check('S10 first change refused, the approved spec handed over in the refusal', a1[0]?.includes('this chat had not read it') && a1[0]?.includes(`<spec_file path="${SPEC}">`) && a1[0]?.includes('## Detailed Implementation Plan'), a1[0]?.slice(0, 300));
+check('S10 the same change made again lands, no Read needed', hello().includes('A1'), a1);
 
 // S11: a second session sees the spec and must read it too
 const B = await mk('spec-b');
 await say(B, steps('B2', [editHello('B2')]));
 const withCapsule = bodiesWith('run script B2').filter((b) => b.includes('<spec>'));
 check('S11 the new chat carries the <spec> block', withCapsule.length > 0 && withCapsule[0].includes(SPEC) && withCapsule[0].includes('Stage: approved'), withCapsule.length);
-check('S11 the new chat must read before editing', results('B2').some((r) => r.includes('in full first')), results('B2'));
-await say(B, steps('B3', [{ t: 'Read', a: { file_path: SPEC } }, editHello('B3')]));
-check('S11 after its own read the new chat edits', hello().includes('B3'), lastResults('B3'));
+check('S11 the new chat is handed the spec before its first change', results('B2').some((r) => r.includes('<spec_file')), results('B2'));
+await say(B, steps('B3', [editHello('B3')]));
+check('S11 then the new chat edits', hello().includes('B3'), lastResults('B3'));
 
 // S12: ticking a task does not lock; changing the design does
 const ticked = fs.readFileSync(SPEC_ABS, 'utf8').replace('- [ ] T1', '- [x] T1');

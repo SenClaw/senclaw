@@ -1,0 +1,154 @@
+{
+ "model": "google/gemma-4-e4b",
+ "steps": [
+  {
+   "pre_refusals": []
+  },
+  {
+   "brainstorm_open": {
+    "active": "docs/designs/261027-them-han-chot-cho-cong-viec.md",
+    "gateRefusals": []
+   }
+  },
+  {
+   "brief": {
+    "written": true,
+    "chars": 2922,
+    "headings": [
+     "## Overview",
+     "## The Problem",
+     "## Goals",
+     "## Non-Goals",
+     "## Open Questions",
+     "## Anchored Hypothesis",
+     "## Options"
+    ]
+   }
+  },
+  {
+   "draft": {
+    "hasDetailed": true,
+    "chars": 4200,
+    "headings": [
+     "## Overview",
+     "## The Problem",
+     "## Goals",
+     "## Non-Goals",
+     "## Open Questions",
+     "## Critical User Journeys",
+     "### 1. Thêm công việc với deadline",
+     "### 2. Lấy danh sách pending (cần làm)",
+     "### 3. Lấy công việc quá hạn (Overdue)",
+     "## Technical Plan",
+     "## Alternatives Considered",
+     "## Risks",
+     "## Detailed Implementation Plan",
+     "### Target Files",
+     "### Tasks",
+     "### Verification Plan",
+     "## Review Log"
+    ]
+   }
+  },
+  {
+   "review_1": {
+    "turnSeconds": 217,
+    "lensSeconds": 72,
+    "triageSeconds": 145,
+    "review": {
+     "hash": "3d7e6dc2a42287c991ced1181873ed783e1ec0f3ce53ea6379a0373e9f5ea91c",
+     "at": "2026-10-27T22:51:04+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 3,
+     "major": 15,
+     "nit": 1,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T225104.md"
+    },
+    "specChangedByTriage": 1
+   }
+  },
+  {
+   "review_2": {
+    "turnSeconds": 274,
+    "lensSeconds": 80,
+    "triageSeconds": 194,
+    "review": {
+     "hash": "420ba9f6aed336be2b1a64cf3ec58702b7f48e2b10782d9eb9df5cd962b1f709",
+     "at": "2026-10-27T22:54:49+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 4,
+     "major": 13,
+     "nit": 2,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T225449.md"
+    },
+    "specChangedByTriage": 2
+   }
+  },
+  {
+   "review_3": {
+    "turnSeconds": 338,
+    "lensSeconds": 79,
+    "triageSeconds": 259,
+    "review": {
+     "hash": "420ba9f6aed336be2b1a64cf3ec58702b7f48e2b10782d9eb9df5cd962b1f709",
+     "at": "2026-10-27T22:59:22+07:00",
+     "mode": "design",
+     "complete": true,
+     "blocker": 5,
+     "major": 15,
+     "nit": 3,
+     "lenses": {
+      "canh": "ok",
+      "hieu": "ok",
+      "kiem": "ok",
+      "phan_bien": "ok"
+     },
+     "report": "reviews/261027-them-han-chot-cho-cong-viec-20261027T225922.md"
+    },
+    "specChangedByTriage": 2
+   }
+  },
+  {
+   "approve_forced": "Approved docs/designs/261027-them-han-chot-cho-cong-viec.md (version 420ba9f6, forced). Code changes in /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/proj are unlocked; every chat reads this spec before its first change. Editing the design text locks them again until /review and /approve."
+  },
+  {
+   "approved": "Approved docs/designs/261027-them-han-chot-cho-cong-viec.md (version 420ba9f6, forced). Code changes in /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/proj are unlocked; every chat reads this spec before its first change. Editing the design text locks them again until /review and /approve."
+  },
+  {
+   "build_1": {
+    "refusals": [],
+    "readSpec": false,
+    "tests": "PASS Ran 3 tests in 0.000s |  | OK"
+   }
+  },
+  {
+   "build_2": {
+    "refusals": [],
+    "tests": "FAIL TypeError: 'TaskItem' object is not subscriptable |  | ---------------------------------------------------------------------- | Ran 3 tests in 0.000s |  | FAILED (errors=2)"
+   }
+  },
+  {
+   "final": {
+    "tests": "FAIL TypeError: 'TaskItem' object is not subscriptable |  | ---------------------------------------------------------------------- | Ran 3 tests in 0.000s |  | FAILED (errors=2)",
+    "diff": "todo.py | 67 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++--------\n 1 file changed, 59 insertions(+), 8 deletions(-)",
+    "untracked": "M todo.py\n?? docs/\n?? utils.py",
+    "status": "docs/designs/261027-them-han-chot-cho-cong-viec.md — Thêm tính năng hạn chót và hiển thị công việc quá hạn\nstage: approved · version 420ba9f6\nreview: 2026-10-27T22:59:22+07:00 · 5 blocker, 15 major, 3 nit · complete · report /Users/benji/Projects/SenClaw/senclaw/plans/reports/spec-flow-e2e/lan/home/.senclaw/specs/d5de5be1e5bf01d7/reviews/261027-them-han-chot-cho-cong-viec-20261027T225922.md\napproval: 2026-10-27T23:03:41+07:00 via web (forced)\ntasks: 0/5 · open questions: 0",
+    "totalMinutes": 29
+   }
+  }
+ ]
+}
