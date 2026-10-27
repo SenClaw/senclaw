@@ -534,6 +534,17 @@ pub(crate) async fn sessions_chat(
     if prompt.is_empty() {
         return Err(bad("prompt is empty"));
     }
+    // Spec flow: `/approve` and `/spec` are answered here, with no model.
+    let flow = crate::gateway::group_manager::get_spec_flow(&s.config.paths.global_config_path);
+    if let Some(reply) = crate::specs::commands::dispatch(prompt, &g, "rest", flow) {
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "session_id": id,
+            "group_id": id,
+            "reply": reply,
+            "messages": messages_json(&db, &id, &s)?,
+        })));
+    }
     let api = s
         .agent_api
         .clone()

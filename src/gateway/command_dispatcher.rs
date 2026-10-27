@@ -23,6 +23,11 @@ pub const COMMANDS_HELP: &str = "\
   pair [list]               — chats waiting to be connected
   pair approve <CODE>       — let a waiting chat in
   pair reject <ID>          — turn a waiting chat away
+  /brainstorm <idea>        — design first: explore an idea, write a brief in docs/designs/
+  /draft [path]             — turn the open brief into a full spec
+  /review [path]            — four reviewers with no context check the spec (Cảnh, Kiểm, Hiểu, Phản biện)
+  /approve [force]          — approve the reviewed spec; code changes in the folder unlock
+  /spec [use <path>|done|skip] — the open spec's status, switch, close, or skip it for a small fix
   help                      — show this help";
 
 /// Try parsing text as an admin command and execute it.
@@ -149,6 +154,7 @@ pub fn dispatch_command(db: &Db, text: &str, chat_jid: Option<&str>) -> Option<S
         let count = db.delete_group_messages_for_jid(jid).unwrap_or(0);
         let _ = db.delete_agent_timestamp(jid);
         let _ = crate::zen_core::session_store::clear(jid);
+        crate::specs::gate::forget(jid);
         return Some(format!(
             "🗑️ Session reset — cleared {count} messages for {jid}"
         ));

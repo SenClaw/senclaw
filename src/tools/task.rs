@@ -68,6 +68,10 @@ pub type ToolResolver = Arc<dyn Fn() -> Vec<Arc<dyn Tool>> + Send + Sync>;
 /// (e.g. a per-group LLM override) rather than a snapshot taken at construction.
 pub type ProfileResolver = Arc<dyn Fn() -> ModelProfile + Send + Sync>;
 
+/// Closure that returns the spec flow the parent chat runs under, so a
+/// subagent cannot change a folder its parent may not ([`crate::specs::gate`]).
+pub type SpecFlowResolver = Arc<dyn Fn() -> crate::specs::SpecFlow + Send + Sync>;
+
 pub struct TaskTool {
     http_client: Client,
     event_bus: EventBus,
@@ -83,6 +87,7 @@ pub struct TaskTool {
     /// Resolves the model profile at spawn time so subagents inherit the
     /// engine's live model selection (per-group LLM override).
     profile_resolver: ProfileResolver,
+    spec_flow_resolver: SpecFlowResolver,
 }
 
 impl TaskTool {
@@ -97,6 +102,7 @@ impl TaskTool {
         agent_data_dir: String,
         tools_resolver: ToolResolver,
         profile_resolver: ProfileResolver,
+        spec_flow_resolver: SpecFlowResolver,
     ) -> Self {
         Self {
             http_client,
@@ -108,6 +114,7 @@ impl TaskTool {
             agent_data_dir,
             tools_resolver,
             profile_resolver,
+            spec_flow_resolver,
         }
     }
 }
@@ -339,6 +346,7 @@ impl Tool for TaskTool {
             // workflows that need task_done enforcement.
             agent_mode: crate::zen_core::AgentMode::Agent,
             coding_session: false,
+            spec_flow: (self.spec_flow_resolver)(),
             max_run_tokens: None,
             finish_judge: false,
             max_turns_override: None,

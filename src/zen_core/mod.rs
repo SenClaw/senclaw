@@ -1242,6 +1242,9 @@ pub struct ZenCoreOptions {
     /// checkpointed even when it is not a git repository, which is what lets
     /// [`Self::autonomy`] above `Ask` apply to it.
     pub code_session: bool,
+    /// The spec flow as this chat runs it (set per turn by the pool, like
+    /// `autonomy`): what the tool gate in `run_tools` enforces.
+    pub spec_flow: crate::specs::SpecFlow,
 }
 
 impl Default for ZenCoreOptions {
@@ -1274,6 +1277,7 @@ impl Default for ZenCoreOptions {
             max_agent_turns: None,
             autonomy: Autonomy::Ask,
             code_session: false,
+            spec_flow: crate::specs::SpecFlow::default(),
         }
     }
 }

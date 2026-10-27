@@ -284,6 +284,11 @@ pub struct RunContext<'a> {
     pub hook_profile: Option<ModelProfile>,
     /// Session id for hook base payload.
     pub session_id: String,
+    /// A `Task` subagent's run: the spec gate asks it for an approved spec but
+    /// not for a read of it (the chat that delegated read it).
+    pub is_subagent: bool,
+    /// What the spec gate enforces ([`crate::specs::gate`]).
+    pub spec_flow: crate::specs::SpecFlow,
 }
 
 // ============================================================================
@@ -370,6 +375,8 @@ async fn run_serially(
             hook_client: ctx.hook_client.clone(),
             hook_profile: ctx.hook_profile.clone(),
             session_id: ctx.session_id.clone(),
+            is_subagent: ctx.is_subagent,
+            spec_flow: ctx.spec_flow,
         };
         results.extend(run_single_tool(tu, cancel, &dynamic_ctx).await);
 
@@ -562,6 +569,35 @@ async fn run_single_tool(
     } else {
         input
     };
+
+    // Spec flow: a folder with an open spec takes no change until a person
+    // approved the design and this chat read it. Before the permission layer,
+    // so no autonomy level, skip flag or PrePermission hook steps around it.
+    if let Some(refusal) = crate::specs::gate::check(
+        &crate::specs::gate::GateInput {
+            tool: tool.permission_name(),
+            input: &input,
+            working_dir: ctx.working_dir,
+            chat_jid: ctx.chat_jid,
+            is_subagent: ctx.is_subagent,
+            flow: ctx.spec_flow,
+        },
+        &crate::specs::SpecStore::default_store(),
+    ) {
+        // A refusal like a permission denial: no `ToolExecutionError`, so the
+        // failure ledger does not count a policy decision as a broken tool.
+        tracing::info!(
+            "[RunTools] spec gate refused agent={} tool={} id={}",
+            ctx.agent_id,
+            tool_name,
+            tool_id
+        );
+        return vec![ContentBlock::ToolResult {
+            tool_use_id: tool_id,
+            content: refusal,
+            is_error: true,
+        }];
+    }
 
     // Permission check for write tools
     if !tool.is_read_only() {
@@ -760,6 +796,14 @@ async fn run_single_tool(
                 tool_id,
                 outputs.len()
             );
+            if ctx.spec_flow != crate::specs::SpecFlow::Off && tool.permission_name() == "Read" {
+                crate::specs::gate::record_read(
+                    ctx.chat_jid,
+                    &input,
+                    ctx.working_dir,
+                    &crate::specs::SpecStore::default_store(),
+                );
+            }
             let mut results = Vec::new();
             for output in outputs {
                 match output {
@@ -1224,6 +1268,8 @@ mod tests {
             hook_client: None,
             hook_profile: None,
             session_id: String::new(),
+            is_subagent: false,
+            spec_flow: crate::specs::SpecFlow::Off,
         }
     }
 

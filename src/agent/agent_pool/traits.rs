@@ -122,6 +122,10 @@ pub trait CoreApi: Send + Sync {
         let _ = (jid, level, code_session);
     }
 
+    /// The spec flow this chat runs under ([`crate::specs::effective_flow`]).
+    /// Remembered for an engine not created yet and applied live to one that is.
+    fn set_spec_flow(&self, _jid: &str, _flow: crate::specs::SpecFlow) {}
+
     /// Hot-update Thinking-mode flag for an existing core.
     fn update_thinking(&self, jid: &str, enabled: bool) {}
 

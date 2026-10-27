@@ -79,6 +79,8 @@ pub struct ZenCoreApi {
     /// Per-chat [`crate::zen_core::Autonomy`], kept for engines created later
     /// (`ensure_engine` builds its options from here) and pushed to live ones.
     autonomies: Mutex<HashMap<String, (crate::zen_core::Autonomy, bool)>>,
+    /// The spec flow each chat runs under, kept for an engine not created yet.
+    spec_flows: Mutex<HashMap<String, crate::specs::SpecFlow>>,
 }
 
 /// Wire-format tool-execution event used by the AgentPool → WS gateway path.
@@ -113,6 +115,7 @@ impl ZenCoreApi {
             usage_recorder: Arc::new(Mutex::new(None)),
             default_skip_permissions: std::sync::atomic::AtomicBool::new(false),
             autonomies: Mutex::new(HashMap::new()),
+            spec_flows: Mutex::new(HashMap::new()),
         }
     }
 
@@ -218,6 +221,7 @@ impl ZenCoreApi {
         // keep both guards alive to the end of the statement, and a std mutex
         // taken twice by one thread never comes back.
         let (autonomy, code_session) = self.autonomies.lock().unwrap().get(jid).copied().unwrap_or_default();
+        let spec_flow = self.spec_flows.lock().unwrap().get(jid).copied().unwrap_or_default();
         let opts = ZenCoreOptions {
             instance_id: jid.to_string(),
             model_config_id: self.model_overrides.lock().unwrap().get(jid).cloned(),
@@ -232,6 +236,7 @@ impl ZenCoreApi {
             skip_mcp_tool_permission: skip,
             autonomy,
             code_session,
+            spec_flow,
             ..Default::default()
         };
         let engine = ZenEngine::new(opts, self.mcp_manager.clone());
@@ -570,6 +575,13 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn set_spec_flow(&self, jid: &str, flow: crate::specs::SpecFlow) {
+        self.spec_flows.lock().unwrap().insert(jid.to_string(), flow);
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_spec_flow(flow);
+        }
+    }
+
     fn update_thinking(&self, jid: &str, enabled: bool) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.update_thinking(enabled);
@@ -727,6 +739,7 @@ impl CoreApi for ZenCoreApi {
 
     fn clear_llm_session_history(&self, jid: &str) {
         let _ = crate::zen_core::session_store::clear(jid);
+        crate::specs::gate::forget(jid);
         if let Some(engine) = self.engines.lock().unwrap().get(jid).cloned() {
             engine.wipe_persisted_history();
         }

@@ -725,6 +725,9 @@ pub struct QueryConfig {
     /// observation-aware stuck detector instead of the name-based stall guard.
     /// Never set for subagents or compaction.
     pub coding_session: bool,
+    /// What the spec gate in `run_tools` enforces for this run (a subagent
+    /// gets its parent chat's).
+    pub spec_flow: crate::specs::SpecFlow,
     /// Stop the run once it has processed this many tokens (input + output, every
     /// call of this user input). `None` = no cap.
     pub max_run_tokens: Option<u64>,
@@ -2425,6 +2428,8 @@ pub async fn query(
             hook_client: config.hook_client.clone(),
             hook_profile: config.hook_profile.clone(),
             session_id: config.session_id.clone(),
+            is_subagent: config.is_subagent,
+            spec_flow: config.spec_flow,
         };
 
         // Intercept exact-duplicate tool calls. A weak model often re-issues
@@ -2493,6 +2498,7 @@ pub async fn query(
             skill_unused = None;
             if !config.chat_jid.is_empty() {
                 let _ = crate::zen_core::session_store::clear(&config.chat_jid);
+                crate::specs::gate::forget(&config.chat_jid);
             }
             messages.push(restart);
             // Trigger mode switch if needed (this matches TS behaviour)
@@ -2685,7 +2691,12 @@ pub async fn query(
                     if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit" | "Bash") {
                         acted = true;
                     }
-                    if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit") {
+                    // A spec-gate refusal is not an edit that missed: sending the agent back to
+                    // retry it would only meet the same refusal. It counts as acting (above), so
+                    // the agent may tell the person which command unlocks the folder.
+                    if matches!(name.as_str(), "Edit" | "Write" | "NotebookEdit")
+                        && !content.starts_with(crate::specs::gate::REFUSAL_PREFIX)
+                    {
                         let target = input.get("file_path").or_else(|| input.get("notebook_path")).and_then(|v| v.as_str()).unwrap_or("");
                         edits.record(target, failed, content);
                     }

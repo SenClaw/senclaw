@@ -55,6 +55,7 @@ pub mod scheduler;
 pub mod security;
 pub mod setup;
 pub mod skills;
+pub mod specs;
 pub mod subagents;
 pub mod tools;
 pub mod trajectory;
@@ -170,7 +171,12 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         // running turn's tool results (or chained as the next turn) instead of
         // waiting behind the whole turn in the GroupQueue. Image messages keep
         // the full path (the queue is text-only).
-        if attachments.is_empty() && self.agent_pool.queue_input_if_processing(group_jid, text) {
+        // A spec command (`/review` …) waits its turn instead: the pool rewrites
+        // it before the agent sees it, which a mid-turn input never reaches.
+        if attachments.is_empty()
+            && !crate::specs::commands::is_agent_command(text)
+            && self.agent_pool.queue_input_if_processing(group_jid, text)
+        {
             return;
         }
         let agent_pool = Arc::clone(&self.agent_pool);

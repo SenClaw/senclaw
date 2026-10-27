@@ -369,6 +369,13 @@ impl ZenEngine {
                 .map(|e| e.resolve_model_profile())
                 .unwrap_or_else(|| ZenEngine::resolve_model_profile_with(None))
         });
+        let engine_for_flow = Arc::downgrade(&engine);
+        let spec_flow_resolver: crate::tools::task::SpecFlowResolver = Arc::new(move || {
+            engine_for_flow
+                .upgrade()
+                .map(|e| e.options.read().unwrap().spec_flow)
+                .unwrap_or_default()
+        });
         engine.register_tool(Arc::new(TaskTool::new(
             engine.http_client.clone(),
             engine.event_bus.clone(),
@@ -379,6 +386,7 @@ impl ZenEngine {
             engine.options.read().unwrap().agent_data_dir.clone(),
             tools_resolver,
             profile_resolver,
+            spec_flow_resolver,
         )));
 
         // Register custom memory directory with MemoryManager if provided
@@ -2019,6 +2027,7 @@ impl ZenEngine {
                 // knows whether to enforce task_done (Plan/Dag only).
                 agent_mode: opts.agent_mode,
                 coding_session,
+                spec_flow: opts.spec_flow,
                 // A coding task is dozens of read-edit-run turns, not the thirty a chat
                 // gets; the stuck detector and the token cap are what stop a runaway.
                 max_turns_override: opts.max_agent_turns.or(coding_session.then_some(limits.code_max_turns)),
@@ -2726,6 +2735,7 @@ until you have carried out the skill's steps.\n\
             turn_context: None,
             agent_mode: opts.agent_mode,
             coding_session: false,
+            spec_flow: opts.spec_flow,
             max_run_tokens: None,
             finish_judge: false,
             max_turns_override: None,
@@ -2773,6 +2783,12 @@ until you have carried out the skill's steps.\n\
     /// re-derived from the next question anyway.
     pub fn set_turn_context(&self, block: Option<String>) {
         self.options.write().unwrap().turn_context = block;
+    }
+
+    /// The spec flow this chat runs under from the next tool call on (read per
+    /// turn by the pool; a `Task` subagent inherits it through its resolver).
+    pub fn set_spec_flow(&self, flow: crate::specs::SpecFlow) {
+        self.options.write().unwrap().spec_flow = flow;
     }
 
     /// Hot-update the per-group LLM override for this engine. `id` is an entry id

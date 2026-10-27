@@ -399,6 +399,10 @@ pub(super) struct GlobalConfig {
         rename = "codeAutonomy"
     )]
     pub(super) code_autonomy: Option<String>,
+    /// Design before code (`off` | `on` | `required`, see `crate::specs::SpecFlow`).
+    /// Absent means `required`.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "specFlow")]
+    pub(super) spec_flow: Option<String>,
     /// Limits of one coding request (`crate::zen_core::conversation`).
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "agentLimits")]
     pub(super) agent_limits: Option<AgentLimitsConfig>,

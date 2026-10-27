@@ -157,6 +157,25 @@ pub fn get_code_autonomy(config_path: &Path) -> crate::zen_core::Autonomy {
         .unwrap_or(crate::zen_core::Autonomy::Auto)
 }
 
+/// Whether a chat designs before it codes (`crate::specs`). Absent or
+/// unreadable means `required`: a Code session or project chat writes and gets
+/// a spec approved before its first change, and `/spec skip` waives it for a
+/// small fix. `on` gates only folders that already have a spec; `off` turns the
+/// flow off.
+pub fn get_spec_flow(config_path: &Path) -> crate::specs::SpecFlow {
+    load_global_config(config_path)
+        .spec_flow
+        .as_deref()
+        .and_then(crate::specs::SpecFlow::parse)
+        .unwrap_or(crate::specs::SpecFlow::Required)
+}
+
+pub fn save_spec_flow(config_path: &Path, flow: crate::specs::SpecFlow) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    cfg.spec_flow = Some(flow.as_str().to_string());
+    save_global_config(config_path, &cfg)
+}
+
 pub fn save_code_autonomy(config_path: &Path, level: crate::zen_core::Autonomy) -> Result<()> {
     let mut cfg = load_global_config(config_path);
     cfg.code_autonomy = Some(level.as_str().to_string());

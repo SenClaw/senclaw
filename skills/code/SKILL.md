@@ -1,7 +1,7 @@
 ---
 name: code
 description: Read, search, edit, and verify source code in the chat's working directory with the built-in tools (Read/Grep/Glob/Edit/Write/Bash/Task), and hand multi-file refactors to a Cowork DAG. Use when the user asks to fix a bug, add a feature, refactor, write tests, or explain code in a repository.
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Code — working on a repository from chat
@@ -57,6 +57,17 @@ Do **not** call `read_file`, `edit_file`, `get_skeleton`, `graph_*` or any
 3. **Change the smallest thing**: one concern per edit; keep the project's conventions (naming, error types, test layout).
 4. **Verify**: run the narrowest useful command (`cargo test -- <name>`, `npx tsc --noEmit`, `flutter analyze <file>`), then broaden when shared code changed. Paste the failing output verbatim if something fails — do not hide it.
 5. **Report**: list changed files as `path:line`, what was verified, and what was not.
+
+## Design first: the spec flow
+
+When the folder has an open spec, every turn carries a `<spec>` block with its path, stage and rule.
+
+- Before the spec is approved only `docs/designs/*.md` may change; an edit elsewhere comes back
+  `Error: [spec] … not approved`. Do not try another tool or path for the same change — tell the person the command that unlocks it.
+- After approval, `Read` the whole spec (no `offset`/`limit`) before your first change in this chat; tick `- [x]` in its Tasks as you
+  finish them. If the code must differ from the design, stop and say so: editing the design text locks the folder again.
+- `/brainstorm`, `/draft`, `/review` arrive as instructions for that step (`[Spec flow — …]`); follow them, one question per reply.
+- `/approve` and `/spec skip` are the person's; never ask for them through a tool, never claim the spec is approved.
 
 ## When to use a Cowork DAG instead
 

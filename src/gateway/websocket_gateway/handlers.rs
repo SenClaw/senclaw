@@ -1187,6 +1187,24 @@ pub(crate) async fn handle_message_send(
             }
             return;
         }
+
+        // Spec flow: `/approve` and `/spec` are answered here, with no model;
+        // `/brainstorm`, `/draft` and `/review` only when they cannot run.
+        if let Some(group) = state.group_manager.get(&state.db, &group_jid) {
+            let flow = crate::gateway::group_manager::get_spec_flow(&state.config.paths.global_config_path);
+            if let Some(output) = crate::specs::commands::dispatch(&text, &group, "web", flow) {
+                send_json(
+                    sender,
+                    &serde_json::json!({
+                        "type": "agent:reply",
+                        "groupJid": group_jid,
+                        "text": output,
+                        "ts": chrono::Utc::now().to_rfc3339(),
+                    }),
+                );
+                return;
+            }
+        }
     }
 
     // Pending binding check.

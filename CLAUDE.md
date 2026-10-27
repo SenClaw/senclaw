@@ -1689,6 +1689,51 @@ Rules for Claude:
 - **A plan approval also resets the stored mode.** `AgentPool::set_agent_mode` keeps the mode in `pending_agent_modes` so it survives an engine rebuild; the engine flips itself to Agent on approval, so `resolve_plan_exit` writes "Agent" there for `startEditing` / `clearContextAndStart` (a cancel keeps Plan).
 - **A skill that names tools, loaded, and then a text-only answer is sent back twice** (`track_skill_use`, `skill_unused_nudge`, `MAX_SKILL_NUDGES`), then the reply carries `skill_unused_warning`. "Names tools" = the skill's result holds an `mcp__server__tool` mention; `ToolSearch`, `Skill`, planning and asking calls (`NON_ACTING_TOOLS`) do not count as using it, a failed real call does. All chats, main agent only. A skill forced in before the turn (`#name`, router) is not covered: only the `Skill` tool call arms it. End-to-end check against a scratch daemon with a scripted LLM, before and after: `plans/reports/plan-exit-e2e/`.
 
+## Spec flow: design before code (`src/specs/`)
+
+`/brainstorm` → `/draft` → `/review` → `/approve`, after Google's Elephant-Goldfish Model: the chat's agent writes the spec into the repo
+(`docs/designs/*.md`), four reviewers that never saw the conversation read it (Cảnh, Kiểm, Hiểu, Phản biện — one empty-context model call each,
+plus a checklist in code), a person approves. `specFlow` (`required` default | `on` | `off`, `/api/agent-behavior`, read per turn). Guide:
+[docs/spec-flow.md](docs/spec-flow.md); design, review log and the decisions behind each rule: `plans/261027-1505-code-spec-flow/design.md`.
+
+Rules for Claude:
+
+- **The gate is code, not a prompt** (`specs::gate::check`, in `run_single_tool` after the PreToolUse hook and before the permission
+  layer — no autonomy level, skip flag or PrePermission hook steps around it). EGM itself only asks the model; gemma-4-e4b does not listen.
+- **A file change is judged by its target, never by the chat's cwd** (`SpecStore::find_root` walks up from the file's folder, stopping
+  before `$HOME` and `/`). Keyed by cwd, a `workspace_switch` or an absolute path stepped around it. `Bash` has no target, so it is judged by
+  the folder it runs in: a chat whose folder is a *parent* of a spec root can `cd` into it (accepted; refusing every write under a parent
+  would hold unrelated folders).
+- **Paths are compared after `normalize_path`**, which resolves each existing prefix on disk before applying the next component, so `..`
+  after a link climbs out of the link's target as the kernel does (textual `..` first let `/x/link/../state.json` pass for `/x/state.json`).
+  The design-phase exception is a regular `.md` file under `<root>/docs/designs/`, never a symlink.
+- **What a tool must never change lives outside the repo** (`~/.senclaw/specs/<key>/state.json`, written only through `SpecStore::update`:
+  one process lock, re-read, closure, `write_atomic`), and every `Edit`/`Write` into that store is refused. The approval is bound to
+  `design_hash` (NFC, LF, no trailing spaces, ticks, `**Status:**`/`**Date:**` and a *trailing* `## Review Log` ignored — a Review Log
+  heading in the middle hides nothing).
+- **Approval, and switching which spec is open, are a person's message through the gateway** (`specs::commands::dispatch`: WS handler,
+  `message_router`, the Code-session REST chat). The pool never answers `/approve`, and `resolve_open` refuses a `/draft`/`/review` path that
+  is not the open spec — otherwise a scheduled `/draft docs/designs/old.md` reopened an old approved spec with nobody involved. `/approve`
+  needs `Stage::Reviewed` (a full spec, reviewed in this version, complete, 0 blocker); `force` skips the review conditions only.
+- **A Code session's folder is its own `allowed_work_dirs[0]`** (`session_dir_in`), never the workspace-state file: outside a project that file
+  is the profile's (`workspace-state-main.json`), rewritten by whichever session was opened last.
+- **A lens counts only if it can be read** (`review::parse_findings`: ≥ 1 finding, `NONE`, or "BLOCKER: none" per severity); cut at the
+  limit, unreadable, failed, or with a severity word on a line the parser could not read (`### Blockers` over a plain list) keeps the review
+  incomplete and `/approve` refuses it. Never let an unparsed reply read as clean. Thinking off, 4096 tokens, 600 s each, one after another.
+  Providers answered through `dispatch_completion` report no stop reason (`finish: ""`), so a cut there is not seen.
+- **The read receipt needs a whole-file `Read`** of the current version, and is forgotten wherever the history goes (clear context, `reset`,
+  session wipe, compaction). A subagent needs approval, not a read; it inherits its parent's flow through `TaskTool`'s resolver.
+- **`required` binds Code sessions and project chats only** (`effective_flow`); a chat merely in a git repo runs `on`, and a worktree under
+  `SENCLAW_HOME` (a `Task` with `isolation: "worktree"`) is never held by it. `/spec skip` is per chat, in memory, cleared with the receipt.
+- **A refusal starts with `Error: [spec]`** and emits no `ToolExecutionError` (a policy deny, not a broken tool — the failure ledger stays
+  clean): `finish_check` reads it as a failure and `EditTally` ignores it (no "No change was applied" nudge into a retry). The stuck detector
+  still counts it — four identical refusals end the run with an answer, which is the point.
+- **The three agent commands skip the mid-turn queue and the composer directives** (`enqueue_and_process`, pool): the pool rewrites the turn
+  into the step's instructions, which a mid-turn input never reaches. A transient-error retry re-sends the rewritten turn (`retry_prompt`),
+  never the command: re-running `/review` cost four model calls and could overwrite a complete review. A channel sends the command's own words,
+  not the formatted batch, and moves its cursor only to that message.
+- **The `<spec>` block rides in the turn context** (beside recall, never stored, ≤ 1,200 characters, `</spec` defused).
+
 ## Context compression (`src/context_compress/`)
 
 Long tool results are shrunk **once, where they are created** (`run_tools`, right before the result becomes a `ContentBlock::ToolResult`), because the history re-sends them with every later call. Tier 1 prints an MCP result's envelope and JSON compactly (same data); tier 2 leaves rows of a long JSON array or lines of a long log out, saves the full text under the chat's workspace and says where in a footer. On by default; `contextCompression` in `config.json`, served by `/api/agent-behavior`, switch in Settings → Agent behavior (web + desktop). Guide, thresholds and measured sizes: [docs/context-compression.md](docs/context-compression.md); the Headroom research behind it: `plans/reports/research-261023-1209-headroom-context-compression.md`.

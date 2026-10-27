@@ -217,6 +217,20 @@ impl MessageRouter {
             return;
         }
 
+        // 4b. Spec flow commands. `/approve` and `/spec` are answered here; a
+        // spec command the agent carries out goes on with its own words (below),
+        // not folded into the formatted batch of recent messages.
+        let spec_flow = crate::gateway::group_manager::get_spec_flow(&self.config.paths.global_config_path);
+        if let Some(result) = crate::specs::commands::dispatch(&msg.content, &group, &group.channel, spec_flow) {
+            tracing::info!("[MessageRouter] Spec command handled for {}", msg.chat_jid);
+            self.agent_api
+                .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
+                .await;
+            return;
+        }
+        let spec_command = crate::specs::commands::is_agent_command(&msg.content)
+            .then(|| (msg.content.clone(), msg.timestamp.clone()));
+
         tracing::info!("[MessageRouter] Triggering agent for {}", msg.chat_jid);
 
         // 5. Update last-active
@@ -234,7 +248,7 @@ impl MessageRouter {
             .enqueue(
                 &jid_key,
                 Box::pin(async move {
-                    run_agent(agent_api, db, jid, g).await;
+                    run_agent(agent_api, db, jid, g, spec_command).await;
                 }),
             )
             .await;
@@ -500,9 +514,29 @@ pub struct DispatchTaskCallbacks {
 
 // ===== Standalone agent runner =====
 
-async fn run_agent(agent_api: Arc<dyn AgentApi>, db: Arc<Db>, jid: String, group: GroupBinding) {
+/// `command`: a spec command (`/brainstorm`, `/draft`, `/review`) and its
+/// timestamp, sent as the turn's whole prompt so the agent pool recognises and
+/// rewrites it. The cursor stops at that message: anything said after it is
+/// still unseen and gets its own turn.
+async fn run_agent(
+    agent_api: Arc<dyn AgentApi>,
+    db: Arc<Db>,
+    jid: String,
+    group: GroupBinding,
+    command: Option<(String, String)>,
+) {
     let prompt_built_at = chrono_now();
-    let built = crate::agent::session_bridge::build_group_prompt(&db, &jid);
+    let mut built = crate::agent::session_bridge::build_group_prompt(&db, &jid);
+    if let Some((command, at)) = command {
+        built.prompt = command;
+        built.attachments.clear();
+        built.last_timestamp = Some(at.clone());
+        if let Err(e) = agent_api.process_and_wait_with_attachments(&jid, &group, &built.prompt, &[]).await {
+            tracing::error!("[MessageRouter] Agent error for {jid}: {e:#}");
+        }
+        let _ = db.set_last_agent_timestamp(&jid, &at);
+        return;
+    }
 
     if built.prompt.is_empty() {
         tracing::warn!("[MessageRouter] Empty prompt for {jid}, skipping");

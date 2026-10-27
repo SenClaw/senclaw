@@ -28,6 +28,10 @@
 //! - **codeMaxTurns** / **maxRunTokens** / **finishJudge** — what one coding request may
 //!   use (500 turns, 10M tokens, no judge by default); a chat keeps its 30 turns.
 //!
+//! - **specFlow** — design before code (`crate::specs`): `required` (the default:
+//!   a Code session or project chat gets a spec approved before its first change),
+//!   `on` (only a folder with an open spec is held) or `off`.
+//!
 //! All six are persisted in the global config (`~/.senclaw/config.json`) and
 //! read per-turn by `AgentPool`.
 
@@ -55,6 +59,7 @@ fn current(s: &UiState) -> serde_json::Value {
         "memoryRecall": get_memory_recall_enabled(path),
         "contextCompression": get_context_compression_enabled(path),
         "codeAutonomy": get_code_autonomy(path).as_str(),
+        "specFlow": crate::gateway::group_manager::get_spec_flow(path).as_str(),
         "codeMaxTurns": limits.code_max_turns,
         "maxRunTokens": limits.max_run_tokens,
         "finishJudge": limits.finish_judge,
@@ -82,6 +87,9 @@ pub(crate) struct AgentBehaviorBody {
     /// `ask` | `auto` | `full`; anything else is a 400, not a silent `auto`.
     #[serde(rename = "codeAutonomy")]
     code_autonomy: Option<String>,
+    /// `off` | `on` | `required`; anything else is a 400.
+    #[serde(rename = "specFlow")]
+    spec_flow: Option<String>,
     /// Most tool-calling turns of one coding request, 10..=5000.
     #[serde(rename = "codeMaxTurns")]
     code_max_turns: Option<u64>,
@@ -123,6 +131,13 @@ pub(crate) async fn agent_behavior_set(
             AppError(StatusCode::BAD_REQUEST, format!("codeAutonomy must be ask, auto or full, not {v:?}"))
         })?;
         save_code_autonomy(path, level)
+            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+    if let Some(v) = body.spec_flow {
+        let flow = crate::specs::SpecFlow::parse(&v).ok_or_else(|| {
+            AppError(StatusCode::BAD_REQUEST, format!("specFlow must be off, on or required, not {v:?}"))
+        })?;
+        crate::gateway::group_manager::save_spec_flow(path, flow)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
     if let Some(n) = body.code_max_turns {
@@ -179,6 +194,21 @@ mod tests {
             Ok(Json(v)) => v,
             Err(_) => panic!("agent_behavior_set failed"),
         }
+    }
+
+    #[tokio::test]
+    async fn spec_flow_is_required_until_changed_and_refuses_an_unknown_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        let s = state(&config_path);
+        let Json(v) = agent_behavior_get(State(s.clone())).await;
+        assert_eq!(v["specFlow"], "required", "{v}");
+        let v = post(&s, json!({"specFlow": "on"})).await;
+        assert_eq!(v["specFlow"], "on");
+        assert_eq!(crate::gateway::group_manager::get_spec_flow(&config_path), crate::specs::SpecFlow::On);
+        let body: AgentBehaviorBody = serde_json::from_value(json!({"specFlow": "sometimes"})).unwrap();
+        assert!(agent_behavior_set(State(s.clone()), Json(body)).await.is_err());
+        assert_eq!(crate::gateway::group_manager::get_spec_flow(&config_path), crate::specs::SpecFlow::On);
     }
 
     #[tokio::test]

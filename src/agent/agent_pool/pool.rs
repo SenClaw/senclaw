@@ -895,6 +895,21 @@ impl AgentPool {
         Ok(Some((project, root)))
     }
 
+    /// The `<spec>` block for the turn about to start: the open spec of the
+    /// folder this chat works in, unless the flow is off for it.
+    fn spec_capsule(&self, jid: &str, binding: &GroupBinding, config_path: Option<&std::path::Path>) -> Option<String> {
+        let flow = crate::gateway::group_manager::get_spec_flow(config_path?);
+        if crate::specs::effective_flow(flow, binding) == crate::specs::SpecFlow::Off {
+            return None;
+        }
+        let dir = self
+            .effective_work_dir(jid, binding)
+            .or_else(|| crate::specs::session_dir(binding))?;
+        let store = crate::specs::SpecStore::default_store();
+        let (root, state) = store.find_root(&dir)?;
+        crate::specs::capsule(&root, &state)
+    }
+
     /// Hand the engine the `<project>` block for the turn about to start.
     pub(crate) fn push_project_context(&self, jid: &str, binding: &GroupBinding) {
         self.core_api
@@ -1971,6 +1986,11 @@ impl AgentPool {
                 crate::gateway::group_manager::get_code_autonomy(path),
                 group.group_type == "code",
             );
+            // Design before code: what the spec gate holds this chat to this turn.
+            self.core_api.set_spec_flow(
+                jid,
+                crate::specs::effective_flow(crate::gateway::group_manager::get_spec_flow(path), group),
+            );
             // Default-flow handlers (open link / media / search / note): render
             // the `## User defaults` block and push it into the engine so the
             // system prompt reflects the user's Plugins → Widget settings.
@@ -2056,6 +2076,11 @@ impl AgentPool {
             .await;
 
             let mut context = String::new();
+            // The design this chat's folder is held to, on every call of the turn
+            // and never stored: a chat opened later sees it before it does anything.
+            if let Some(block) = self.spec_capsule(jid, group, global_config_path.as_deref()) {
+                context.push_str(&block);
+            }
             if !pinned.is_empty() {
                 context.push_str(&format!("<memory>\n{pinned}\n</memory>\n"));
             }
@@ -2136,11 +2161,45 @@ impl AgentPool {
         // ---- typing indicator ON ----
         self.send_typing(jid, true, group.bot_token.as_deref());
 
+        // ---- Spec flow commands: /brainstorm, /draft, /review ----
+        // The turn the agent gets is the step's instructions, not the bare
+        // command (`/review` runs its four reviewers first). Such a turn skips the
+        // composer directives below: the instructions are not the person's text.
+        let spec_prompt = match global_config_path.as_deref() {
+            Some(path) => {
+                let model = crate::specs::review::ConfiguredModel {
+                    config_path: path.to_path_buf(),
+                    profile: group.llm_config_id.clone(),
+                    jid: jid.to_string(),
+                    usage: crate::usage::global(),
+                };
+                crate::specs::commands::agent_prompt(
+                    &full_prompt,
+                    group,
+                    crate::gateway::group_manager::get_spec_flow(path),
+                    &crate::specs::SpecStore::default_store(),
+                    &model,
+                )
+                .await
+            }
+            None => None,
+        };
+
         // ---- Pre-process stage 3: composer directives ----
         // `/skill`, `#skill` and `@file` are typed in the composer; without this
         // pass they reach the LLM as prose. Gated on a cheap regex so ordinary
         // messages never pay for the skill scan.
-        let full_prompt = if crate::agent::prompt_directives::has_directives(&full_prompt) {
+        // A transient-error retry re-sends this turn as rewritten: running the
+        // command again would re-run a review (four model calls) and could
+        // overwrite a complete one with a failed one.
+        let retry_prompt = spec_prompt.clone().unwrap_or_else(|| prompt.to_string());
+        let full_prompt = if let Some(rewritten) = spec_prompt {
+            rewritten
+        } else if crate::specs::commands::is_rewritten(&full_prompt) {
+            // A retry of a rewritten turn: the instructions are not the person's
+            // text, so no directive expansion.
+            full_prompt
+        } else if crate::agent::prompt_directives::has_directives(&full_prompt) {
             let known_skills = {
                 let cfg = self.config.lock().unwrap();
                 match cfg.as_ref() {
@@ -2411,7 +2470,7 @@ impl AgentPool {
                     Box::pin(self.process_and_wait_inner(
                         &jid_owned,
                         group,
-                        prompt,
+                        &retry_prompt,
                         retries_left - 1,
                     ))
                     .await
@@ -3247,6 +3306,8 @@ impl AgentPool {
                     if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
                         sink.notify_agent_compacting(&jid, false);
                     }
+                    // The spec this chat read is no longer in its context.
+                    crate::specs::gate::forget(&jid);
 
                     // ---- keep what compaction is about to forget ----
                     // The history it just replaced lives on only in
