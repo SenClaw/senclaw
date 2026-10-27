@@ -460,7 +460,9 @@ fn role(lens: Lens, mode: Mode) -> &'static str {
              as the project's instructions describe?"
         }
         (Lens::Kiem, Mode::Design) => {
-            "You are the tech lead who must implement this plan tomorrow, and an auditor of the codebase. Ask: could \
+            "You are the tech lead who must implement this plan tomorrow, and an auditor of the codebase. You get the \
+             whole document: judge the plan under ## Detailed Implementation Plan, and count anything the design above it \
+             defines (types, names, rules) as defined — do not report it missing from the plan. Ask: could \
              you write the code from this text without making a design decision yourself (data shape, API, error \
              handling, edge cases)? Is every file to create, modify or delete listed with what changes in it? Are the \
              steps concrete (\"add field X to struct Y in file Z\")? Does every file or signature the plan says exists \
@@ -520,11 +522,21 @@ fn clip_chars(s: &str, max: usize) -> &str {
     }
 }
 
+/// What Kiểm reads of a full spec. `Whole` is what the daemon runs; `Plan` is
+/// EGM's split (the implementation plan only), kept to measure against: on
+/// gemma-4-e4b it reported a type the Technical Plan defines as missing, in
+/// every round of a review (`plans/reports/test-261027-2225-spec-flow-real-model-e4b.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KiemScope {
+    Whole,
+    Plan,
+}
+
 /// The part of the document a lens reads in each mode.
-fn range(lens: Lens, mode: Mode, text: &str) -> String {
+fn range(lens: Lens, mode: Mode, text: &str, kiem: KiemScope) -> String {
     let split = text.find(&format!("\n{DETAILED_HEADING}")).map(|i| i + 1);
     let part = match (mode, lens, split) {
-        (Mode::Design, Lens::Kiem, Some(i)) => &text[i..],
+        (Mode::Design, Lens::Kiem, Some(i)) if kiem == KiemScope::Plan => &text[i..],
         (Mode::Design, Lens::PhanBien, Some(i)) => &text[..i],
         _ => text,
     };
@@ -532,6 +544,20 @@ fn range(lens: Lens, mode: Mode, text: &str) -> String {
 }
 
 pub fn lens_user(lens: Lens, mode: Mode, path: &str, hash: &str, text: &str, evidence: &Evidence, machine: &[Finding]) -> String {
+    lens_user_with(lens, mode, path, hash, text, evidence, machine, KiemScope::Whole)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lens_user_with(
+    lens: Lens,
+    mode: Mode,
+    path: &str,
+    hash: &str,
+    text: &str,
+    evidence: &Evidence,
+    machine: &[Finding],
+    kiem: KiemScope,
+) -> String {
     let mut out = format!("Document: {path} (version {})\n\n", &hash[..8.min(hash.len())]);
     let block = |tag: &str, body: &Option<String>, empty: &str| match body {
         Some(b) => format!("<{tag}>\n{}\n</{tag}>\n\n", b.trim()),
@@ -557,7 +583,7 @@ pub fn lens_user(lens: Lens, mode: Mode, path: &str, hash: &str, text: &str, evi
         }
         _ => {}
     }
-    out.push_str(&format!("<document>\n{}\n</document>\n", range(lens, mode, text)));
+    out.push_str(&format!("<document>\n{}\n</document>\n", range(lens, mode, text, kiem)));
     out
 }
 
@@ -638,6 +664,11 @@ impl LensModel for ConfiguredModel {
 /// Review `text` (read once by the caller, together with its hash). The four
 /// lenses run one after another: a local runtime serves one request at a time.
 pub async fn run(root: &Path, path: &str, text: &str, model: &dyn LensModel) -> Review {
+    run_with(root, path, text, model, KiemScope::Whole).await
+}
+
+/// [`run`] with Kiểm's reading scope chosen (the measurement compares both).
+pub async fn run_with(root: &Path, path: &str, text: &str, model: &dyn LensModel, kiem: KiemScope) -> Review {
     let hash = super::design_hash(text);
     let mode = Mode::of(text);
     let machine = if mode == Mode::Design { machine_checks(root, text) } else { Vec::new() };
@@ -646,7 +677,7 @@ pub async fn run(root: &Path, path: &str, text: &str, model: &dyn LensModel) -> 
     let mut runs = Vec::new();
     for lens in LENSES {
         let system = lens_system(lens, mode);
-        let user = lens_user(lens, mode, path, &hash, text, &evidence, &machine);
+        let user = lens_user_with(lens, mode, path, &hash, text, &evidence, &machine, kiem);
         let (status, raw) = match model.ask(&system, &user).await {
             Ok((raw, cut)) => {
                 let (found, status) = parse_findings(lens, &raw, cut);
@@ -778,11 +809,62 @@ mod tests {
     #[test]
     fn ranges_give_each_lens_its_part() {
         let text = full("#### 1. `src/a.rs` (Modify)\n");
-        let kiem = range(Lens::Kiem, Mode::Design, &text);
-        assert!(kiem.starts_with(DETAILED_HEADING) && !kiem.contains("## Goals"));
-        let critic = range(Lens::PhanBien, Mode::Design, &text);
+        // Kiểm sees the design its plan builds on (a type defined above is defined).
+        assert_eq!(range(Lens::Kiem, Mode::Design, &text, KiemScope::Whole), text);
+        let plan_only = range(Lens::Kiem, Mode::Design, &text, KiemScope::Plan);
+        assert!(plan_only.starts_with(DETAILED_HEADING) && !plan_only.contains("## Goals"));
+        let critic = range(Lens::PhanBien, Mode::Design, &text, KiemScope::Whole);
         assert!(critic.contains("## Risks") && !critic.contains(DETAILED_HEADING));
-        assert_eq!(range(Lens::PhanBien, Mode::Brainstorm, &text), text);
+        assert_eq!(range(Lens::PhanBien, Mode::Brainstorm, &text, KiemScope::Whole), text);
+    }
+
+    /// Real-model measurement, not part of the suite: alternates Kiểm's two reading
+    /// scopes on one spec and prints a JSON line per review. Needs
+    /// SPEC_MEASURE_CONFIG (a config.json whose active LLM answers), SPEC_MEASURE_ROOT
+    /// (the project), SPEC_MEASURE_SPEC (the spec, relative to the root),
+    /// SPEC_MEASURE_RUNS (per scope, default 5), SPEC_MEASURE_OUT (jsonl file).
+    /// `cargo test --lib -- --ignored --nocapture specs::review::tests::measure_kiem_scope_on_a_real_model`
+    #[tokio::test]
+    #[ignore]
+    async fn measure_kiem_scope_on_a_real_model() {
+        let var = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("set {k}"));
+        let root = std::path::PathBuf::from(var("SPEC_MEASURE_ROOT"));
+        let rel = var("SPEC_MEASURE_SPEC");
+        let runs: usize = std::env::var("SPEC_MEASURE_RUNS").ok().and_then(|n| n.parse().ok()).unwrap_or(5);
+        let out = var("SPEC_MEASURE_OUT");
+        let text = std::fs::read_to_string(root.join(&rel)).unwrap();
+        let config_path = std::path::PathBuf::from(var("SPEC_MEASURE_CONFIG"));
+        // The daemon installs the OAuth store at boot; without it an OAuth profile has no token.
+        crate::providers::oauth::init(crate::providers::oauth::store::default_path(&config_path));
+        let model = ConfiguredModel {
+            config_path,
+            profile: None,
+            jid: "spec-measure".into(),
+            usage: None,
+        };
+        for i in 0..runs {
+            for scope in [KiemScope::Plan, KiemScope::Whole] {
+                let started = std::time::Instant::now();
+                let r = run_with(&root, &rel, &text, &model, scope).await;
+                let per_lens: std::collections::BTreeMap<&str, usize> = LENSES
+                    .iter()
+                    .map(|l| (l.id(), r.findings.iter().filter(|f| f.lens == *l && f.severity == Severity::Blocker).count()))
+                    .collect();
+                let blockers: Vec<String> =
+                    r.findings.iter().filter(|f| f.severity == Severity::Blocker).map(Finding::line).collect();
+                let line = serde_json::json!({
+                    "run": i, "scope": format!("{scope:?}"), "seconds": started.elapsed().as_secs(),
+                    "blocker": r.count(Severity::Blocker), "major": r.count(Severity::Major), "nit": r.count(Severity::Nit),
+                    "blocker_by_lens": per_lens, "complete": r.complete(),
+                    "lenses": r.runs.iter().map(|x| (x.lens.id(), x.status.as_string())).collect::<std::collections::BTreeMap<_, _>>(),
+                    "blockers": blockers,
+                });
+                println!("{line}");
+                use std::io::Write as _;
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&out).unwrap();
+                writeln!(f, "{line}").unwrap();
+            }
+        }
     }
 
     struct Scripted {
