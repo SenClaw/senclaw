@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 // Re-use the existing McpToolInfo from the parent module
 use super::client::McpToolInfo;
+use crate::util::text::truncate_on_char_boundary;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types (same protocol as client.rs)
@@ -177,6 +178,23 @@ impl McpTransport for StdioTransport {
 // SSE transport
 // ---------------------------------------------------------------------------
 
+/// Finds the blank line that ends the first frame in `buf`: returns the frame's
+/// length and where the next frame starts. SSE lets a line end in LF or CRLF,
+/// so the blank line after a `\n` is `\n` or `\r\n`. A CRLF frame keeps the `\r`
+/// of its last line, which the `trim` of each `data:` line removes.
+fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
+    (0..buf.len()).filter(|&i| buf[i] == b'\n').find_map(|i| {
+        let rest = &buf[i + 1..];
+        if rest.starts_with(b"\n") {
+            Some((i, i + 2))
+        } else if rest.starts_with(b"\r\n") {
+            Some((i, i + 3))
+        } else {
+            None
+        }
+    })
+}
+
 struct SseTransport {
     name: String,
     base_url: String, // e.g. http://localhost:8080
@@ -229,19 +247,21 @@ impl SseTransport {
             use futures::StreamExt;
             tokio::pin!(stream);
 
-            let mut buf = String::new();
+            // Bytes, not text: a chunk can end inside a multi-byte character,
+            // so nothing is decoded until its frame is complete. `\n` is never
+            // part of one, which makes the byte search below safe.
+            let mut buf: Vec<u8> = Vec::new();
             let _current_event: Option<String> = None;
 
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Ok(bytes) => {
-                        let text = String::from_utf8_lossy(&bytes);
-                        buf.push_str(&text);
+                        buf.extend_from_slice(&bytes);
 
                         // Parse SSE frames from the buffer
-                        while let Some(pos) = buf.find("\n\n") {
-                            let frame = buf[..pos].to_string();
-                            buf = buf[pos + 2..].to_string();
+                        while let Some((len, next)) = frame_end(&buf) {
+                            let frame = String::from_utf8_lossy(&buf[..len]).into_owned();
+                            buf.drain(..next);
 
                             // Parse SSE frame lines
                             let mut data = String::new();
@@ -274,7 +294,7 @@ impl SseTransport {
                                         debug!(
                                             "MCP SSE {} — non-JSON-RPC event: {}",
                                             task_name,
-                                            &data[..data.len().min(200)]
+                                            truncate_on_char_boundary(&data, 200)
                                         );
                                     }
                                 }
@@ -704,5 +724,165 @@ mod tests {
         let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
         assert!(resp.id.is_none());
         assert_eq!(resp.result.unwrap(), Value::String("ok".into()));
+    }
+
+    /// An MCP server whose event stream is exactly `packets` and then ends.
+    /// Each packet is one HTTP chunk, so it reaches `bytes_stream()` on its own
+    /// however the kernel merges the writes. A POST is accepted and left for
+    /// the stream to answer.
+    async fn sse_server(packets: Vec<Vec<u8>>) -> String {
+        let events = move || {
+            let packets = packets.clone();
+            async move {
+                axum::body::Body::from_stream(futures::stream::iter(
+                    packets
+                        .into_iter()
+                        .map(|p| Ok::<_, std::io::Error>(axum::body::Bytes::from(p))),
+                ))
+            }
+        };
+        let app = axum::Router::new()
+            .route("/sse", axum::routing::get(events))
+            .route(
+                "/message",
+                axum::routing::post(|| async { axum::http::StatusCode::ACCEPTED }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+
+    async fn sse_client(packets: Vec<Vec<u8>>) -> SseTransport {
+        let url = sse_server(packets).await;
+        SseTransport::connect("mock", &url, &HashMap::new())
+            .await
+            .unwrap()
+    }
+
+    fn rpc_result(id: u64, result: Value) -> String {
+        serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
+    }
+
+    /// A packet ends wherever the network cut it, which can be inside a
+    /// character. Decoded per packet, the "ờ" below reached the agent's tool
+    /// result as U+FFFD.
+    #[tokio::test]
+    async fn a_character_cut_between_two_packets_reaches_the_result_whole() {
+        let text = "Kết quả: thời tiết hôm nay đẹp";
+        let event = format!("data: {}\n\n", rpc_result(1, text.into()));
+        let cut = event.find('ờ').unwrap() + 1;
+        let (first, second) = event.as_bytes().split_at(cut);
+
+        let mut sse = sse_client(vec![first.to_vec(), second.to_vec()]).await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), text);
+    }
+
+    /// One event may span several `data:` lines, and the blank line that ends
+    /// it may be cut in two like any other byte.
+    #[tokio::test]
+    async fn a_frame_of_several_data_lines_is_one_event() {
+        let mut sse = sse_client(vec![
+            b"event: message\ndata: {\"jsonrpc\":\"2.0\",\n".to_vec(),
+            b"data:\"id\":1,\n".to_vec(),
+            "data:   \"result\":\"chào bạn\"}\n".as_bytes().to_vec(),
+            b"\n".to_vec(),
+        ])
+        .await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "chào bạn");
+    }
+
+    /// Lines joined with `\n` keep two digits apart, so this is no number but
+    /// broken JSON. It is skipped, and the next event in the packet still
+    /// arrives.
+    #[tokio::test]
+    async fn data_lines_are_joined_with_a_newline_and_a_bad_event_is_skipped() {
+        let broken = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":1\ndata: 2}\n\n";
+        let good = format!("data: {}\n\n", rpc_result(2, "ok".into()));
+
+        let mut sse = sse_client(vec![format!("{broken}{good}").into_bytes()]).await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "ok");
+    }
+
+    /// SSE lets a line end in CRLF. A blank line there is `\r\n\r\n`, which
+    /// holds no `\n\n`, so no frame of such a server was ever cut.
+    #[tokio::test]
+    async fn frames_that_end_in_crlf_are_cut() {
+        let events = format!(
+            ": ping\r\n\r\nevent: message\r\ndata: {}\r\n\r\ndata: {}\r\n\r\n",
+            rpc_result(1, "một".into()),
+            rpc_result(2, "hai".into()),
+        );
+
+        let mut sse = sse_client(vec![events.into_bytes()]).await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "một");
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "hai");
+    }
+
+    /// `\r\n\r` is not a blank line yet: the frame waits for the last `\n`,
+    /// here in the next packet, and its `data:` lines still join.
+    #[tokio::test]
+    async fn a_crlf_blank_line_cut_between_two_packets_is_still_one_frame() {
+        let mut sse = sse_client(vec![
+            b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\r\n".to_vec(),
+            "data: \"result\":\"chào bạn\"}\r\n\r".as_bytes().to_vec(),
+            b"\n".to_vec(),
+        ])
+        .await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "chào bạn");
+    }
+
+    /// With debug logging on, the log line for an event that is not JSON-RPC
+    /// cut the text at byte 200. Inside a character that panicked and took the
+    /// reader task with it, so every later answer was lost.
+    #[tokio::test]
+    async fn a_long_event_that_is_not_json_rpc_cannot_kill_the_reader() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .finish();
+        let _logging = tracing::subscriber::set_default(subscriber);
+
+        let not_rpc = format!("{}ờ", "a".repeat(199));
+        assert!(!not_rpc.is_char_boundary(200));
+        let good = rpc_result(1, "ok".into());
+
+        let mut sse =
+            sse_client(vec![format!("data: {not_rpc}\n\ndata: {good}\n\n").into_bytes()]).await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "ok");
+    }
+
+    /// When the stream ends, every finished frame has been delivered, an
+    /// unfinished one is dropped rather than parsed, the next request fails
+    /// instead of waiting, and the transport reports itself dead.
+    #[tokio::test]
+    async fn the_end_of_the_stream_closes_the_transport_and_drops_an_unfinished_frame() {
+        let finished = format!(
+            "data: {}\n\ndata: {}\n\n",
+            rpc_result(1, "một".into()),
+            rpc_result(2, "hai".into()),
+        );
+        let unfinished = format!("data: {}\n", rpc_result(3, "ba".into()));
+
+        let mut sse = sse_client(vec![finished.into_bytes(), unfinished.into_bytes()]).await;
+
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "một");
+        assert_eq!(sse.request("tools/call", None).await.unwrap(), "hai");
+        let err = sse.request("tools/call", None).await.unwrap_err();
+        assert!(err.to_string().contains("event channel closed"), "{err}");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while sse.is_alive() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the reader task must end with the stream");
     }
 }
