@@ -636,6 +636,11 @@ pub(crate) fn object_parameters(schema: Value) -> Value {
 /// `Schema` type only accepts objects, so a single `"properties": {"x": true}`
 /// 400s the whole request. `additionalProperties` is left untouched — a
 /// boolean is the conventional form there and Gemini drops the field.
+///
+/// An array with no `items` is valid JSON Schema too, and Gemini answers 400
+/// `items: missing field`, for the whole request, whenever such a tool is in the
+/// list. It has no "any" type; a string is the widest shape a list of scalars
+/// can take.
 pub(crate) fn sanitize_schema_node(node: &mut Value) {
     if node.is_boolean() {
         *node = serde_json::json!({"type": "object"});
@@ -644,6 +649,14 @@ pub(crate) fn sanitize_schema_node(node: &mut Value) {
     let Some(obj) = node.as_object_mut() else {
         return;
     };
+    let is_array = match obj.get("type") {
+        Some(Value::String(t)) => t == "array",
+        Some(Value::Array(types)) => types.iter().any(|t| t == "array"),
+        _ => false,
+    };
+    if is_array && obj.get("items").is_none_or(|v| v.as_object().is_some_and(|o| o.is_empty())) {
+        obj.insert("items".into(), serde_json::json!({"type": "string"}));
+    }
     for key in ["properties", "patternProperties", "$defs", "definitions"] {
         if let Some(map) = obj.get_mut(key).and_then(Value::as_object_mut) {
             for v in map.values_mut() {

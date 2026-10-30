@@ -1933,4 +1933,23 @@ mod tests {
             msg.message.content
         );
     }
+    /// One such tool in the list answered 400 for the whole request: the CRM
+    /// app's filter declares `"values": {"type": "array"}`.
+    #[test]
+    fn an_array_with_no_items_gets_an_item_schema_at_any_depth() {
+        let mut schema = serde_json::json!({"type": "object", "properties": {
+            "filters": {"type": "array", "items": {"type": "object", "properties": {
+                "values": {"type": "array"},
+                "nullable": {"type": ["array", "null"]},
+                "empty": {"type": "array", "items": {}},
+                "typed": {"type": "array", "items": {"type": "number"}}
+            }}}
+        }});
+        sanitize_schema(&mut schema);
+        let item = &schema["properties"]["filters"]["items"]["properties"];
+        for name in ["values", "nullable", "empty"] {
+            assert_eq!(item[name]["items"]["type"], "string", "{name}: {schema}");
+        }
+        assert_eq!(item["typed"]["items"]["type"], "number");
+    }
 }
