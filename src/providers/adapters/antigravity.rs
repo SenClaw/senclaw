@@ -650,12 +650,23 @@ pub(crate) fn sanitize_schema(schema: &mut Value) {
     cleanup_required(schema);
 }
 
-/// Walk every nested object/array value, applying `f` to each object node.
+/// Walk every nested object/array value, applying `f` to each schema node.
+///
+/// The maps below are not schemas: their keys are names, one may be `format` or
+/// `properties`, and must never be read as schema keywords.
 fn walk(schema: &mut Value, f: &mut impl FnMut(&mut Map<String, Value>)) {
     match schema {
         Value::Object(map) => {
             f(map);
-            for value in map.values_mut() {
+            for (key, value) in map.iter_mut() {
+                if matches!(key.as_str(), "properties" | "patternProperties" | "$defs" | "definitions") {
+                    if let Value::Object(named) = value {
+                        for child in named.values_mut() {
+                            walk(child, f);
+                        }
+                        continue;
+                    }
+                }
                 walk(value, f);
             }
         }
@@ -895,7 +906,10 @@ fn gemini_would_reject(schema: &Value) -> Option<String> {
                     _ => {}
                 }
             }
-            map.values().find_map(gemini_would_reject)
+            map.iter().find_map(|(key, value)| match (key.as_str(), value) {
+                ("properties", Value::Object(named)) => named.values().find_map(gemini_would_reject),
+                _ => gemini_would_reject(value),
+            })
         }
         Value::Array(items) => items.iter().find_map(gemini_would_reject),
         _ => None,
@@ -1951,5 +1965,31 @@ mod tests {
             assert_eq!(item[name]["items"]["type"], "string", "{name}: {schema}");
         }
         assert_eq!(item["typed"]["items"]["type"], "number");
+    }
+    /// A parameter is free to be called `format` or `default`: read as keywords,
+    /// such names silently left the tool's schema, and a `properties` parameter
+    /// came back with a stray string in its parent's parameter list.
+    #[test]
+    fn a_parameter_named_like_a_keyword_stays_a_parameter() {
+        let mut schema = serde_json::json!({"type": "object", "properties": {
+            "format": {"type": "string", "enum": ["json", "csv"]},
+            "default": {"type": "string", "format": "date", "default": "2026-01-01"},
+            "const": {"type": "string"},
+            "properties": {"properties": {"optional": {"type": "boolean"}}},
+            "$defs": {"type": "string"}
+        }, "required": ["format", "const"]});
+        sanitize_schema(&mut schema);
+        let params = &schema["properties"];
+        for name in ["format", "default", "const", "properties", "$defs"] {
+            assert!(params.get(name).is_some(), "{name} lost: {schema}");
+        }
+        assert_eq!(schema["required"], serde_json::json!(["format", "const"]));
+        assert_eq!(params["const"], serde_json::json!({"type": "string"}));
+        assert!(params.get("type").is_none(), "a type was added to the parameter list: {schema}");
+        assert_eq!(params["properties"]["type"], "object");
+        assert_eq!(params["properties"]["properties"]["optional"]["type"], "boolean");
+        // On a schema node the same words are still keywords.
+        assert_eq!(params["default"], serde_json::json!({"type": "string"}));
+        assert_eq!(gemini_would_reject(&schema), None);
     }
 }
