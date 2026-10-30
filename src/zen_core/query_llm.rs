@@ -166,13 +166,13 @@ pub type TextDeltaSink = Arc<dyn Fn(&str) + Send + Sync>;
 /// silently dropping whatever text that event carried. Buffer bytes, cut on
 /// `\n`, and only decode complete lines.
 #[derive(Default)]
-struct SseLines {
+pub(crate) struct SseLines {
     buf: Vec<u8>,
 }
 
 impl SseLines {
     /// Feed one network chunk; returns every complete line it completed.
-    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Vec<String> {
         self.buf.extend_from_slice(chunk);
         let mut out = Vec::new();
         while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
@@ -183,7 +183,7 @@ impl SseLines {
     }
 
     /// Whatever is left when the stream ends without a trailing newline.
-    fn flush(&mut self) -> Option<String> {
+    pub(crate) fn flush(&mut self) -> Option<String> {
         if self.buf.is_empty() {
             return None;
         }

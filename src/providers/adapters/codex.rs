@@ -32,7 +32,7 @@ use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::zen_core::query_llm::{build_assistant_message, post_authed};
+use crate::zen_core::query_llm::{build_assistant_message, post_authed, SseLines};
 use crate::zen_core::{ContentBlock, Message, ModelProfile, RawUsage, Tool};
 
 /// Send one turn to Codex and collect the assistant reply.
@@ -412,8 +412,7 @@ impl StreamAccumulator {
 async fn parse_stream(response: reqwest::Response, cancel: &CancellationToken) -> Result<Message> {
     let mut stream = response.bytes_stream();
     let mut acc = StreamAccumulator::default();
-    // SSE frames can split mid-line across chunks.
-    let mut pending = String::new();
+    let mut lines = SseLines::default();
 
     loop {
         // Wait for the next chunk *or* the cancel: a reasoning phase can
@@ -426,11 +425,7 @@ async fn parse_stream(response: reqwest::Response, cancel: &CancellationToken) -
         };
         let Some(chunk) = chunk else { break };
         let chunk = chunk.context("Codex stream chunk error")?;
-        pending.push_str(&String::from_utf8_lossy(&chunk));
-
-        while let Some(idx) = pending.find('\n') {
-            let line = pending[..idx].trim().to_string();
-            pending.drain(..=idx);
+        for line in lines.push(&chunk) {
             if let Some(event) = parse_sse_line(&line) {
                 acc.apply(&event);
             }
@@ -438,7 +433,7 @@ async fn parse_stream(response: reqwest::Response, cancel: &CancellationToken) -
     }
 
     // Whatever is left after the stream closes, without a trailing newline.
-    if let Some(event) = parse_sse_line(pending.trim()) {
+    if let Some(event) = lines.flush().and_then(|line| parse_sse_line(&line)) {
         acc.apply(&event);
     }
 
@@ -928,5 +923,24 @@ mod tests {
         .expect("the cancel did not end a silent stream")
         .unwrap_err();
         assert!(err.to_string().contains("Stream cancelled"), "{err:#}");
+    }
+
+    /// A network chunk can end inside a character. Decoded chunk by chunk, that
+    /// character came out as U+FFFD, in answers and in tool input alike.
+    #[tokio::test]
+    async fn a_character_cut_by_a_chunk_boundary_stays_whole() {
+        let text = "Định dạng";
+        let event = serde_json::json!({"type":"response.output_text.delta","delta":text});
+        let sse = format!("data: {event}\n\n");
+        let (head, tail) = sse.as_bytes().split_at(sse.find('ị').unwrap() + 1);
+        let chunks: Vec<Result<Vec<u8>, std::io::Error>> = vec![Ok(head.to_vec()), Ok(tail.to_vec())];
+        let body = reqwest::Body::wrap_stream(futures::stream::iter(chunks));
+        let response = reqwest::Response::from(axum::http::Response::new(body));
+        let msg = parse_stream(response, &CancellationToken::new()).await.unwrap();
+        assert!(
+            matches!(&msg.message.content[0], ContentBlock::Text { text: got } if got == text),
+            "{:?}",
+            msg.message.content
+        );
     }
 }
