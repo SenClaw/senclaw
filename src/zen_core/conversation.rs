@@ -1629,7 +1629,11 @@ pub async fn query(
     let triage = if config.is_subagent || !crate::specs::commands::is_review_results(&original_prompt) {
         None
     } else {
-        crate::specs::commands::TriageWatch::start(&config.working_dir, &crate::specs::SpecStore::default_store())
+        crate::specs::commands::TriageWatch::start(
+            &config.working_dir,
+            &config.chat_jid,
+            &crate::specs::SpecStore::default_store(),
+        )
     };
     let mut triage_nudged = false;
     // Resilience: retry transient EMPTY_COMPLETION before failing the session.
@@ -2294,7 +2298,10 @@ pub async fn query(
                 }
                 // The reply announces the next step and stops there.
                 if config.coding_session && announce_nudges < MAX_ANNOUNCE_NUDGES {
-                    let unfinished = if announces_without_acting(&text_content) {
+                    let reporting_only = triage.as_ref().is_some_and(|w| w.holds_design());
+                    let unfinished = if reporting_only {
+                        None
+                    } else if announces_without_acting(&text_content) {
                         Some(("ends on a colon", announce_nudge()))
                     } else if !acted && !crate::specs::commands::is_rewritten(&original_prompt) {
                         // Not on a spec-flow step: there asking the person one question at a time
@@ -2880,7 +2887,11 @@ pub async fn query(
         if !tool_results.is_empty() {
             let mut blocks = tool_results;
             // Mid-turn user messages ride along with this round's tool results.
-            inject_pending_inputs(&mut blocks, config);
+            if inject_pending_inputs(&mut blocks, config) > 0 {
+                if let Some(w) = &triage {
+                    w.release_design();
+                }
+            }
             if hard_stop {
                 blocks.push(ContentBlock::Text {
                     text: final_nudge.to_string(),

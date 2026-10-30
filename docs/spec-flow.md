@@ -10,7 +10,7 @@ Model của Google ([nghiên cứu](../plans/reports/research-261027-1505-egm-el
 |---|---|
 | `/brainstorm <ý tưởng>` | Mở một spec cho thư mục (`docs/designs/<YYMMDD>-<slug>.md`). Agent đọc code liên quan, hỏi **từng câu một**, xin bạn xác nhận ý tưởng trong 2-3 câu, rồi ghi brief. |
 | `/draft [đường dẫn]` | Agent viết spec đầy đủ theo template, dừng hỏi bạn sau phần thiết kế rồi mới viết `## Detailed Implementation Plan`. |
-| `/review [đường dẫn]` | Bốn reviewer **không thấy cuộc trò chuyện** đọc spec: **Cảnh** (toàn cảnh: gốc vấn đề, thừa, dùng lại), **Kiểm** (code được từ đây không, khớp code thật không — cộng một danh sách kiểm bằng máy), **Hiểu** (người mới đọc có hiểu), **Phản biện** (phương án khác, điểm hỏng, rủi ro). Agent xử lý từng finding (FIX / CONTEST / ESCALATE / DECLINE) và ghi vào `## Review Log`. |
+| `/review [đường dẫn]` | Bốn reviewer **không thấy cuộc trò chuyện** đọc spec: **Cảnh** (toàn cảnh: gốc vấn đề, thừa, dùng lại), **Kiểm** (code được từ đây không, khớp code thật không — cộng một danh sách kiểm bằng máy), **Hiểu** (người mới đọc có hiểu), **Phản biện** (phương án khác, điểm hỏng, rủi ro). Còn Blocker: agent xử lý từng finding (FIX / CONTEST / ESCALATE / DECLINE) và ghi vào `## Review Log`. Không còn Blocker: agent chỉ báo cáo, không đụng vào spec; bạn `/approve` luôn, hoặc nói rõ phần cần sửa rồi `/review` lại. |
 | `/approve` · `/approve force` | Duyệt bản spec hiện tại. Cần review của **đúng phiên bản này**, đủ 4 hướng, 0 Blocker; `force` bỏ qua phần review (vẫn cần đã có kế hoạch triển khai). |
 | `/spec` · `/spec use <path>` · `/spec done` · `/spec skip` | Trạng thái · mở spec có sẵn · đóng · bỏ qua cho một sửa nhỏ (chỉ khi `required`). |
 
@@ -28,6 +28,9 @@ dễ dùng không / chi phí và điểm hỏng).
   `Read` trọn file. Xoá lịch sử chat (`reset`, "clear context", compaction) thì phải xem lại.
 - **Câu trả lời không nói sai việc đã làm.** Khi cổng đã chặn mà file chưa đổi, câu trả lời có dòng "⚠️ Luồng spec đã chặn…". Sau
   `/review`, nếu agent không sửa spec mà vẫn còn Blocker thì bị nhắc một lần, và câu trả lời có dòng 📋 cho biết thiết kế đổi hay không.
+- **Review không có Blocker không tự mất hiệu lực.** Trong lượt báo cáo kết quả của một review đầy đủ, 0 Blocker, spec đang mở bị khoá
+  với agent (`Error: [spec] This design passed its review…`), vì một lần sửa thiết kế sẽ làm review thành bản cũ và `/approve` từ chối.
+  Major để bạn quyết; bạn bảo sửa thì agent sửa được (kể cả nhắn ngay trong lượt đó), khi đó phải `/review` lại.
 - **Chỉ người duyệt.** `/approve` chỉ được nhận từ tin nhắn người gửi (web/desktop, kênh, REST chat của phiên Code); lịch hẹn,
   DAG, kanban không duyệt được; tool của agent không ghi được kho duyệt.
 - **Sửa thiết kế sau khi duyệt thì khoá lại.** Tick `- [x]`, đổi `**Status:**`/`**Date:**`, ghi thêm vào `## Review Log` cuối

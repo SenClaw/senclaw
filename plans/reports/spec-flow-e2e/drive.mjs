@@ -173,9 +173,15 @@ await say(A, '/review');
 const ap8b = await command(A, '/approve');
 check('S8b unreadable lens: review incomplete, /approve refused', ap8b.includes('did not finish (hieu: unparsed)'), ap8b);
 
-// S9: clean review, approve
-lensAnswers({});
+// S9: no blockers, some majors: an agent that still edits the design is held off, so the review
+// stays the current one and /approve takes it (it used to go stale after every such review)
+lensAnswers({ hieu: '[MAJOR] Goals :: the wording is vague :: say what changes' });
+const design9 = fs.readFileSync(SPEC_ABS, 'utf8');
+stepsFile('REVIEW_RESULTS', 'R9', [{ t: 'Write', a: { file_path: SPEC_ABS, content: `${design9}\nExtra design text.\n` } }]);
 await say(A, '/review');
+fs.rmSync(`${MOCK}/spec-steps-REVIEW_RESULTS.json`);
+check('S9 the design that passed cannot change during the review turn', lastResults('R9').some((r) => r.includes('passed its review with no blockers')) && fs.readFileSync(SPEC_ABS, 'utf8') === design9, lastResults('R9'));
+check('S9 the answer says /approve unlocks the code', replies.some(([j, t]) => j === A && t.includes('📋') && t.includes('/approve unlocks the code')), replies.filter(([j]) => j === A).slice(-1));
 const ap9 = await command(A, '/approve');
 check('S9 /approve after a clean review', ap9.startsWith(`Approved ${SPEC} (version `), ap9);
 check('S9 approval recorded via web', state()?.specs?.[SPEC]?.approval?.via === 'web');

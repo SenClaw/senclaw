@@ -123,6 +123,13 @@ pub struct ReviewSummary {
     pub report: String,
 }
 
+impl ReviewSummary {
+    /// `/approve` takes this review as long as the design stays the version it read.
+    pub fn clears_approval(&self) -> bool {
+        self.complete && self.mode == "design" && self.blocker == 0
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Approval {
     pub hash: String,
@@ -292,7 +299,8 @@ pub enum Stage {
     /// No `## Detailed Implementation Plan` yet.
     Brief,
     Draft,
-    /// The last review read this very version, as a full spec.
+    /// `/approve` takes it: the last review read this very version, as a full
+    /// spec, finished and found no blocker.
     Reviewed,
     Approved,
     /// Approved once, the design text changed since.
@@ -310,6 +318,18 @@ impl Stage {
             Self::Changed => "changed",
         }
     }
+
+    /// What a person still has to run before code unlocks. `/approve` alone is
+    /// the wrong advice until the last step: it refuses a spec with no plan, no
+    /// finished review of this version, or blockers in that review.
+    pub fn steps_to_unlock(self) -> &'static str {
+        match self {
+            Self::Missing => "/brainstorm, /draft, /review and /approve",
+            Self::Brief => "/draft, /review and /approve",
+            Self::Draft | Self::Changed => "/review and /approve",
+            Self::Reviewed | Self::Approved => "/approve",
+        }
+    }
 }
 
 pub fn has_detailed_plan(text: &str) -> bool {
@@ -320,16 +340,15 @@ pub fn has_detailed_plan(text: &str) -> bool {
 pub fn stage_of(text: Option<&str>, entry: Option<&SpecEntry>) -> (Stage, Option<String>) {
     let Some(text) = text else { return (Stage::Missing, None) };
     let hash = design_hash(text);
+    let approval = entry.and_then(|e| e.approval.as_ref());
     let stage = if !has_detailed_plan(text) {
         Stage::Brief
-    } else if let Some(a) = entry.and_then(|e| e.approval.as_ref()) {
-        if a.hash == hash {
-            Stage::Approved
-        } else {
-            Stage::Changed
-        }
-    } else if entry.and_then(|e| e.review.as_ref()).is_some_and(|r| r.hash == hash && r.mode == "design") {
+    } else if approval.is_some_and(|a| a.hash == hash) {
+        Stage::Approved
+    } else if entry.and_then(|e| e.review.as_ref()).is_some_and(|r| r.hash == hash && r.clears_approval()) {
         Stage::Reviewed
+    } else if approval.is_some() {
+        Stage::Changed
     } else {
         Stage::Draft
     };
@@ -451,14 +470,14 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// The rule the `<spec>` block states for a stage.
-pub fn stage_rule(stage: Stage) -> &'static str {
+pub fn stage_rule(stage: Stage) -> String {
+    let steps = stage.steps_to_unlock();
     match stage {
-        Stage::Approved => {
-            "Before your first change in this chat, Read the whole spec. Build what it says, tick \"- [x]\" as tasks \
-             finish; if the code must differ from the design, stop and tell the person."
-        }
-        Stage::Changed => "The spec changed after approval; code is locked until the person runs /review and /approve.",
-        _ => "Design phase: only files in docs/designs/ may change; code unlocks when the person runs /approve.",
+        Stage::Approved => "Before your first change in this chat, Read the whole spec. Build what it says, tick \"- [x]\" \
+                            as tasks finish; if the code must differ from the design, stop and tell the person."
+            .to_string(),
+        Stage::Changed => format!("The spec changed after approval; code is locked until the person runs {steps}."),
+        _ => format!("Design phase: only files in docs/designs/ may change; code unlocks when the person runs {steps}."),
     }
 }
 
@@ -577,17 +596,25 @@ mod tests {
         let full = spec("## Detailed Implementation Plan\n- [ ] T1\n");
         assert_eq!(stage_of(Some(&full), None).0, Stage::Draft);
         let h = design_hash(&full);
-        let mut entry = SpecEntry {
-            review: Some(ReviewSummary { hash: h.clone(), mode: "design".into(), ..Default::default() }),
-            ..Default::default()
-        };
+        let clean = ReviewSummary { hash: h.clone(), mode: "design".into(), complete: true, ..Default::default() };
+        let mut entry = SpecEntry { review: Some(clean.clone()), ..Default::default() };
         assert_eq!(stage_of(Some(&full), Some(&entry)).0, Stage::Reviewed);
-        entry.review.as_mut().unwrap().mode = "brainstorm".into();
-        assert_eq!(stage_of(Some(&full), Some(&entry)).0, Stage::Draft);
+        // What `/approve` refuses is not `Reviewed`, so nothing says to run it.
+        for review in [
+            ReviewSummary { blocker: 1, ..clean.clone() },
+            ReviewSummary { complete: false, ..clean.clone() },
+            ReviewSummary { mode: "brainstorm".into(), ..clean.clone() },
+        ] {
+            entry.review = Some(review);
+            assert_eq!(stage_of(Some(&full), Some(&entry)).0, Stage::Draft);
+        }
         entry.approval = Some(Approval { hash: h, ..Default::default() });
         assert_eq!(stage_of(Some(&full), Some(&entry)).0, Stage::Approved);
         let edited = full.replace("T1", "T1 more");
         assert_eq!(stage_of(Some(&edited), Some(&entry)).0, Stage::Changed);
+        // Changed since the approval, then reviewed clean: `/approve` is the one step left.
+        entry.review = Some(ReviewSummary { hash: design_hash(&edited), ..clean });
+        assert_eq!(stage_of(Some(&edited), Some(&entry)).0, Stage::Reviewed);
         let ticked = full.replace("- [ ] T1", "- [x] T1");
         assert_eq!(stage_of(Some(&ticked), Some(&entry)).0, Stage::Approved);
     }

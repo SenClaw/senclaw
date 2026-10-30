@@ -19,23 +19,28 @@ pub const REFUSAL_PREFIX: &str = "Error: [spec]";
 pub const STORE: &str = "Error: [spec] The spec flow's own records cannot be changed by a tool.";
 pub const NO_SPEC: &str = "Error: [spec] No design spec for this folder yet. Changes here need one: ask the person to \
                            run /brainstorm <idea>, or /spec skip for a small fix.";
+pub const DESIGN_HELD: &str = "Error: [spec] This design passed its review with no blockers, so it stays as it is for now: \
+                               a change would make that review stale and /approve would refuse. Leave the file alone, \
+                               report the findings and let the person choose.";
 pub const NO_SPEC_SUBAGENT: &str = "Error: [spec] No design spec for this folder yet; a subagent cannot change files \
                                     here. Report back to the main agent.";
 
 pub fn stage_refusal(path: &str, stage: Stage) -> String {
     match stage {
         Stage::Changed => format!(
-            "{REFUSAL_PREFIX} {path} changed after it was approved. Code is locked until the person runs /review and \
-             /approve again."
+            "{REFUSAL_PREFIX} {path} changed after it was approved. Code is locked until the person runs {} again.",
+            stage.steps_to_unlock()
         ),
         Stage::Missing => format!(
             "{REFUSAL_PREFIX} {path} has not been written yet. Only files in {DESIGNS_DIR}/ may change until the person \
-             runs /approve."
+             runs {}.",
+            stage.steps_to_unlock()
         ),
         other => format!(
             "{REFUSAL_PREFIX} {path} is {}, not approved. Only files in {DESIGNS_DIR}/ may change until the person runs \
-             /approve.",
-            other.as_str()
+             {}.",
+            other.as_str(),
+            other.steps_to_unlock()
         ),
     }
 }
@@ -135,8 +140,8 @@ pub fn check(g: &GateInput, store: &SpecStore) -> Option<String> {
         }
         return None;
     };
-    if target.as_deref().is_some_and(|t| is_design_file(&root, t)) {
-        return None;
+    if let Some(t) = target.as_deref().filter(|t| is_design_file(&root, t)) {
+        return is_held(g, t).then(|| DESIGN_HELD.to_string());
     }
     let rel = state.active.as_str();
     let spec_path = root.join(rel);
@@ -169,6 +174,34 @@ fn receipts() -> &'static Mutex<HashMap<String, (PathBuf, String)>> {
 fn skips() -> &'static Mutex<HashSet<String>> {
     static S: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     S.get_or_init(Default::default)
+}
+
+fn holds() -> &'static Mutex<HashMap<String, PathBuf>> {
+    static H: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+    H.get_or_init(Default::default)
+}
+
+/// This chat is reporting a review `/approve` would take: until the turn ends
+/// or the person speaks, its agent cannot change `spec`. Told to fix what the
+/// reviewers raised, agents edited the design after every clean review, which
+/// made that review stale, so no version ever reached `/approve`. The prompt says
+/// so too, but a small model does not listen.
+pub fn hold_design(chat_jid: &str, spec: PathBuf) {
+    holds().lock().unwrap_or_else(|p| p.into_inner()).insert(chat_jid.to_string(), spec);
+}
+
+pub fn release_design(chat_jid: &str) {
+    holds().lock().unwrap_or_else(|p| p.into_inner()).remove(chat_jid);
+}
+
+/// A `Task` subagent runs with no chat id, so any hold on the file binds it.
+fn is_held(g: &GateInput, target: &Path) -> bool {
+    let holds = holds().lock().unwrap_or_else(|p| p.into_inner());
+    if g.is_subagent {
+        holds.values().any(|spec| spec == target)
+    } else {
+        holds.get(g.chat_jid).is_some_and(|spec| spec == target)
+    }
 }
 
 /// After a successful `Read`: if it read the whole open spec of its folder,
@@ -271,6 +304,20 @@ mod tests {
 
     fn full_spec() -> String {
         format!("# S\n## Goals\n* g\n{DETAILED_HEADING}\n- [ ] T1\n")
+    }
+
+    #[test]
+    fn a_refusal_names_the_steps_still_missing() {
+        let f = fixture();
+        f.open("# S\n## Goals\n* g\n");
+        let refusal = f.edit("src/a.rs", "c1").unwrap();
+        assert!(refusal.contains("until the person runs /draft, /review and /approve."), "{refusal}");
+        assert!(super::super::stage_rule(Stage::Brief).contains("/draft, /review and /approve"));
+        f.open(&full_spec());
+        let refusal = f.edit("src/a.rs", "c1").unwrap();
+        assert!(refusal.contains("until the person runs /review and /approve."), "{refusal}");
+        assert!(stage_refusal(REL, Stage::Reviewed).ends_with("until the person runs /approve."));
+        assert!(stage_refusal(REL, Stage::Missing).contains("/brainstorm, /draft, /review and /approve"));
     }
 
     #[test]

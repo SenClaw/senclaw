@@ -1715,6 +1715,14 @@ Rules for Claude:
   `message_router`, the Code-session REST chat). The pool never answers `/approve`, and `resolve_open` refuses a `/draft`/`/review` path that
   is not the open spec — otherwise a scheduled `/draft docs/designs/old.md` reopened an old approved spec with nobody involved. `/approve`
   needs `Stage::Reviewed` (a full spec, reviewed in this version, complete, 0 blocker); `force` skips the review conditions only.
+- **A review `/approve` would take is not undone by its own report** (`ReviewSummary::clears_approval`, `gate::hold_design`, held by
+  `TriageWatch` for that turn). Told to fix every Major, agents edited the design after each 0-blocker review, the review went stale and no
+  version ever reached `/approve` without `force` (real desktop run, 2026-10-30). Only design text counts, so the hold is on the open spec
+  during the review-results turn, on every agent and subagent working on it, until the turn ends or the person speaks; a change they ask for
+  then needs `/review` again.
+- **`Stage::steps_to_unlock` is the only place that says what comes next**: the refusal and the `<spec>` rule both read it. Both used to say
+  `/approve` for a brief, and the model repeated it to the person. It is right because `Stage::Reviewed` means what `approve()` requires; a
+  review with blockers, or one that did not finish, leaves the spec `Draft`.
 - **A Code session's folder is its own `allowed_work_dirs[0]`** (`session_dir_in`), never the workspace-state file: outside a project that file
   is the profile's (`workspace-state-main.json`), rewritten by whichever session was opened last.
 - **Kiểm reads the whole spec and judges its plan** (`KiemScope::Whole`). EGM gives the readiness reviewer only the implementation plan;

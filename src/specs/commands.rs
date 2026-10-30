@@ -371,6 +371,7 @@ pub async fn agent_prompt_in(
                 let summary = result.summary(&report);
                 if let Err(e) = store.update(&root, |s| s.specs.entry(rel.clone()).or_default().review = Some(summary)) {
                     tracing::warn!("[specs] review of {rel} not recorded: {e}");
+                    return notice(text, &format!("The review of {rel} could not be recorded ({e}), so /approve cannot use it. Run /review again."));
                 }
                 review_prompt(text, &rel, &result)
             }
@@ -421,23 +422,59 @@ pub fn is_review_results(prompt: &str) -> bool {
 /// What the spec looked like when the review-results turn began, to tell at
 /// its end whether the agent changed it. gemma-4-e4b went three review rounds
 /// without touching the spec and said each time that it had fixed everything.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TriageWatch {
     path: PathBuf,
     rel: String,
     before: String,
     reviewed_hash: String,
     blockers: usize,
+    /// `/approve` takes this review, so the gate holds the spec while this lives.
+    clears_approval: bool,
+    chat_jid: String,
+}
+
+impl Drop for TriageWatch {
+    fn drop(&mut self) {
+        if self.clears_approval {
+            self.release_design();
+        }
+    }
 }
 
 impl TriageWatch {
     /// The open spec of the folder `working_dir` is in, with its last review.
-    pub fn start(working_dir: &str, store: &SpecStore) -> Option<Self> {
+    pub fn start(working_dir: &str, chat_jid: &str, store: &SpecStore) -> Option<Self> {
         let (root, state) = store.find_root(Path::new(working_dir))?;
         let review = state.specs.get(&state.active)?.review.clone()?;
         let path = root.join(&state.active);
         let before = std::fs::read_to_string(&path).ok()?;
-        Some(Self { path, rel: state.active, before, reviewed_hash: review.hash, blockers: review.blocker })
+        // The record can be of an older version (another chat's review, a failed
+        // write): then it says nothing about the spec this turn is reporting on.
+        let current = review.hash == super::design_hash(&before);
+        let clears_approval = current && review.clears_approval();
+        if clears_approval {
+            gate::hold_design(chat_jid, path.clone());
+        }
+        Some(Self {
+            path,
+            rel: state.active,
+            before,
+            reviewed_hash: review.hash,
+            blockers: if current { review.blocker } else { 0 },
+            clears_approval,
+            chat_jid: chat_jid.to_string(),
+        })
+    }
+
+    /// This turn only reports: the review stands and the spec stays as it is.
+    pub fn holds_design(&self) -> bool {
+        self.clears_approval
+    }
+
+    /// The person spoke during the turn: a change they ask for now is theirs to make.
+    pub fn release_design(&self) {
+        gate::release_design(&self.chat_jid);
     }
 
     /// The file is byte for byte what it was when the turn began, and the review
@@ -471,6 +508,14 @@ impl TriageWatch {
             (true, false) if self.blockers > 0 => format!(
                 "📋 {}: the design text is unchanged (version {was}) and still has {} blocker(s) — /approve refuses until it is fixed and reviewed again (or /approve force).",
                 self.rel, self.blockers
+            ),
+            (true, true) if self.clears_approval => format!(
+                "📋 {}: phiên bản {was} không có blocker và thiết kế giữ nguyên — /approve sẽ mở khoá code; muốn sửa thì nói rõ phần cần sửa, xong /review lại.",
+                self.rel
+            ),
+            (true, false) if self.clears_approval => format!(
+                "📋 {}: version {was} has no blockers and the design is unchanged — /approve unlocks the code; to change something, say what, then /review again.",
+                self.rel
             ),
             (true, true) => format!("📋 {}: nội dung thiết kế không đổi (phiên bản {was}).", self.rel),
             (true, false) => format!("📋 {}: the design text is unchanged (version {was}).", self.rel),
@@ -551,20 +596,37 @@ pub fn draft_prompt(text: &str, rel: &str, commands: Option<&str>) -> String {
 }
 
 pub fn review_prompt(text: &str, rel: &str, result: &review::Review) -> String {
+    let rules = if result.summary("").clears_approval() {
+        format!(
+            "- This version has no blockers, so it can be approved as it stands. Leave {rel} exactly as it is: a change to \
+             its design makes this review stale and the person would have to review again. Touch no file and call no tool.\n\
+             - Tell the person: the counts, each MAJOR in one line with what you recommend, and that the choice is theirs: \
+             /approve unlocks the code now, or they name the findings to fix and /review then checks the new version.\n"
+        )
+    } else {
+        let next = match result.mode {
+            review::Mode::Design => Stage::Draft,
+            review::Mode::Brainstorm => Stage::Brief,
+        };
+        format!(
+            "- Code stays locked until the person approves: do not touch any file but {rel}. Your next tool call is Edit or \
+             Write on {rel}.\n\
+             - For each BLOCKER and MAJOR choose FIX (edit the spec), CONTEST (only with evidence a reviewer could read in \
+             the spec or the code — never for a Hiểu finding), or ESCALATE (a choice only the person can make: ask them, \
+             one question per reply).\n\
+             - NIT: fix it if trivial, else DECLINE.\n\
+             - Add one line per decision under ## Review Log, and keep that section the last one in the file.\n\
+             - Then tell the person: the counts, what you changed, what needs their decision, and that code unlocks only \
+             after {}, in that order.\n",
+            next.steps_to_unlock()
+        )
+    };
     format!(
         "{}Four reviewers who never saw this conversation read {rel} (version {}, {} review): Cảnh = zoom out, \
          Kiểm = can it be built from this and does it match the code, Hiểu = a newcomer's reading, Phản biện = critic.\n\
          Findings:\n{}\n(The person can see the full report with the spec status command.)\n\
          Rules for this step:\n\
-         - Code stays locked until the person approves: do not touch any file but {rel}. Your next tool call is Edit or \
-         Write on {rel}.\n\
-         - For each BLOCKER and MAJOR choose FIX (edit the spec), CONTEST (only with evidence a reviewer could read in \
-         the spec or the code — never for a Hiểu finding), or ESCALATE (a choice only the person can make: ask them, \
-         one question per reply).\n\
-         - NIT: fix it if trivial, else DECLINE.\n\
-         - Add one line per decision under ## Review Log, and keep that section the last one in the file.\n\
-         - Then tell the person: the counts, what you changed, what needs their decision, and that the review command \
-         checks the new version and the approve command unlocks the code.\n\
+         {rules}\
          Reply in the person's language.",
         header("REVIEW RESULTS", text),
         &result.hash[..8.min(result.hash.len())],
@@ -766,10 +828,9 @@ mod tests {
         assert!(review.complete);
         assert_eq!(review.mode, "design");
         assert!(e.store.dir_for(&e.root).join(&review.report).is_file());
-        assert!(prompt.contains("[Spec flow — REVIEW RESULTS]") && prompt.contains("## Review Log"), "{prompt}");
-        assert!(prompt.contains("never for a Hiểu finding"));
-        // The machine checks found the missing sections: not approvable as is.
-        assert!(review.major > 0);
+        assert!(prompt.contains("[Spec flow — REVIEW RESULTS]") && prompt.contains("exactly as it is"), "{prompt}");
+        // The machine checks found the missing sections, which stop no approval.
+        assert!(review.major > 0 && review.blocker == 0);
         let stage = stage_of(Some(&full_spec()), state.specs.get(&rel)).0;
         assert_eq!(stage, Stage::Reviewed);
     }
@@ -822,7 +883,7 @@ mod tests {
         let e = env();
         let rel = open(&e, &full_spec());
         reviewed(&e, &rel, true, 2);
-        let watch = TriageWatch::start(&e.root.to_string_lossy(), &e.store).unwrap();
+        let watch = TriageWatch::start(&e.root.to_string_lossy(), "triage-blocked", &e.store).unwrap();
         assert!(watch.untouched_with_blockers());
         assert!(watch.nudge().contains("Edit or Write on docs/designs/s.md") && watch.nudge().contains("2 blocker(s)"));
         assert!(watch.note(false).contains("unchanged") && watch.note(false).contains("2 blocker(s)"));
@@ -852,6 +913,106 @@ mod tests {
         assert!(crate::docs::has_vietnamese_diacritics(&prompt), "lens names carry diacritics");
         assert_eq!(request_of(&prompt), "/review");
         assert_eq!(request_of("sửa lỗi này"), "sửa lỗi này");
+    }
+
+    fn finished_review(severity: review::Severity) -> review::Review {
+        review::Review {
+            path: "docs/designs/s.md".into(),
+            hash: "0".repeat(64),
+            mode: review::Mode::Design,
+            at: String::new(),
+            findings: vec![review::Finding {
+                lens: review::Lens::Hieu,
+                severity,
+                place: "## Goals".into(),
+                problem: "vague".into(),
+                fix: "say it".into(),
+                machine: false,
+            }],
+            runs: review::LENSES
+                .iter()
+                .map(|&lens| review::LensRun { lens, status: review::LensStatus::Ok, raw: String::new() })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn only_a_review_with_blockers_asks_for_changes_to_the_design() {
+        let rel = "docs/designs/s.md";
+        let clean = review_prompt("/review", rel, &finished_review(review::Severity::Major));
+        assert!(clean.contains("Leave docs/designs/s.md exactly as it is") && !clean.contains("choose FIX"), "{clean}");
+        let blocked = review_prompt("/review", rel, &finished_review(review::Severity::Blocker));
+        assert!(blocked.contains("choose FIX") && blocked.contains("only after /review and /approve"), "{blocked}");
+        assert!(blocked.contains("never for a Hiểu finding") && blocked.contains("## Review Log"), "{blocked}");
+    }
+
+    #[test]
+    fn a_clean_review_holds_the_design_for_its_turn_only() {
+        let e = env();
+        let rel = open(&e, &full_spec());
+        let wd = e.root.to_string_lossy().into_owned();
+        let edit = |file: &str, jid: &str| {
+            let input = serde_json::json!({"file_path": e.root.join(file).to_string_lossy()});
+            let call = gate::GateInput { tool: "Edit", input: &input, working_dir: &wd, chat_jid: jid, is_subagent: false, flow: SpecFlow::On };
+            gate::check(&call, &e.store)
+        };
+        reviewed(&e, &rel, true, 0);
+        let watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+        assert_eq!(edit(&rel, "triage-clean").as_deref(), Some(gate::DESIGN_HELD));
+        assert!(edit("docs/designs/other.md", "triage-clean").is_none());
+        assert!(edit(&rel, "another-chat").is_none());
+        assert!(watch.note(false).contains("/approve unlocks the code"));
+        assert!(watch.note(true).contains("/approve sẽ mở khoá code"));
+        drop(watch);
+        assert!(edit(&rel, "triage-clean").is_none());
+        // A person who speaks during the turn ends the hold early.
+        let watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+        watch.release_design();
+        assert!(edit(&rel, "triage-clean").is_none());
+        drop(watch);
+        // A subagent has no chat id of its own, and the hold still binds it.
+        let watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+        let input = serde_json::json!({"file_path": e.root.join(&rel).to_string_lossy()});
+        let call = gate::GateInput { tool: "Edit", input: &input, working_dir: &wd, chat_jid: "", is_subagent: true, flow: SpecFlow::On };
+        assert_eq!(gate::check(&call, &e.store).as_deref(), Some(gate::DESIGN_HELD));
+        drop(watch);
+        // A record of an older version: no hold, no nudge about its blockers.
+        reviewed(&e, &rel, true, 2);
+        std::fs::write(e.root.join(&rel), full_spec().replace("T2", "T2 with dates")).unwrap();
+        let watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+        assert!(!watch.holds_design() && !watch.untouched_with_blockers());
+        reviewed(&e, &rel, true, 0);
+        std::fs::write(e.root.join(&rel), full_spec()).unwrap();
+        let watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+        assert!(!watch.holds_design());
+        assert!(edit(&rel, "triage-clean").is_none());
+        drop(watch);
+        // What `/approve` would refuse anyway has nothing to protect.
+        for (complete, blocker) in [(true, 1), (false, 0)] {
+            reviewed(&e, &rel, complete, blocker);
+            let _watch = TriageWatch::start(&wd, "triage-clean", &e.store).unwrap();
+            assert!(edit(&rel, "triage-clean").is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_review_that_cannot_be_recorded_is_not_reported_as_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let e = env();
+        open(&e, &full_spec());
+        // The store repairs its own folder, so the record is made unwritable elsewhere.
+        let state = e.store.dir_for(&e.root).join("state.json");
+        let elsewhere = tempfile::tempdir().unwrap();
+        let locked = elsewhere.path().join("state.json");
+        std::fs::rename(&state, &locked).unwrap();
+        std::os::unix::fs::symlink(&locked, &state).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::set_permissions(elsewhere.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let model = AllNone(Mutex::new(0));
+        let prompt = agent_prompt_in("/review", AgentCommand::Review { path: None }, Some(e.root.clone()), &e.store, &model).await;
+        std::fs::set_permissions(elsewhere.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(prompt.contains("[Spec flow — NOTICE]") && prompt.contains("could not be recorded"), "{prompt}");
     }
 
     #[test]
